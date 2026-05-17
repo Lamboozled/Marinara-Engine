@@ -39,6 +39,8 @@ const RESTART_REQUIRED_KEYS = new Set<string>([
   "AUTO_OPEN_BROWSER",
   "AUTO_CREATE_DEFAULT_CONNECTION",
   "NODE_ENV",
+  "IMAGE_GEN_TIMEOUT_MS",
+  "COMFYUI_GEN_TIMEOUT",
 ]);
 
 // Keys whose values must be masked when logged.

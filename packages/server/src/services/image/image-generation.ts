@@ -1556,7 +1556,7 @@ const DEFAULT_COMFYUI_WORKFLOW: Record<string, unknown> = {
   },
 };
 
-const COMFYUI_GEN_TIMEOUT = Number(process.env.COMFYUI_GEN_TIMEOUT ?? 120);
+const COMFYUI_GEN_TIMEOUT_SECONDS = Number(process.env.COMFYUI_GEN_TIMEOUT ?? 300);
 
 function randomSeed(): number {
   return Math.floor(Math.random() * 2 ** 32);
@@ -1712,8 +1712,8 @@ async function generateComfyUI(baseUrl: string, request: ImageGenRequest): Promi
 
   const { prompt_id } = (await queueResp.json()) as { prompt_id: string };
 
-  // Poll for completion (max ~120 seconds)
-  for (let i = 0; i < COMFYUI_GEN_TIMEOUT; i++) {
+  // Poll for completion. Default is 5 minutes to match shared image request timeout.
+  for (let i = 0; i < COMFYUI_GEN_TIMEOUT_SECONDS; i++) {
     await new Promise((r) => setTimeout(r, 1000));
 
     const historyResp = await localImageBackendFetch(`${base}/history/${prompt_id}`, {
@@ -1758,7 +1758,7 @@ async function generateComfyUI(baseUrl: string, request: ImageGenRequest): Promi
     }
   }
 
-  throw new Error("ComfyUI generation timed out after 120 seconds");
+  throw new Error(`ComfyUI generation timed out after ${COMFYUI_GEN_TIMEOUT_SECONDS} seconds`);
 }
 
 // ── AUTOMATIC1111 / SD Web UI / Forge ──
