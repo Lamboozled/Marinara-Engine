@@ -20,7 +20,7 @@ import {
 } from "lucide-react";
 import { useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import type { Message, MessageExtra } from "@marinara-engine/shared";
-import { useUIStore } from "../../stores/ui.store";
+import { useUIStore, type ConversationMessageStyle } from "../../stores/ui.store";
 import { useChatStore } from "../../stores/chat.store";
 import { cn, copyToClipboard, getAvatarCropStyle, parseAvatarCropJson } from "../../lib/utils";
 import { applyInlineMarkdown, renderMarkdownBlocks } from "../../lib/markdown";
@@ -308,6 +308,11 @@ interface ConversationMessageProps {
   hideUserAvatar?: boolean;
   plainUserMessages?: boolean;
   forceShowActions?: boolean;
+  messageStyle?: ConversationMessageStyle;
+  contentParts?: string[];
+  visiblePartCount?: number;
+  bubbleGroupPosition?: "single" | "first" | "middle" | "last";
+  originalContent?: string;
   onDelete?: (messageId: string) => void;
   onRegenerate?: (messageId: string) => void;
   onEdit?: (messageId: string, content: string) => void;
@@ -317,7 +322,7 @@ interface ConversationMessageProps {
   isLastAssistantMessage?: boolean;
   characterMap?: CharacterMap;
   personaInfo?: PersonaInfo;
-  /** Override the edit button click (used by SplitMessageGroup) */
+  /** Override the edit button click when parent presentation owns the edit affordance. */
   onEditClick?: () => void;
   /** Character IDs that actually belong to this chat. Speaker-name rendering is scoped to these IDs. */
   chatCharacterIds?: string[];
@@ -339,6 +344,11 @@ export const ConversationMessage = memo(function ConversationMessage({
   hideUserAvatar,
   plainUserMessages,
   forceShowActions,
+  messageStyle = "classic",
+  contentParts,
+  visiblePartCount,
+  bubbleGroupPosition = "single",
+  originalContent,
   onDelete,
   onRegenerate,
   onEdit,
@@ -489,28 +499,26 @@ export const ConversationMessage = memo(function ConversationMessage({
       ? undefined
       : (msgPersona?.nameColor ?? personaInfo?.nameColor)
     : charInfo?.nameColor;
-  const renderedContent = useMemo(
-    () =>
-      resolveMessageMacros(message.content, {
-        userName: displayName,
-        persona: {
-          name: displayName,
-          description: plainUserMessages ? undefined : (msgPersona?.description ?? personaInfo?.description),
-          personality: plainUserMessages ? undefined : (msgPersona?.personality ?? personaInfo?.personality),
-          backstory: plainUserMessages ? undefined : (msgPersona?.backstory ?? personaInfo?.backstory),
-          appearance: plainUserMessages ? undefined : (msgPersona?.appearance ?? personaInfo?.appearance),
-          scenario: plainUserMessages ? undefined : (msgPersona?.scenario ?? personaInfo?.scenario),
-        },
-        primaryCharacter: primaryCharInfo ?? { name: displayName },
-        characters: scopedCharacterMap
-          ? Array.from(scopedCharacterMap.values())
-          : displayName
-            ? [{ name: displayName }]
-            : [],
-      }),
+  const macroContext = useMemo(
+    () => ({
+      userName: displayName,
+      persona: {
+        name: displayName,
+        description: plainUserMessages ? undefined : (msgPersona?.description ?? personaInfo?.description),
+        personality: plainUserMessages ? undefined : (msgPersona?.personality ?? personaInfo?.personality),
+        backstory: plainUserMessages ? undefined : (msgPersona?.backstory ?? personaInfo?.backstory),
+        appearance: plainUserMessages ? undefined : (msgPersona?.appearance ?? personaInfo?.appearance),
+        scenario: plainUserMessages ? undefined : (msgPersona?.scenario ?? personaInfo?.scenario),
+      },
+      primaryCharacter: primaryCharInfo ?? { name: displayName },
+      characters: scopedCharacterMap
+        ? Array.from(scopedCharacterMap.values())
+        : displayName
+          ? [{ name: displayName }]
+          : [],
+    }),
     [
       displayName,
-      message.content,
       msgPersona?.appearance,
       msgPersona?.backstory,
       msgPersona?.description,
@@ -526,6 +534,12 @@ export const ConversationMessage = memo(function ConversationMessage({
       scopedCharacterMap,
     ],
   );
+  const renderedContent = useMemo(() => resolveMessageMacros(message.content, macroContext), [macroContext, message.content]);
+  const renderedContentParts = useMemo(() => {
+    if (!contentParts?.length) return null;
+    const count = Math.max(1, Math.min(visiblePartCount ?? contentParts.length, contentParts.length));
+    return contentParts.slice(0, count).map((part) => resolveMessageMacros(part, macroContext));
+  }, [contentParts, macroContext, visiblePartCount]);
 
   // Remove an attachment from this message (keeps it in gallery)
   const qc = useQueryClient();
@@ -636,6 +650,8 @@ export const ConversationMessage = memo(function ConversationMessage({
   const swipeCount = message.swipeCount ?? 0;
   const hasSwipes = swipeCount > 1;
 
+  const editSourceContent = originalContent ?? message.content;
+
   // Actions
   const handleCopy = useCallback(() => {
     copyToClipboard(renderedContent);
@@ -645,7 +661,7 @@ export const ConversationMessage = memo(function ConversationMessage({
 
   const startEditing = useCallback(() => {
     setEditing(true);
-    setEditValue(message.content);
+    setEditValue(editSourceContent);
     requestAnimationFrame(() => {
       const el = editRef.current;
       if (el) {
@@ -654,7 +670,7 @@ export const ConversationMessage = memo(function ConversationMessage({
         el.focus();
       }
     });
-  }, [message.content]);
+  }, [editSourceContent]);
 
   useEffect(() => {
     if (!onEdit) return;
@@ -673,11 +689,11 @@ export const ConversationMessage = memo(function ConversationMessage({
 
   const handleSaveEdit = useCallback(() => {
     const val = editValueRef.current.trim();
-    if (val !== message.content) {
+    if (val !== editSourceContent) {
       onEdit?.(message.id, val);
     }
     setEditing(false);
-  }, [message.content, message.id, onEdit]);
+  }, [editSourceContent, message.id, onEdit]);
 
   // System messages — minimal display
   if (isSystem) {
@@ -717,7 +733,21 @@ export const ConversationMessage = memo(function ConversationMessage({
   const isHiddenExpanded =
     isHiddenFromAI && (!collapseHiddenMessages || manuallyExpandedHidden || editing || !!isStreaming);
   const isHiddenCollapsed = isHiddenFromAI && collapseHiddenMessages && !isHiddenExpanded;
-  const shouldHideUserAvatar = isUser && hideUserAvatar;
+  const isBubbleStyle = messageStyle === "bubble";
+  const streamingBubbleDraftContent =
+    isBubbleStyle && !!isStreaming && renderedContentParts?.length ? renderedContentParts.join("\n\n") : null;
+  const shouldHideUserAvatar = (isUser && hideUserAvatar) || (isBubbleStyle && isUser);
+  const bubbleCornerClass = isUser
+    ? bubbleGroupPosition === "middle"
+      ? "rounded-2xl rounded-r-md"
+      : bubbleGroupPosition === "last"
+        ? "rounded-2xl rounded-tr-md rounded-br-md"
+        : "rounded-2xl rounded-br-md"
+    : bubbleGroupPosition === "middle"
+      ? "rounded-2xl rounded-l-md"
+      : bubbleGroupPosition === "last"
+        ? "rounded-2xl rounded-tl-md rounded-bl-md"
+        : "rounded-2xl rounded-bl-md";
 
   const hiddenFromAIHeader = isHiddenFromAI ? (
     <HiddenFromAIConversationButton
@@ -728,7 +758,7 @@ export const ConversationMessage = memo(function ConversationMessage({
   ) : null;
 
   // ── Render: grouped multi-speaker message (merged group chat) ──
-  if (groupedSegments && !editing && !isUser) {
+  if (groupedSegments && !editing && !isUser && !isBubbleStyle) {
     return (
       <div
         ref={msgRef}
@@ -933,9 +963,9 @@ export const ConversationMessage = memo(function ConversationMessage({
             activeSwipeIndex={message.activeSwipeIndex}
             swipeCount={swipeCount}
             onSetActiveSwipe={(index) => onSetActiveSwipe?.(message.id, index)}
-            className="ml-14 mt-2 px-1 text-[0.6875rem] text-[var(--muted-foreground)]"
-            buttonClassName="rounded p-0.5 transition-colors hover:bg-[var(--accent)] disabled:opacity-30"
-            inputClassName="h-[1.5rem] w-[3rem] text-[0.6875rem]"
+            className="ml-14 mt-2 inline-flex items-center gap-0.5 rounded-full border border-[var(--border)] bg-[var(--secondary)] px-1.5 py-0.5 text-[0.625rem] text-[var(--muted-foreground)]"
+            buttonClassName="rounded-full p-0.5 transition-colors hover:bg-[var(--accent)] disabled:opacity-30"
+            inputClassName="h-[1.25rem] w-[2rem] border-none bg-transparent text-center text-[0.625rem] outline-none"
           />
         )}
 
@@ -1038,215 +1068,493 @@ export const ConversationMessage = memo(function ConversationMessage({
     <div
       ref={msgRef}
       className={cn(
-        "mari-message relative flex gap-4 px-4 py-0.5 transition-colors hover:bg-[var(--secondary)]/30",
-        isUser ? "mari-message-user" : "mari-message-assistant",
+        "mari-message relative px-4 transition-colors",
         !noHoverGroup && "group",
-        isGrouped ? "mt-0" : "mt-4",
-        isStreaming && "bg-[var(--secondary)]/20",
+        isBubbleStyle
+          ? cn(
+              "py-1",
+              isUser ? "mari-message-user" : "mari-message-assistant",
+              !isGrouped && "mt-2.5",
+            )
+          : cn(
+              "flex gap-4 py-0.5 hover:bg-[var(--secondary)]/30",
+              isUser ? "mari-message-user" : "mari-message-assistant",
+              isGrouped ? "mt-0" : "mt-4",
+              isStreaming && "bg-[var(--secondary)]/20",
+            ),
         multiSelectMode && isSelected && "bg-[var(--destructive)]/10",
       )}
       data-message-id={message.id}
       data-message-role={message.role}
       onClick={handleMobileTap}
     >
-      {/* Multi-select checkbox */}
-      {multiSelectMode && (
-        <div className="flex items-center flex-shrink-0">
-          <div
-            className={cn(
-              "h-5 w-5 rounded border-2 flex items-center justify-center transition-colors cursor-pointer",
-              isSelected
-                ? "border-[var(--destructive)] bg-[var(--destructive)]"
-                : "border-[var(--muted-foreground)]/40 bg-[var(--secondary)]",
+      {isBubbleStyle ? (
+        <>
+          {/* Inner row: avatar + body — swipes are outside so avatar never drifts */}
+          <div className={cn("flex items-end gap-2", isUser ? "justify-end" : "justify-start")}>
+            {/* Multi-select checkbox */}
+            {multiSelectMode && (
+              <div className="flex items-center flex-shrink-0">
+                <div
+                  className={cn(
+                    "h-5 w-5 rounded border-2 flex items-center justify-center transition-colors cursor-pointer",
+                    isSelected
+                      ? "border-[var(--destructive)] bg-[var(--destructive)]"
+                      : "border-[var(--muted-foreground)]/40 bg-[var(--secondary)]",
+                  )}
+                >
+                  {isSelected && <span className="text-white text-xs font-bold">✓</span>}
+                </div>
+              </div>
             )}
-          >
-            {isSelected && <span className="text-white text-xs font-bold">✓</span>}
-          </div>
-        </div>
-      )}
 
-      {/* Avatar column — fixed 40px width */}
-      <div className={cn("mari-message-avatar w-10 flex-shrink-0", shouldHideUserAvatar && "hidden")}>
-        {!isGrouped && (
-          <>
-            <div className="relative h-10 w-10 overflow-hidden rounded-full bg-[var(--accent)]">
-              {avatarUrl ? (
-                <img
-                  src={avatarUrl}
-                  alt={displayName}
-                  loading="lazy"
-                  className="h-full w-full object-cover"
-                  style={avatarCropStyle}
-                />
+            {/* Avatar column */}
+            <div className={cn("mari-message-avatar w-10 flex-shrink-0", shouldHideUserAvatar && "hidden")}>
+              {!isGrouped && (
+                <>
+                  <div className="relative h-10 w-10 overflow-hidden rounded-full bg-[var(--accent)]">
+                    {avatarUrl ? (
+                      <img
+                        src={avatarUrl}
+                        alt={displayName}
+                        loading="lazy"
+                        className="h-full w-full object-cover"
+                        style={avatarCropStyle}
+                      />
+                    ) : (
+                      <div className="flex h-full w-full items-center justify-center text-sm font-bold text-[var(--muted-foreground)]">
+                        {isUser ? <User size="1.125rem" /> : displayName[0]?.toUpperCase()}
+                      </div>
+                    )}
+                  </div>
+                  {(showActions || forceShowActions || showMessageNumbers) && messageIndex != null && (
+                    <span className="mt-0.5 block text-center text-[0.5rem] font-medium text-[var(--muted-foreground)] select-none">
+                      #{messageIndex}
+                    </span>
+                  )}
+                </>
+              )}
+            </div>
+
+            {/* Body column — header + bubble + attachments (no swipes) */}
+            <div className={cn("mari-message-body min-w-0 flex max-w-[72%] flex-none flex-col", isUser ? "items-end" : "items-start")}>
+              {/* Header — name + timestamp */}
+              {!isGrouped && (!isUser || hiddenFromAIHeader) && (
+                <div
+                  className={cn(
+                    "mari-message-meta mb-0.5 flex items-baseline gap-2",
+                    isUser ? "justify-end pr-2 text-right" : "pl-2",
+                  )}
+                >
+                  {hiddenFromAIHeader}
+                  {!isUser && (
+                    <span
+                      className="mari-message-name text-[0.9375rem] font-semibold leading-tight hover:underline cursor-default"
+                      style={nameColorStyle(nameColor)}
+                    >
+                      {displayName}
+                    </span>
+                  )}
+                  {!hideTimestamp && !isUser && (
+                    <span className="mari-message-timestamp text-[0.6875rem] text-[var(--muted-foreground)]/60">
+                      {formatTimestamp(message.createdAt)}
+                    </span>
+                  )}
+                </div>
+              )}
+
+              {/* Message body */}
+              {isHiddenCollapsed ? (
+                <HiddenFromAIConversationSummary onExpand={() => setManuallyExpandedHidden(true)} />
+              ) : editing ? (
+                <div className="space-y-2">
+                  <textarea
+                    ref={editRef}
+                    value={editValue}
+                    onChange={(e) => {
+                      setEditValue(e.target.value);
+                      const el = e.target;
+                      el.style.height = "auto";
+                      el.style.height = `${Math.min(el.scrollHeight, 300)}px`;
+                    }}
+                    className="w-full resize-none rounded-lg border border-[var(--border)] bg-[var(--secondary)] p-2.5 text-[0.9375rem] leading-relaxed outline-none"
+                    rows={1}
+                    style={{ overflow: "auto", ...messageTextStyle }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Escape") {
+                        e.preventDefault();
+                        setEditing(false);
+                      }
+                    }}
+                  />
+                  <div className="flex items-center gap-2 text-[0.6875rem] text-[var(--muted-foreground)]">
+                    <button
+                      onClick={() => setEditing(false)}
+                      className="text-foreground/70 hover:underline hover:text-foreground"
+                    >
+                      cancel
+                    </button>
+                    <span>·</span>
+                    <button onClick={handleSaveEdit} className="text-foreground/70 hover:underline hover:text-foreground">
+                      save
+                    </button>
+                  </div>
+                </div>
               ) : (
-                <div className="flex h-full w-full items-center justify-center text-sm font-bold text-[var(--muted-foreground)]">
-                  {isUser ? <User size="1.125rem" /> : displayName[0]?.toUpperCase()}
+                <div
+                  className={cn(
+                    "mari-message-content text-[0.9375rem] leading-relaxed break-words whitespace-pre-wrap",
+                    "mari-message-bubble texting-bubble relative px-3.5 py-2 shadow-sm",
+                    isUser ? "texting-bubble-user" : "texting-bubble-other",
+                    bubbleCornerClass,
+isStreaming && !renderedContent && "py-2.5",
+                  )}
+                  style={messageTextStyle}
+                >
+                  {isStreaming && !renderedContent ? (
+                    <div className={cn("space-y-2", streamingBubbleDraftContent && "animate-[fadeSlideIn_0.25s_ease-out]")}>
+                      {streamingBubbleDraftContent && (
+                        <MessageContent
+                          content={streamingBubbleDraftContent}
+                          mentionNames={mentionNames}
+                          onImageOpen={(url) => setImageLightbox({ url })}
+                        />
+                      )}
+                      <div className="flex items-center gap-1" aria-label="Still typing">
+                        <span className="h-2 w-2 animate-bounce rounded-full bg-[var(--muted-foreground)]/60 [animation-delay:0ms]" />
+                        <span className="h-2 w-2 animate-bounce rounded-full bg-[var(--muted-foreground)]/60 [animation-delay:150ms]" />
+                        <span className="h-2 w-2 animate-bounce rounded-full bg-[var(--muted-foreground)]/60 [animation-delay:300ms]" />
+                      </div>
+                    </div>
+                  ) : groupedSegments && !isUser ? (
+                    <div className="space-y-2">
+                      {groupedSegments.slice(0, visibleSegments).map((grp, i) => {
+                        const segChar = grp.speaker && charByName ? charByName.get(grp.speaker.toLowerCase()) : null;
+                        const segName = segChar?.name ?? grp.speaker ?? "";
+                        const segColor = segChar?.nameColor;
+                        const combinedText = grp.lines.join("\n");
+
+                        if (!grp.speaker) {
+                          return (
+                            <div key={i} className="italic text-[var(--muted-foreground)]">
+                              <MessageContent
+                                content={combinedText}
+                                mentionNames={mentionNames}
+                                onImageOpen={(url) => setImageLightbox({ url })}
+                              />
+                            </div>
+                          );
+                        }
+
+                        return (
+                          <div key={i} className="space-y-0.5">
+                            <div
+                              className="text-[0.75rem] font-semibold leading-tight opacity-90"
+                              style={nameColorStyle(segColor)}
+                            >
+                              {segName}
+                            </div>
+                            <MessageContent
+                              content={combinedText}
+                              mentionNames={mentionNames}
+                              onImageOpen={(url) => setImageLightbox({ url })}
+                            />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <MessageContent
+                      content={renderedContent}
+                      mentionNames={mentionNames}
+                      onImageOpen={(url) => setImageLightbox({ url })}
+                    />
+                  )}
+                </div>
+              )}
+
+              {/* Translation */}
+              {(translatedText || isTranslating) && (
+                <div className="mt-1.5 border-t border-[var(--border)] pt-1.5">
+                  {isTranslating ? (
+                    <span className="text-[0.75rem] italic text-[var(--muted-foreground)]">Translating…</span>
+                  ) : (
+                    <div className="whitespace-pre-wrap text-[0.8125rem] leading-relaxed text-[var(--muted-foreground)]">
+                      {translatedText}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Image attachments */}
+              {extra.attachments && extra.attachments.length > 0 && !IMAGE_URL_RE.test(renderedContent.trim()) && (
+                <div className="mt-1.5 flex flex-col items-center gap-2">
+                  {extra.attachments.map((att: any, i: number) =>
+                    att.type === "image" || att.type?.startsWith("image/") ? (
+                      <div key={i} className="group/att relative inline-block">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setImageLightbox({ url: att.url || att.data, prompt: att.prompt });
+                          }}
+                          className="block cursor-zoom-in rounded-lg text-left"
+                          title="Open image"
+                        >
+                          <img
+                            src={att.url || att.data}
+                            alt={att.filename || att.name || "image"}
+                            className="max-h-80 max-w-full rounded-lg"
+                            loading="lazy"
+                          />
+                        </button>
+                        <button
+                          onClick={() => handleRemoveAttachment(i)}
+                          title="Remove from message"
+                          className="absolute top-1.5 right-1.5 rounded-full bg-black/60 p-1 text-white/80 transition-opacity hover:bg-black/80 hover:text-white sm:opacity-0 sm:group-hover/att:opacity-100"
+                        >
+                          <X size="0.875rem" />
+                        </button>
+                      </div>
+                    ) : null,
+                  )}
                 </div>
               )}
             </div>
-            {(showActions || forceShowActions || showMessageNumbers) && messageIndex != null && (
-              <span className="mt-0.5 block text-center text-[0.5rem] font-medium text-[var(--muted-foreground)] select-none">
-                #{messageIndex}
-              </span>
-            )}
-          </>
-        )}
-      </div>
-
-      {/* Message content column */}
-      <div className="mari-message-body min-w-0 flex-1">
-        {/* Header — name + timestamp (only for first in group) */}
-        {!isGrouped && (
-          <div className="mari-message-meta flex items-baseline gap-2 mb-0.5">
-            {hiddenFromAIHeader}
-            <span
-              className="mari-message-name text-[0.9375rem] font-semibold leading-tight hover:underline cursor-default"
-              style={nameColorStyle(nameColor)}
-            >
-              {displayName}
-            </span>
-            {!hideTimestamp && (
-              <span className="mari-message-timestamp text-[0.6875rem] text-[var(--muted-foreground)]/60">
-                {formatTimestamp(message.createdAt)}
-              </span>
-            )}
           </div>
-        )}
 
-        {/* Message body */}
-        {isHiddenCollapsed ? (
-          <HiddenFromAIConversationSummary onExpand={() => setManuallyExpandedHidden(true)} />
-        ) : editing ? (
-          <div className="space-y-2">
-            <textarea
-              ref={editRef}
-              value={editValue}
-              onChange={(e) => {
-                setEditValue(e.target.value);
-                const el = e.target;
-                el.style.height = "auto";
-                el.style.height = `${Math.min(el.scrollHeight, 300)}px`;
-              }}
-              className="w-full resize-none rounded-lg border border-[var(--border)] bg-[var(--secondary)] p-2.5 text-[0.9375rem] leading-relaxed outline-none"
-              rows={1}
-              style={{ overflow: "auto", ...messageTextStyle }}
-              onKeyDown={(e) => {
-                if (e.key === "Escape") {
-                  e.preventDefault();
-                  setEditing(false);
-                }
-              }}
-            />
-            <div className="flex items-center gap-2 text-[0.6875rem] text-[var(--muted-foreground)]">
-              <button
-                onClick={() => setEditing(false)}
-                className="text-foreground/70 hover:underline hover:text-foreground"
-              >
-                cancel
-              </button>
-              <span>·</span>
-              <button onClick={handleSaveEdit} className="text-foreground/70 hover:underline hover:text-foreground">
-                save
-              </button>
+          {/* Swipe controls — own row so avatar never drifts past the bubble */}
+          {!hideActions && hasSwipes && (
+            <div className={cn("mt-1", isUser ? "flex justify-end" : "pl-12")}>
+              <SwipeJumpControl
+                messageId={message.id}
+                activeSwipeIndex={message.activeSwipeIndex}
+                swipeCount={swipeCount}
+                onSetActiveSwipe={(index) => onSetActiveSwipe?.(message.id, index)}
+                className="inline-flex items-center gap-0.5 rounded-full border border-[var(--border)] bg-[var(--secondary)] px-1.5 py-0.5 text-[0.625rem] text-[var(--muted-foreground)]"
+                buttonClassName="rounded-full p-0.5 transition-colors hover:bg-[var(--accent)] disabled:opacity-30"
+                inputClassName="h-[1.25rem] w-[2rem] border-none bg-transparent text-center text-[0.625rem] outline-none"
+              />
             </div>
-          </div>
-        ) : (
-          <div
-            className={cn(
-              "mari-message-content text-[0.9375rem] leading-relaxed break-words whitespace-pre-wrap",
-              isStreaming && !renderedContent && "py-1",
-            )}
-            style={messageTextStyle}
-          >
-            {isStreaming && !renderedContent ? (
-              <div className="flex items-center gap-1">
-                <span className="h-2 w-2 animate-bounce rounded-full bg-[var(--muted-foreground)]/60 [animation-delay:0ms]" />
-                <span className="h-2 w-2 animate-bounce rounded-full bg-[var(--muted-foreground)]/60 [animation-delay:150ms]" />
-                <span className="h-2 w-2 animate-bounce rounded-full bg-[var(--muted-foreground)]/60 [animation-delay:300ms]" />
+          )}
+        </>
+      ) : (
+        <>
+          {/* Multi-select checkbox */}
+          {multiSelectMode && (
+            <div className="flex items-center flex-shrink-0">
+              <div
+                className={cn(
+                  "h-5 w-5 rounded border-2 flex items-center justify-center transition-colors cursor-pointer",
+                  isSelected
+                    ? "border-[var(--destructive)] bg-[var(--destructive)]"
+                    : "border-[var(--muted-foreground)]/40 bg-[var(--secondary)]",
+                )}
+              >
+                {isSelected && <span className="text-white text-xs font-bold">✓</span>}
               </div>
-            ) : (
+            </div>
+          )}
+
+          {/* Avatar column — fixed 40px width */}
+          <div className={cn("mari-message-avatar w-10 flex-shrink-0", shouldHideUserAvatar && "hidden")}>
+            {!isGrouped && (
               <>
-                <MessageContent
-                  content={renderedContent}
-                  mentionNames={mentionNames}
-                  onImageOpen={(url) => setImageLightbox({ url })}
-                />
-                {isStreaming && (
-                  <span className="ml-0.5 inline-block h-4 w-[0.125rem] animate-pulse rounded-full bg-[var(--foreground)]/50" />
+                <div className="relative h-10 w-10 overflow-hidden rounded-full bg-[var(--accent)]">
+                  {avatarUrl ? (
+                    <img
+                      src={avatarUrl}
+                      alt={displayName}
+                      loading="lazy"
+                      className="h-full w-full object-cover"
+                      style={avatarCropStyle}
+                    />
+                  ) : (
+                    <div className="flex h-full w-full items-center justify-center text-sm font-bold text-[var(--muted-foreground)]">
+                      {isUser ? <User size="1.125rem" /> : displayName[0]?.toUpperCase()}
+                    </div>
+                  )}
+                </div>
+                {(showActions || forceShowActions || showMessageNumbers) && messageIndex != null && (
+                  <span className="mt-0.5 block text-center text-[0.5rem] font-medium text-[var(--muted-foreground)] select-none">
+                    #{messageIndex}
+                  </span>
                 )}
               </>
             )}
           </div>
-        )}
 
-        {/* Translation */}
-        {(translatedText || isTranslating) && (
-          <div className="mt-1.5 border-t border-[var(--border)] pt-1.5">
-            {isTranslating ? (
-              <span className="text-[0.75rem] italic text-[var(--muted-foreground)]">Translating…</span>
-            ) : (
-              <div className="whitespace-pre-wrap text-[0.8125rem] leading-relaxed text-[var(--muted-foreground)]">
-                {translatedText}
+          {/* Message content column */}
+          <div className="mari-message-body min-w-0 flex-1">
+            {/* Header — name + timestamp (only for first in group) */}
+            {!isGrouped && (
+              <div className="mari-message-meta mb-0.5 flex items-baseline gap-2">
+                {hiddenFromAIHeader}
+                <span
+                  className="mari-message-name text-[0.9375rem] font-semibold leading-tight hover:underline cursor-default"
+                  style={nameColorStyle(nameColor)}
+                >
+                  {displayName}
+                </span>
+                {!hideTimestamp && (
+                  <span className="mari-message-timestamp text-[0.6875rem] text-[var(--muted-foreground)]/60">
+                    {formatTimestamp(message.createdAt)}
+                  </span>
+                )}
               </div>
             )}
-          </div>
-        )}
 
-        {/* Image attachments (selfies, illustrations) — skip when content is already an image URL */}
-        {extra.attachments && extra.attachments.length > 0 && !IMAGE_URL_RE.test(renderedContent.trim()) && (
-          <div className="mt-1.5 flex flex-col items-center gap-2">
-            {extra.attachments.map((att: any, i: number) =>
-              att.type === "image" || att.type?.startsWith("image/") ? (
-                <div key={i} className="group/att relative inline-block">
+            {/* Message body */}
+            {isHiddenCollapsed ? (
+              <HiddenFromAIConversationSummary onExpand={() => setManuallyExpandedHidden(true)} />
+            ) : editing ? (
+              <div className="space-y-2">
+                <textarea
+                  ref={editRef}
+                  value={editValue}
+                  onChange={(e) => {
+                    setEditValue(e.target.value);
+                    const el = e.target;
+                    el.style.height = "auto";
+                    el.style.height = `${Math.min(el.scrollHeight, 300)}px`;
+                  }}
+                  className="w-full resize-none rounded-lg border border-[var(--border)] bg-[var(--secondary)] p-2.5 text-[0.9375rem] leading-relaxed outline-none"
+                  rows={1}
+                  style={{ overflow: "auto", ...messageTextStyle }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape") {
+                      e.preventDefault();
+                      setEditing(false);
+                    }
+                  }}
+                />
+                <div className="flex items-center gap-2 text-[0.6875rem] text-[var(--muted-foreground)]">
                   <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setImageLightbox({ url: att.url || att.data, prompt: att.prompt });
-                    }}
-                    className="block cursor-zoom-in rounded-lg text-left"
-                    title="Open image"
+                    onClick={() => setEditing(false)}
+                    className="text-foreground/70 hover:underline hover:text-foreground"
                   >
-                    <img
-                      src={att.url || att.data}
-                      alt={att.filename || att.name || "image"}
-                      className="max-h-80 max-w-full rounded-lg"
-                      loading="lazy"
-                    />
+                    cancel
                   </button>
-                  <button
-                    onClick={() => handleRemoveAttachment(i)}
-                    title="Remove from message"
-                    className="absolute top-1.5 right-1.5 rounded-full bg-black/60 p-1 text-white/80 transition-opacity hover:bg-black/80 hover:text-white sm:opacity-0 sm:group-hover/att:opacity-100"
-                  >
-                    <X size="0.875rem" />
+                  <span>·</span>
+                  <button onClick={handleSaveEdit} className="text-foreground/70 hover:underline hover:text-foreground">
+                    save
                   </button>
                 </div>
-              ) : null,
+              </div>
+            ) : (
+              <div
+                className={cn(
+                  "mari-message-content text-[0.9375rem] leading-relaxed break-words whitespace-pre-wrap",
+                  isStreaming && !renderedContent && "py-1",
+                )}
+                style={messageTextStyle}
+              >
+                {isStreaming && !renderedContent ? (
+                  <div className="flex items-center gap-1">
+                    <span className="h-2 w-2 animate-bounce rounded-full bg-[var(--muted-foreground)]/60 [animation-delay:0ms]" />
+                    <span className="h-2 w-2 animate-bounce rounded-full bg-[var(--muted-foreground)]/60 [animation-delay:150ms]" />
+                    <span className="h-2 w-2 animate-bounce rounded-full bg-[var(--muted-foreground)]/60 [animation-delay:300ms]" />
+                  </div>
+                ) : (
+                  <>
+                    {renderedContentParts ? (
+                      <div className="space-y-1.5">
+                        {renderedContentParts.map((part, i) => (
+                          <div key={i} className="animate-[fadeSlideIn_0.4s_ease-out]">
+                            <MessageContent
+                              content={part}
+                              mentionNames={mentionNames}
+                              onImageOpen={(url) => setImageLightbox({ url })}
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <MessageContent
+                        content={renderedContent}
+                        mentionNames={mentionNames}
+                        onImageOpen={(url) => setImageLightbox({ url })}
+                      />
+                    )}
+                    {isStreaming && (
+                      <span className="ml-0.5 inline-block h-4 w-[0.125rem] animate-pulse rounded-full bg-[var(--foreground)]/50" />
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+
+            {/* Translation */}
+            {(translatedText || isTranslating) && (
+              <div className="mt-1.5 border-t border-[var(--border)] pt-1.5">
+                {isTranslating ? (
+                  <span className="text-[0.75rem] italic text-[var(--muted-foreground)]">Translating…</span>
+                ) : (
+                  <div className="whitespace-pre-wrap text-[0.8125rem] leading-relaxed text-[var(--muted-foreground)]">
+                    {translatedText}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Image attachments (selfies, illustrations) — skip when content is already an image URL */}
+            {extra.attachments && extra.attachments.length > 0 && !IMAGE_URL_RE.test(renderedContent.trim()) && (
+              <div className="mt-1.5 flex flex-col items-center gap-2">
+                {extra.attachments.map((att: any, i: number) =>
+                  att.type === "image" || att.type?.startsWith("image/") ? (
+                    <div key={i} className="group/att relative inline-block">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setImageLightbox({ url: att.url || att.data, prompt: att.prompt });
+                        }}
+                        className="block cursor-zoom-in rounded-lg text-left"
+                        title="Open image"
+                      >
+                        <img
+                          src={att.url || att.data}
+                          alt={att.filename || att.name || "image"}
+                          className="max-h-80 max-w-full rounded-lg"
+                          loading="lazy"
+                        />
+                      </button>
+                      <button
+                        onClick={() => handleRemoveAttachment(i)}
+                        title="Remove from message"
+                        className="absolute top-1.5 right-1.5 rounded-full bg-black/60 p-1 text-white/80 transition-opacity hover:bg-black/80 hover:text-white sm:opacity-0 sm:group-hover/att:opacity-100"
+                      >
+                        <X size="0.875rem" />
+                      </button>
+                    </div>
+                  ) : null,
+                )}
+              </div>
+            )}
+
+            {!hideActions && hasSwipes && (
+              <SwipeJumpControl
+                messageId={message.id}
+                activeSwipeIndex={message.activeSwipeIndex}
+                swipeCount={swipeCount}
+                onSetActiveSwipe={(index) => onSetActiveSwipe?.(message.id, index)}
+                className="mt-1.5 inline-flex items-center gap-0.5 rounded-full border border-[var(--border)] bg-[var(--secondary)] px-1.5 py-0.5 text-[0.625rem] text-[var(--muted-foreground)]"
+                buttonClassName="rounded-full p-0.5 transition-colors hover:bg-[var(--accent)] disabled:opacity-30"
+                inputClassName="h-[1.25rem] w-[2rem] border-none bg-transparent text-center text-[0.625rem] outline-none"
+              />
             )}
           </div>
-        )}
+        </>
+      )}
 
-        {!hideActions && hasSwipes && (
-          <SwipeJumpControl
-            messageId={message.id}
-            activeSwipeIndex={message.activeSwipeIndex}
-            swipeCount={swipeCount}
-            onSetActiveSwipe={(index) => onSetActiveSwipe?.(message.id, index)}
-            className="mt-1.5 text-[0.6875rem] text-[var(--muted-foreground)]"
-            buttonClassName="rounded p-0.5 transition-colors hover:bg-[var(--accent)] disabled:opacity-30"
-            inputClassName="h-[1.5rem] w-[3rem] text-[0.6875rem]"
-          />
-        )}
-      </div>
-
-      {/* Hover action bar — Discord-style floating pill */}
+      {/* Hover action bar — near bubble for assistant, right edge for user */}
       {!hideActions && (
         <div
           className={cn(
-            "mari-message-actions absolute -top-3 right-4 flex items-center gap-0.5 rounded-md border border-[var(--border)] bg-[var(--card)]/90 px-1 py-0.5 shadow-sm backdrop-blur-sm transition-all dark:border-white/20 dark:bg-black/40",
+            "mari-message-actions absolute -top-3 flex items-center gap-0.5 rounded-md border border-[var(--border)] bg-[var(--card)]/90 px-1 py-0.5 shadow-sm backdrop-blur-sm transition-all dark:border-white/20 dark:bg-black/40",
             "opacity-0 group-hover:opacity-100",
             (showActions || forceShowActions) && "opacity-100",
+            isBubbleStyle && !isUser ? "left-12" : "right-4",
           )}
         >
           <MsgAction icon={copied ? "✓" : <Copy size="0.75rem" />} onClick={handleCopy} title="Copy" />
