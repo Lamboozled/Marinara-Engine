@@ -1197,10 +1197,69 @@ export function ConversationView({
 }
 
 // ── Split-line group wrapper — manages shared tap-to-show-actions state ──
+type SplitMessageGroupItem = { key: string; msg: Message; isGrouped: boolean; index: number };
+
+type SplitMessageGroupProps = {
+  items: SplitMessageGroupItem[];
+  isStreaming: boolean;
+  regenerateMessageId: string | null;
+  streamBuffer: string;
+  thinkingBuffer: string;
+  lastAssistantMessageId: string | undefined | null;
+  characterMap: CharacterMap;
+  chatCharacterIds: string[];
+  personaInfo: PersonaInfo | undefined;
+  onDelete: (id: string) => void;
+  onRegenerate: (id: string) => void;
+  onEdit: (id: string, content: string) => void;
+  onSetActiveSwipe: (id: string, index: number) => void;
+  onToggleHiddenFromAI: (id: string, current: boolean) => void;
+  onPeekPrompt: () => void;
+};
+
+// Custom memo comparison: the parent rebuilds the `items` array (and this
+// per-group wrapper) fresh every render, so React's default shallow compare
+// would see a new `items` reference each frame and never bail. The underlying
+// message objects are referentially stable across the ~60 streamBuffer
+// updates/sec (renderedItems is memoized without the buffers in its deps), so we
+// compare `items` element-wise and every other prop by reference. Combined with
+// the render site feeding "" to non-regenerating groups, this lets each
+// non-regenerating group skip re-render for the whole duration of a stream.
+function areSplitGroupPropsEqual(prev: SplitMessageGroupProps, next: SplitMessageGroupProps): boolean {
+  if (
+    prev.isStreaming !== next.isStreaming ||
+    prev.regenerateMessageId !== next.regenerateMessageId ||
+    prev.streamBuffer !== next.streamBuffer ||
+    prev.thinkingBuffer !== next.thinkingBuffer ||
+    prev.lastAssistantMessageId !== next.lastAssistantMessageId ||
+    prev.characterMap !== next.characterMap ||
+    prev.chatCharacterIds !== next.chatCharacterIds ||
+    prev.personaInfo !== next.personaInfo ||
+    prev.onDelete !== next.onDelete ||
+    prev.onRegenerate !== next.onRegenerate ||
+    prev.onEdit !== next.onEdit ||
+    prev.onSetActiveSwipe !== next.onSetActiveSwipe ||
+    prev.onToggleHiddenFromAI !== next.onToggleHiddenFromAI ||
+    prev.onPeekPrompt !== next.onPeekPrompt
+  ) {
+    return false;
+  }
+  if (prev.items.length !== next.items.length) return false;
+  for (let i = 0; i < prev.items.length; i++) {
+    const a = prev.items[i]!;
+    const b = next.items[i]!;
+    if (a.msg !== b.msg || a.key !== b.key || a.isGrouped !== b.isGrouped || a.index !== b.index) {
+      return false;
+    }
+  }
+  return true;
+}
+
 // Memoized (like ConversationMessage) so non-regenerating groups skip re-render
-// during streaming. The render site (above) only passes live streamBuffer/
-// thinkingBuffer to the regenerating group, so every other group's props are
-// stable and this memo() bails for the full duration of a generation.
+// during streaming. The render site only passes live streamBuffer/thinkingBuffer
+// to the regenerating group; combined with the comparator above, every other
+// group's props are stable and this memo() bails for the full duration of a
+// generation.
 const SplitMessageGroup = memo(function SplitMessageGroup({
   items,
   isStreaming,
@@ -1217,23 +1276,7 @@ const SplitMessageGroup = memo(function SplitMessageGroup({
   onSetActiveSwipe,
   onToggleHiddenFromAI,
   onPeekPrompt,
-}: {
-  items: Array<{ key: string; msg: Message; isGrouped: boolean; index: number }>;
-  isStreaming: boolean;
-  regenerateMessageId: string | null;
-  streamBuffer: string;
-  thinkingBuffer: string;
-  lastAssistantMessageId: string | undefined | null;
-  characterMap: CharacterMap;
-  chatCharacterIds: string[];
-  personaInfo: PersonaInfo | undefined;
-  onDelete: (id: string) => void;
-  onRegenerate: (id: string) => void;
-  onEdit: (id: string, content: string) => void;
-  onSetActiveSwipe: (id: string, index: number) => void;
-  onToggleHiddenFromAI: (id: string, current: boolean) => void;
-  onPeekPrompt: () => void;
-}) {
+}: SplitMessageGroupProps) {
   const [showActions, setShowActions] = useState(false);
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState("");
@@ -1417,4 +1460,4 @@ const SplitMessageGroup = memo(function SplitMessageGroup({
       })()}
     </div>
   );
-});
+}, areSplitGroupPropsEqual);
