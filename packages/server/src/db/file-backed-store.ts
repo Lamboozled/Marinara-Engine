@@ -929,11 +929,19 @@ class FileTableStore {
     if (!force && !this.dirty && this.dirtyTables.size === 0) return;
     this.saving = true;
     this.dirty = false;
+    // Snapshot the dirty set and reset it BEFORE the async write. saveFileSnapshots
+    // now yields the event loop, so a markDirty() that interleaves during the I/O
+    // must be recorded for the NEXT flush instead of being erased by a post-await
+    // clear() — the synchronous version had a zero-width window here.
+    const dirtyTables = this.dirtyTables;
+    this.dirtyTables = new Set();
     try {
-      await this.saveFileSnapshots();
-      this.dirtyTables.clear();
+      await this.saveFileSnapshots(dirtyTables);
     } catch (err) {
       this.dirty = true;
+      // Re-mark the tables we failed to persist so they retry on the next flush
+      // (without clobbering any tables marked dirty during the failed write).
+      for (const table of dirtyTables) this.dirtyTables.add(table);
       logger.error(err, "[file-storage] Failed to persist file-native storage");
     } finally {
       this.saving = false;
@@ -1202,7 +1210,7 @@ class FileTableStore {
     return Object.values(this.legacyRepair.tables ?? {}).some((count) => count > 0);
   }
 
-  private async saveFileSnapshots() {
+  private async saveFileSnapshots(dirtyTables: Set<string>) {
     mkdirSync(join(this.rootDir, "tables"), { recursive: true });
     const tables: Record<string, number> = {};
 
@@ -1210,7 +1218,7 @@ class FileTableStore {
       const rows = this.rows(table);
       tables[table] = rows.length;
       const path = tableFilePath(this.rootDir, table);
-      if (this.dirtyTables.has(table) || !existsSync(path)) {
+      if (dirtyTables.has(table) || !existsSync(path)) {
         await atomicWriteFile(path, JSON.stringify(rows), { refreshBackup: !this.backupRecoveredPaths.has(path) });
       }
     }
