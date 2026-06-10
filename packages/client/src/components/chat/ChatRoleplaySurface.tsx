@@ -867,6 +867,9 @@ export function ChatRoleplaySurface({
   const initialLoadSettledRef = useRef(false);
   const prevMessageKeysRef = useRef<Set<string>>(new Set());
   const seenMessageKeysRef = useRef(roleplayNotificationSeenKeys);
+  const topChromeRef = useRef<HTMLDivElement>(null);
+  const inputChromeRef = useRef<HTMLDivElement>(null);
+  const [chromeHeights, setChromeHeights] = useState({ top: 0, bottom: 0 });
   const hideEchoChamberOnMobile =
     sidebarOpen || rightPanelOpen || settingsOpen || filesOpen || galleryOpen || wizardOpen;
   const overlaySpriteDisplayModes = expressionAvatarsEnabled
@@ -874,6 +877,21 @@ export function ChatRoleplaySurface({
     : spriteDisplayModes;
   const showSpriteOverlay =
     expressionAgentEnabled && spriteCharacterIds.length > 0 && overlaySpriteDisplayModes.length > 0;
+
+  useLayoutEffect(() => {
+    const measure = () => {
+      const top = Math.ceil(topChromeRef.current?.getBoundingClientRect().height ?? 0);
+      const bottom = Math.ceil(inputChromeRef.current?.getBoundingClientRect().height ?? 0);
+      setChromeHeights((current) => (current.top === top && current.bottom === bottom ? current : { top, bottom }));
+    };
+
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    if (topChromeRef.current) observer.observe(topChromeRef.current);
+    if (inputChromeRef.current) observer.observe(inputChromeRef.current);
+    return () => observer.disconnect();
+  }, [activeChatId, centerCompact, chatMeta.enableAgents, chatMeta.sceneStatus, combatAgentEnabled]);
 
   useEffect(() => {
     initialLoadSettledRef.current = false;
@@ -975,9 +993,9 @@ export function ChatRoleplaySurface({
           </Suspense>
         )}
 
-        <div className="flex flex-1 overflow-hidden">
-          <div className="flex flex-1 flex-col overflow-hidden">
-            <>
+        <div className="relative flex flex-1 overflow-hidden">
+          <div className="relative flex flex-1 flex-col overflow-hidden">
+            <div ref={topChromeRef} className="pointer-events-none absolute inset-x-0 top-0 z-40">
               <div
                 data-tracker-panel-anchor="roleplay-hud"
                 className={cn(
@@ -1206,7 +1224,7 @@ export function ChatRoleplaySurface({
                   </div>
                 )}
               </div>
-            </>
+            </div>
 
             {encounterActive && (
               <Suspense fallback={null}>
@@ -1214,14 +1232,19 @@ export function ChatRoleplaySurface({
               </Suspense>
             )}
 
-            <div className={cn("relative z-10 flex-1 overflow-hidden", TRACKER_FOREGROUND_AVOIDANCE_CLASS)}>
+            <div className={cn("absolute inset-0 z-10 overflow-hidden", TRACKER_FOREGROUND_AVOIDANCE_CLASS)}>
               <div
                 ref={scrollRef}
                 data-chat-scroll
                 className={cn(
-                  "rpg-chat-messages-mobile mari-messages-scroll relative h-full overflow-y-auto overflow-x-hidden pb-1 pt-4",
+                  "rpg-chat-messages-mobile mari-messages-scroll relative h-full overflow-y-auto overflow-x-hidden pt-4",
                   centerCompact ? "px-3" : "px-3 md:px-[15%]",
                 )}
+                style={{
+                  paddingBottom: Math.max(16, chromeHeights.bottom + 12),
+                  scrollPaddingTop: Math.max(16, chromeHeights.top + 8),
+                  scrollPaddingBottom: Math.max(16, chromeHeights.bottom + 12),
+                }}
               >
                 {hasNextPage && (
                   <div className="mb-3 flex justify-center">
@@ -1356,8 +1379,11 @@ export function ChatRoleplaySurface({
               </div>
             </div>
 
-            <div className={cn("relative z-20", TRACKER_FOREGROUND_AVOIDANCE_CLASS)}>
-              <div className={cn("relative", centerCompact ? "px-3" : "px-3 md:px-[12%]")}>
+            <div
+              ref={inputChromeRef}
+              className={cn("pointer-events-none absolute inset-x-0 bottom-0 z-30", TRACKER_FOREGROUND_AVOIDANCE_CLASS)}
+            >
+              <div className={cn("pointer-events-auto relative", centerCompact ? "px-3" : "px-3 md:px-[12%]")}>
                 {chatMeta.sceneStatus === "active" && (
                   <EndSceneBar
                     sceneChatId={activeChatId}
