@@ -449,7 +449,10 @@ export function ChatSettingsDrawer({
     typeof metadata.gameSpotifyPlaylistId === "string" ? metadata.gameSpotifyPlaylistId : "";
   const gameSpotifyArtist = typeof metadata.gameSpotifyArtist === "string" ? metadata.gameSpotifyArtist : "";
   const gameAgentFeatureCount =
-    (metadata.enableAgents ? 1 : 0) + (gameLorebookKeeperEnabled ? 1 : 0) + (gameUseSpotifyMusic ? 1 : 0);
+    (metadata.enableAgents ? 1 : 0) +
+    (gameLorebookKeeperEnabled ? 1 : 0) +
+    (gameUseSpotifyMusic ? 1 : 0) +
+    (activeAgentIds.includes("youtube") ? 1 : 0);
   const spriteCharacterIds: string[] = Array.isArray(metadata.spriteCharacterIds) ? metadata.spriteCharacterIds : [];
   const spriteDisplayModes = normalizeSpriteDisplayModes(metadata.spriteDisplayModes);
   const spritePosition: "left" | "right" = metadata.spritePosition === "right" ? "right" : "left";
