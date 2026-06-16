@@ -151,7 +151,11 @@ export async function globalGalleryRoutes(app: FastifyInstance) {
     const image = await storage.getImageById(req.params.id);
     if (!image) return reply.status(404).send({ error: "Not found" });
 
-    const folderId = req.body?.folderId ?? null;
+    const rawFolderId = req.body?.folderId;
+    const folderId =
+      rawFolderId === undefined || rawFolderId === null || rawFolderId === "" || rawFolderId === "root"
+        ? null
+        : rawFolderId;
     if (folderId) {
       const folder = await storage.getFolderById(folderId);
       if (!folder) return reply.status(404).send({ error: "Folder not found" });

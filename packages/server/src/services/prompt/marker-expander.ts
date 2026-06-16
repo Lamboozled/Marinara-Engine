@@ -3,7 +3,11 @@
 // sections into actual content at assembly time.
 // ──────────────────────────────────────────────
 import type { DB } from "../../db/connection.js";
-import { resolveCharacterScopedMacros, stripMacroComments } from "@marinara-engine/shared";
+import {
+  formatCustomTrackerFieldForPrompt,
+  resolveCharacterScopedMacros,
+  stripMacroComments,
+} from "@marinara-engine/shared";
 import type {
   CharacterMacroProfile,
   MarkerConfig,
@@ -17,7 +21,6 @@ import { createCharactersStorage } from "../storage/characters.storage.js";
 import { createAgentsStorage } from "../storage/agents.storage.js";
 import { processLorebooks, type LorebookFinalContentResolver, type LorebookScanResult } from "../lorebook/index.js";
 import { wrapContent } from "./format-engine.js";
-import { getCharacterDescriptionWithExtensions } from "./character-description-extensions.js";
 import { agentRuns } from "../../db/schema/index.js";
 import { gameStateSnapshots } from "../../db/schema/index.js";
 import { eq, and, desc } from "drizzle-orm";
@@ -188,7 +191,7 @@ async function expandCharacter(config: MarkerConfig, ctx: MarkerContext): Promis
 function characterMacroProfileFromData(data: CharacterData): CharacterMacroProfile {
   return {
     name: data.name ?? "Character",
-    description: getCharacterDescriptionWithExtensions(data),
+    description: data.description ?? "",
     personality: data.personality ?? "",
     backstory: data.extensions?.backstory ?? "",
     appearance: data.extensions?.appearance ?? "",
@@ -204,7 +207,7 @@ function getCharacterField(data: CharacterData, field: string): string {
     case "name":
       return data.name;
     case "description":
-      return getCharacterDescriptionWithExtensions(data);
+      return data.description;
     case "personality":
       return data.personality;
     case "scenario":
@@ -586,7 +589,7 @@ async function expandWorldStateAgent(ctx: MarkerContext): Promise<ExpandedMarker
       statParts.push(`Stats:\n${statLines.join("\n")}`);
     }
     if (hasCustomTracker && Array.isArray(stats.customTrackerFields) && stats.customTrackerFields.length > 0) {
-      const customLines = stats.customTrackerFields.map((f: any) => `- ${f.name}: ${f.value}`);
+      const customLines = stats.customTrackerFields.map(formatCustomTrackerFieldForPrompt);
       statParts.push(`Custom:\n${customLines.join("\n")}`);
     }
     if (statParts.length > 0) parts.push(statParts.join("\n"));

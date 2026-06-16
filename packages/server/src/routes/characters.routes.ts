@@ -45,9 +45,16 @@ async function ensureCharacterGalleryDir(characterId: string) {
 }
 
 async function ensurePersonaGalleryDir(personaId: string) {
-  const dir = join(PERSONA_GALLERY_ROOT, personaId);
+  if (isUnsafePathSegment(personaId)) {
+    throw new Error("Invalid persona id");
+  }
+  const dir = assertInsideDir(PERSONA_GALLERY_ROOT, join(PERSONA_GALLERY_ROOT, personaId));
   await mkdir(dir, { recursive: true });
   return dir;
+}
+
+function isUnsafePathSegment(value: string) {
+  return value === "." || value === ".." || value.includes("..") || value.includes("/") || value.includes("\\");
 }
 
 function toSafeExportName(name: string, fallback: string) {
@@ -777,10 +784,38 @@ export async function charactersRoutes(app: FastifyInstance) {
     return persona;
   });
 
+  app.get<{ Params: { id: string } }>("/personas/:id/versions", async (req, reply) => {
+    const persona = await storage.getPersona(req.params.id);
+    if (!persona) return reply.status(404).send({ error: "Persona not found" });
+    return storage.listPersonaVersions(req.params.id);
+  });
+
+  app.post<{ Params: { id: string; versionId: string } }>(
+    "/personas/:id/versions/:versionId/restore",
+    async (req, reply) => {
+      const restored = await storage.restorePersonaVersion(req.params.id, req.params.versionId);
+      if (!restored) return reply.status(404).send({ error: "Persona version not found" });
+      return restored;
+    },
+  );
+
+  app.delete<{ Params: { id: string; versionId: string } }>(
+    "/personas/:id/versions/:versionId",
+    async (req, reply) => {
+      const deleted = await storage.deletePersonaVersion(req.params.id, req.params.versionId);
+      if (!deleted) return reply.status(404).send({ error: "Persona version not found" });
+      return reply.status(204).send();
+    },
+  );
+
   app.post("/personas", async (req) => {
     const { name, description, createdAt, updatedAt, ...extra } = req.body as {
       name: string;
       description?: string;
+      comment?: string;
+      creator?: string;
+      personaVersion?: string;
+      creatorNotes?: string;
       personality?: string;
       scenario?: string;
       backstory?: string;
@@ -827,7 +862,7 @@ export async function charactersRoutes(app: FastifyInstance) {
     const filepath = assertInsideDir(avatarsDir, join(avatarsDir, filename));
     await writeFile(filepath, imageBuffer);
     const avatarPath = `/api/avatars/file/${filename}`;
-    return storage.updatePersona(req.params.id, { avatarPath });
+    return storage.updatePersona(req.params.id, { avatarPath }, { versionReason: "Avatar update" });
   });
 
   app.put<{ Params: { id: string } }>("/personas/:id/activate", async (req) => {
@@ -837,12 +872,13 @@ export async function charactersRoutes(app: FastifyInstance) {
 
   app.delete<{ Params: { id: string } }>("/personas/:id", async (req, reply) => {
     const { id } = req.params;
-    // Reject path-traversal before deriving a filesystem path from the route param —
-    // an id of ".." would otherwise resolve rmSync outside PERSONA_GALLERY_ROOT.
-    if (id.includes("..") || id.includes("/") || id.includes("\\")) {
+    if (isUnsafePathSegment(id)) {
       return reply.status(400).send({ error: "Invalid persona id" });
     }
-    const galleryDir = join(PERSONA_GALLERY_ROOT, id);
+    const persona = await storage.getPersona(id);
+    if (!persona) return reply.status(404).send({ error: "Persona not found" });
+
+    const galleryDir = assertInsideDir(PERSONA_GALLERY_ROOT, join(PERSONA_GALLERY_ROOT, id));
     if (existsSync(galleryDir)) {
       rmSync(galleryDir, { recursive: true, force: true });
     }
@@ -918,23 +954,17 @@ export async function charactersRoutes(app: FastifyInstance) {
     "/personas/:id/gallery/file/:filename",
     async (req, reply) => {
       const { id, filename } = req.params;
-      if (
-        filename.includes("..") ||
-        filename.includes("/") ||
-        filename.includes("\\") ||
-        id.includes("..") ||
-        id.includes("/") ||
-        id.includes("\\")
-      ) {
+      if (isUnsafePathSegment(id) || isUnsafePathSegment(filename)) {
         return reply.status(400).send({ error: "Invalid path" });
       }
 
-      const filePath = join(PERSONA_GALLERY_ROOT, id, filename);
+      const galleryDir = assertInsideDir(PERSONA_GALLERY_ROOT, join(PERSONA_GALLERY_ROOT, id));
+      const filePath = assertInsideDir(galleryDir, join(galleryDir, filename));
       if (!existsSync(filePath)) {
         return reply.status(404).send({ error: "Not found" });
       }
 
-      return reply.sendFile(filename, join(PERSONA_GALLERY_ROOT, id));
+      return reply.sendFile(filename, galleryDir);
     },
   );
 
