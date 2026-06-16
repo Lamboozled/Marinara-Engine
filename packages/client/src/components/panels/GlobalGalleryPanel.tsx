@@ -88,16 +88,27 @@ export function GlobalGalleryPanel() {
       ) {
         return;
       }
-      removeImage.mutate(image.id, { onError: (err) => toast.error(err.message) });
-      if (lightbox?.id === image.id) setLightbox(null);
+      removeImage.mutate(image.id, {
+        onSuccess: () => {
+          if (lightbox?.id === image.id) setLightbox(null);
+        },
+        onError: (err) => toast.error(err.message),
+      });
     },
     [lightbox?.id, removeImage],
   );
 
   const handleMove = useCallback(
     (imageId: string, folderId: string | null) => {
-      moveImage.mutate({ id: imageId, folderId }, { onError: (err) => toast.error(err.message) });
-      setLightbox((current) => (current?.id === imageId ? { ...current, folderId } : current));
+      moveImage.mutate(
+        { id: imageId, folderId },
+        {
+          onSuccess: () => {
+            setLightbox((current) => (current?.id === imageId ? { ...current, folderId } : current));
+          },
+          onError: (err) => toast.error(err.message),
+        },
+      );
     },
     [moveImage],
   );

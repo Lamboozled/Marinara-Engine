@@ -3,6 +3,7 @@ import {
   findKnownModel,
   LOCAL_SIDECAR_CONNECTION_ID,
   isClaudeAdaptiveOnlyNoSamplingModel,
+  formatCustomTrackerFieldForPrompt,
   supportsXhighReasoningEffort,
   resolveMacros,
   stripMacroComments,
@@ -26,7 +27,6 @@ import {
   assemblePrompt,
   buildPromptMacroContext,
   collectCharacterDepthPromptEntries,
-  getCharacterDescriptionWithExtensions,
   resolveMacrosWithVariableSnapshot,
   type AssemblerInput,
 } from "../../services/prompt/index.js";
@@ -195,7 +195,7 @@ function formatTrackersContextBlock(args: {
         trackerParts.push(wrapContent(statLines.join("\n"), "Stats", wrapFormat));
       }
       if (Array.isArray(stats.customTrackerFields) && stats.customTrackerFields.length > 0) {
-        const customLines = stats.customTrackerFields.map((f: any) => `- ${f.name}: ${f.value}`);
+        const customLines = stats.customTrackerFields.map(formatCustomTrackerFieldForPrompt);
         trackerParts.push(wrapContent(customLines.join("\n"), "Custom Tracker", wrapFormat));
       }
     } catch {
@@ -764,25 +764,6 @@ export async function registerDryRunRoute(app: FastifyInstance) {
         personaId = persona.id as string;
         personaName = persona.name;
         personaDescription = cardPromptText(persona.description);
-        // Append active alt description extensions
-        if (persona.altDescriptions) {
-          try {
-            const altDescs =
-              typeof persona.altDescriptions === "string"
-                ? JSON.parse(persona.altDescriptions)
-                : persona.altDescriptions;
-            if (Array.isArray(altDescs)) {
-              for (const ext of altDescs) {
-                if (ext?.active && ext?.content) {
-                  const content = cardPromptText(ext.content);
-                  if (content) personaDescription += "\n" + content;
-                }
-              }
-            }
-          } catch {
-            /* ignore malformed JSON */
-          }
-        }
         personaFields = {
           personality: cardPromptText(persona.personality),
           scenario: cardPromptText(persona.scenario),
@@ -1012,7 +993,7 @@ export async function registerDryRunRoute(app: FastifyInstance) {
               data.extensions && typeof data.extensions === "object"
                 ? (data.extensions as Record<string, unknown>)
                 : {};
-            const desc = cardPromptText(getCharacterDescriptionWithExtensions({ ...data, extensions } as any));
+            const desc = cardPromptText(data.description);
             const characterMacroContext = {
               ...promptMacroContext,
               char: name,

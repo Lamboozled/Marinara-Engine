@@ -13,6 +13,11 @@ import { logger } from "../lib/logger.js";
 
 const GLOBAL_GALLERY_ROOT = join(DATA_DIR, "gallery", "global");
 const ALLOWED_EXTS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif"]);
+const CUSTOM_NAME_RE = /^[a-z0-9_]{1,32}$/;
+const CUSTOM_KIND_MAX_DIMENSION = {
+  emoji: 256,
+  sticker: 512,
+} as const;
 
 function ensureDir() {
   if (!existsSync(GLOBAL_GALLERY_ROOT)) {
@@ -23,6 +28,10 @@ function ensureDir() {
 
 function buildUrl(filename: string) {
   return `/api/global-gallery/file/${encodeURIComponent(filename)}`;
+}
+
+function isValidCustomDimension(value: unknown, max: number): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 && value <= max;
 }
 
 export async function globalGalleryRoutes(app: FastifyInstance) {
@@ -151,7 +160,11 @@ export async function globalGalleryRoutes(app: FastifyInstance) {
     const image = await storage.getImageById(req.params.id);
     if (!image) return reply.status(404).send({ error: "Not found" });
 
-    const folderId = req.body?.folderId ?? null;
+    const rawFolderId = req.body?.folderId;
+    const folderId =
+      rawFolderId === undefined || rawFolderId === null || rawFolderId === "" || rawFolderId === "root"
+        ? null
+        : rawFolderId;
     if (folderId) {
       const folder = await storage.getFolderById(folderId);
       if (!folder) return reply.status(404).send({ error: "Folder not found" });
@@ -172,18 +185,24 @@ export async function globalGalleryRoutes(app: FastifyInstance) {
       return reply.status(400).send({ error: "Invalid customKind" });
     }
     const name = typeof req.body?.customName === "string" ? req.body.customName.trim() : "";
-    if (kind !== null && !name) {
-      return reply.status(400).send({ error: "customName is required when tagging" });
+    if (kind !== null && !CUSTOM_NAME_RE.test(name)) {
+      return reply.status(400).send({ error: "customName must use 1-32 lowercase letters, numbers, or underscores" });
     }
-    // Cap length server-side to match the client slug limit — a direct API call could bypass it.
-    if (name.length > 32) {
-      return reply.status(400).send({ error: "customName too long (max 32 characters)" });
+    if (kind !== null) {
+      const max = CUSTOM_KIND_MAX_DIMENSION[kind];
+      const { width, height } = req.body ?? {};
+      if (width !== undefined && !isValidCustomDimension(width, max)) {
+        return reply.status(400).send({ error: `width must be an integer from 1 to ${max}` });
+      }
+      if (height !== undefined && !isValidCustomDimension(height, max)) {
+        return reply.status(400).send({ error: `height must be an integer from 1 to ${max}` });
+      }
     }
     return storage.setTag(req.params.id, {
       customKind: kind,
       customName: kind === null ? null : name,
-      width: typeof req.body?.width === "number" ? req.body.width : undefined,
-      height: typeof req.body?.height === "number" ? req.body.height : undefined,
+      width: kind !== null && typeof req.body?.width === "number" ? req.body.width : undefined,
+      height: kind !== null && typeof req.body?.height === "number" ? req.body.height : undefined,
     });
   });
 

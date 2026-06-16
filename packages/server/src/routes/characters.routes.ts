@@ -37,6 +37,11 @@ const CHARACTER_GALLERY_ROOT = join(DATA_DIR, "gallery", "characters");
 const PERSONA_GALLERY_ROOT = join(DATA_DIR, "gallery", "personas");
 const ALLOWED_GALLERY_EXTS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif"]);
 const CHARACTER_CARD_PNG_KEYWORDS = new Set(["chara", "ccv3"]);
+const CUSTOM_NAME_RE = /^[a-z0-9_]{1,32}$/;
+const CUSTOM_KIND_MAX_DIMENSION = {
+  emoji: 256,
+  sticker: 512,
+} as const;
 
 async function ensureCharacterGalleryDir(characterId: string) {
   const dir = join(CHARACTER_GALLERY_ROOT, characterId);
@@ -45,9 +50,34 @@ async function ensureCharacterGalleryDir(characterId: string) {
 }
 
 async function ensurePersonaGalleryDir(personaId: string) {
-  const dir = join(PERSONA_GALLERY_ROOT, personaId);
+  if (isUnsafePathSegment(personaId)) {
+    throw new Error("Invalid persona id");
+  }
+  const dir = assertInsideDir(PERSONA_GALLERY_ROOT, join(PERSONA_GALLERY_ROOT, personaId));
   await mkdir(dir, { recursive: true });
   return dir;
+}
+
+function isUnsafePathSegment(value: string) {
+  return value === "." || value === ".." || value.includes("..") || value.includes("/") || value.includes("\\");
+}
+
+function isValidCustomDimension(value: unknown, max: number): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 && value <= max;
+}
+
+function validateCustomTagPayload(
+  kind: "emoji" | "sticker" | null,
+  name: string,
+  width: unknown,
+  height: unknown,
+) {
+  if (kind === null) return null;
+  if (!CUSTOM_NAME_RE.test(name)) return "customName must use 1-32 lowercase letters, numbers, or underscores";
+  const max = CUSTOM_KIND_MAX_DIMENSION[kind];
+  if (width !== undefined && !isValidCustomDimension(width, max)) return `width must be an integer from 1 to ${max}`;
+  if (height !== undefined && !isValidCustomDimension(height, max)) return `height must be an integer from 1 to ${max}`;
+  return null;
 }
 
 function toSafeExportName(name: string, fallback: string) {
@@ -567,18 +597,14 @@ export async function charactersRoutes(app: FastifyInstance) {
       return reply.status(400).send({ error: "Invalid customKind" });
     }
     const name = typeof req.body?.customName === "string" ? req.body.customName.trim() : "";
-    if (kind !== null && !name) {
-      return reply.status(400).send({ error: "customName is required when tagging" });
-    }
-    // Cap length server-side to match the client slug limit — a direct API call could bypass it.
-    if (name.length > 32) {
-      return reply.status(400).send({ error: "customName too long (max 32 characters)" });
-    }
+    const error = validateCustomTagPayload(kind, name, req.body?.width, req.body?.height);
+    if (error) return reply.status(400).send({ error });
+
     return characterGallery.setTag(imageId, {
       customKind: kind,
       customName: kind === null ? null : name,
-      width: typeof req.body?.width === "number" ? req.body.width : undefined,
-      height: typeof req.body?.height === "number" ? req.body.height : undefined,
+      width: kind !== null && typeof req.body?.width === "number" ? req.body.width : undefined,
+      height: kind !== null && typeof req.body?.height === "number" ? req.body.height : undefined,
     });
   });
 
@@ -806,10 +832,38 @@ export async function charactersRoutes(app: FastifyInstance) {
     return persona;
   });
 
+  app.get<{ Params: { id: string } }>("/personas/:id/versions", async (req, reply) => {
+    const persona = await storage.getPersona(req.params.id);
+    if (!persona) return reply.status(404).send({ error: "Persona not found" });
+    return storage.listPersonaVersions(req.params.id);
+  });
+
+  app.post<{ Params: { id: string; versionId: string } }>(
+    "/personas/:id/versions/:versionId/restore",
+    async (req, reply) => {
+      const restored = await storage.restorePersonaVersion(req.params.id, req.params.versionId);
+      if (!restored) return reply.status(404).send({ error: "Persona version not found" });
+      return restored;
+    },
+  );
+
+  app.delete<{ Params: { id: string; versionId: string } }>(
+    "/personas/:id/versions/:versionId",
+    async (req, reply) => {
+      const deleted = await storage.deletePersonaVersion(req.params.id, req.params.versionId);
+      if (!deleted) return reply.status(404).send({ error: "Persona version not found" });
+      return reply.status(204).send();
+    },
+  );
+
   app.post("/personas", async (req) => {
     const { name, description, createdAt, updatedAt, ...extra } = req.body as {
       name: string;
       description?: string;
+      comment?: string;
+      creator?: string;
+      personaVersion?: string;
+      creatorNotes?: string;
       personality?: string;
       scenario?: string;
       backstory?: string;
@@ -856,7 +910,7 @@ export async function charactersRoutes(app: FastifyInstance) {
     const filepath = assertInsideDir(avatarsDir, join(avatarsDir, filename));
     await writeFile(filepath, imageBuffer);
     const avatarPath = `/api/avatars/file/${filename}`;
-    return storage.updatePersona(req.params.id, { avatarPath });
+    return storage.updatePersona(req.params.id, { avatarPath }, { versionReason: "Avatar update" });
   });
 
   app.put<{ Params: { id: string } }>("/personas/:id/activate", async (req) => {
@@ -866,12 +920,13 @@ export async function charactersRoutes(app: FastifyInstance) {
 
   app.delete<{ Params: { id: string } }>("/personas/:id", async (req, reply) => {
     const { id } = req.params;
-    // Reject path-traversal before deriving a filesystem path from the route param —
-    // an id of ".." would otherwise resolve rmSync outside PERSONA_GALLERY_ROOT.
-    if (id.includes("..") || id.includes("/") || id.includes("\\")) {
+    if (isUnsafePathSegment(id)) {
       return reply.status(400).send({ error: "Invalid persona id" });
     }
-    const galleryDir = join(PERSONA_GALLERY_ROOT, id);
+    const persona = await storage.getPersona(id);
+    if (!persona) return reply.status(404).send({ error: "Persona not found" });
+
+    const galleryDir = assertInsideDir(PERSONA_GALLERY_ROOT, join(PERSONA_GALLERY_ROOT, id));
     if (existsSync(galleryDir)) {
       rmSync(galleryDir, { recursive: true, force: true });
     }
@@ -947,23 +1002,17 @@ export async function charactersRoutes(app: FastifyInstance) {
     "/personas/:id/gallery/file/:filename",
     async (req, reply) => {
       const { id, filename } = req.params;
-      if (
-        filename.includes("..") ||
-        filename.includes("/") ||
-        filename.includes("\\") ||
-        id.includes("..") ||
-        id.includes("/") ||
-        id.includes("\\")
-      ) {
+      if (isUnsafePathSegment(id) || isUnsafePathSegment(filename)) {
         return reply.status(400).send({ error: "Invalid path" });
       }
 
-      const filePath = join(PERSONA_GALLERY_ROOT, id, filename);
+      const galleryDir = assertInsideDir(PERSONA_GALLERY_ROOT, join(PERSONA_GALLERY_ROOT, id));
+      const filePath = assertInsideDir(galleryDir, join(galleryDir, filename));
       if (!existsSync(filePath)) {
         return reply.status(404).send({ error: "Not found" });
       }
 
-      return reply.sendFile(filename, join(PERSONA_GALLERY_ROOT, id));
+      return reply.sendFile(filename, galleryDir);
     },
   );
 
@@ -1003,18 +1052,14 @@ export async function charactersRoutes(app: FastifyInstance) {
       return reply.status(400).send({ error: "Invalid customKind" });
     }
     const name = typeof req.body?.customName === "string" ? req.body.customName.trim() : "";
-    if (kind !== null && !name) {
-      return reply.status(400).send({ error: "customName is required when tagging" });
-    }
-    // Cap length server-side to match the client slug limit — a direct API call could bypass it.
-    if (name.length > 32) {
-      return reply.status(400).send({ error: "customName too long (max 32 characters)" });
-    }
+    const error = validateCustomTagPayload(kind, name, req.body?.width, req.body?.height);
+    if (error) return reply.status(400).send({ error });
+
     return personaGallery.setTag(imageId, {
       customKind: kind,
       customName: kind === null ? null : name,
-      width: typeof req.body?.width === "number" ? req.body.width : undefined,
-      height: typeof req.body?.height === "number" ? req.body.height : undefined,
+      width: kind !== null && typeof req.body?.width === "number" ? req.body.width : undefined,
+      height: kind !== null && typeof req.body?.height === "number" ? req.body.height : undefined,
     });
   });
 
