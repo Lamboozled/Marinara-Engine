@@ -42,6 +42,7 @@ import { QuickConnectionSwitcher } from "./QuickConnectionSwitcher";
 import { QuickPersonaSwitcher } from "./QuickPersonaSwitcher";
 import { QuickSwitcherMobile } from "./QuickSwitcherMobile";
 import { EmojiPicker } from "../ui/EmojiPicker";
+import { CustomEmojiTab } from "./CustomEmojiTab";
 import { GifPicker } from "../ui/GifPicker";
 import { SpeechToTextButton } from "../ui/SpeechToTextButton";
 import { SlashCommandFeedback } from "./SlashCommandFeedback";
@@ -1532,6 +1533,11 @@ export function ConversationInput({
               onSelect={handleEmojiSelect}
               anchorRef={emojiButtonRef}
               containerRef={inputBarRef}
+              customTab={{
+                icon: "⭐",
+                label: "Custom emojis",
+                render: () => <CustomEmojiTab onInsert={handleEmojiSelect} />,
+              }}
             />
           </div>
 

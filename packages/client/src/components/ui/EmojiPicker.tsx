@@ -1126,11 +1126,13 @@ interface EmojiPickerProps {
   anchorRef?: React.RefObject<HTMLElement | null>;
   /** Container (e.g. input bar) whose top edge determines vertical placement */
   containerRef?: React.RefObject<HTMLElement | null>;
+  /** Optional extra tab (e.g. custom emojis) shown after the standard categories. */
+  customTab?: { icon: React.ReactNode; label?: string; render: () => React.ReactNode };
 }
 
-export function EmojiPicker({ open, onClose, onSelect, anchorRef, containerRef }: EmojiPickerProps) {
+export function EmojiPicker({ open, onClose, onSelect, anchorRef, containerRef, customTab }: EmojiPickerProps) {
   const [search, setSearch] = useState("");
-  const [activeCategory, setActiveCategory] = useState(0);
+  const [activeCategory, setActiveCategory] = useState<number | "custom">(0);
   const panelRef = useRef<HTMLDivElement>(null);
 
   // Close on outside click
@@ -1218,17 +1220,19 @@ export function EmojiPicker({ open, onClose, onSelect, anchorRef, containerRef }
         ...(pos.left != null ? { left: pos.left } : {}),
       }}
     >
-      {/* Search */}
-      <div className="border-b border-foreground/10 px-3 py-2">
-        <input
-          type="text"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search emojis..."
-          className="w-full rounded-md bg-foreground/5 px-2.5 py-1.5 text-xs outline-none ring-1 ring-foreground/10 transition-shadow placeholder:text-foreground/35 focus:ring-foreground/20"
-          autoFocus
-        />
-      </div>
+      {/* Search (hidden on the custom tab, which renders its own controls) */}
+      {activeCategory !== "custom" && (
+        <div className="border-b border-foreground/10 px-3 py-2">
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search emojis..."
+            className="w-full rounded-md bg-foreground/5 px-2.5 py-1.5 text-xs outline-none ring-1 ring-foreground/10 transition-shadow placeholder:text-foreground/35 focus:ring-foreground/20"
+            autoFocus
+          />
+        </div>
+      )}
 
       {/* Category tabs */}
       <div className="flex items-center gap-0.5 border-b border-foreground/10 px-2 py-1">
@@ -1247,28 +1251,47 @@ export function EmojiPicker({ open, onClose, onSelect, anchorRef, containerRef }
             {cat.icon}
           </button>
         ))}
+        {customTab && (
+          <button
+            onClick={() => setActiveCategory("custom")}
+            className={cn(
+              "ml-auto flex items-center rounded-md p-1.5 text-sm transition-colors",
+              activeCategory === "custom"
+                ? "bg-foreground/10 text-foreground/80 ring-1 ring-foreground/15"
+                : "text-foreground/45 hover:bg-foreground/10 hover:text-foreground/70",
+            )}
+            title={customTab.label ?? "Custom"}
+          >
+            {customTab.icon}
+          </button>
+        )}
       </div>
 
-      {/* Emoji grid */}
+      {/* Emoji grid (or the custom-emoji tab content) */}
       <div className="flex-1 overflow-y-auto px-2 py-2">
-        {(search.trim() ? filteredCategories : [CATEGORIES[activeCategory]]).map((cat) => (
-          <div key={cat.label}>
-            <p className="mb-1 px-1 text-[0.625rem] font-semibold uppercase tracking-wide text-foreground/45">
-              {cat.label}
-            </p>
-            <div className="grid grid-cols-8 gap-0.5">
-              {cat.emojis.map((emoji) => (
-                <button
-                  key={emoji}
-                  onClick={() => handleSelect(emoji)}
-                  className="rounded-md p-1 text-xl transition-transform hover:scale-125 hover:bg-foreground/10 active:scale-100"
-                >
-                  {emoji}
-                </button>
-              ))}
-            </div>
-          </div>
-        ))}
+        {activeCategory === "custom" && customTab
+          ? customTab.render()
+          : (search.trim()
+              ? filteredCategories
+              : [CATEGORIES[typeof activeCategory === "number" ? activeCategory : 0]]
+            ).map((cat) => (
+              <div key={cat.label}>
+                <p className="mb-1 px-1 text-[0.625rem] font-semibold uppercase tracking-wide text-foreground/45">
+                  {cat.label}
+                </p>
+                <div className="grid grid-cols-8 gap-0.5">
+                  {cat.emojis.map((emoji) => (
+                    <button
+                      key={emoji}
+                      onClick={() => handleSelect(emoji)}
+                      className="rounded-md p-1 text-xl transition-transform hover:scale-125 hover:bg-foreground/10 active:scale-100"
+                    >
+                      {emoji}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
       </div>
     </div>,
     document.body,
