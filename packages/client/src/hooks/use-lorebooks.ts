@@ -339,8 +339,8 @@ export function useUpdateLorebookFolder() {
 export function useDeleteLorebookFolder() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ lorebookId, folderId }: { lorebookId: string; folderId: string }) =>
-      api.delete(`/lorebooks/${lorebookId}/folders/${folderId}`),
+    mutationFn: ({ lorebookId, folderId, cascade }: { lorebookId: string; folderId: string; cascade?: boolean }) =>
+      api.delete(`/lorebooks/${lorebookId}/folders/${folderId}${cascade ? "?cascade=true" : ""}`),
     onSuccess: (_data, variables) => {
       qc.invalidateQueries({ queryKey: lorebookKeys.folders(variables.lorebookId) });
       // Removing a folder reparents its entries to root, so the entry list shape changes.
@@ -358,6 +358,20 @@ export function useReorderLorebookFolders() {
     onSuccess: (folders, variables) => {
       qc.setQueryData(lorebookKeys.folders(variables.lorebookId), folders);
       qc.invalidateQueries({ queryKey: lorebookKeys.folders(variables.lorebookId) });
+    },
+  });
+}
+
+export function useCloneLorebookFolder() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ lorebookId, folderId }: { lorebookId: string; folderId: string }) =>
+      api.post<LorebookFolder>(`/lorebooks/${lorebookId}/folders/${folderId}/clone`),
+    onSuccess: (_data, variables) => {
+      // A clone adds folders AND entries, so refresh both lists + the active scan.
+      qc.invalidateQueries({ queryKey: lorebookKeys.folders(variables.lorebookId) });
+      qc.invalidateQueries({ queryKey: lorebookKeys.entries(variables.lorebookId) });
+      qc.invalidateQueries({ queryKey: lorebookKeys.active() });
     },
   });
 }

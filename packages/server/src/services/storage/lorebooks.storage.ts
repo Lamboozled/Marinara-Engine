@@ -19,6 +19,7 @@ import type {
   CreateLorebookFolderInput,
   UpdateLorebookFolderInput,
 } from "@marinara-engine/shared";
+import { collectEffectivelyDisabledFolderIds, collectFolderSubtreeIds } from "@marinara-engine/shared";
 import { normalizeTimestampOverrides, type TimestampOverrides } from "../import/import-timestamps.js";
 
 function resolveTimestamps(overrides?: TimestampOverrides | null) {
@@ -455,14 +456,21 @@ export function createLorebooksStorage(db: DB) {
         relevantBooks.filter((book) => book.excludeFromVectorization).map((book) => book.id),
       );
 
-      // Build the disabled-folder ID set for the relevant lorebooks. Done as
-      // an in-memory filter (rather than a SQL anti-join) because folder
-      // counts per book are small and this keeps the existing query shape.
-      const disabledFolderRows = await db
-        .select({ id: lorebookFolders.id })
+      // Build the *effectively* disabled-folder ID set: a folder is gated if it
+      // OR any ancestor is disabled (folders can nest). Fetch all folders for the
+      // relevant books and resolve ancestry in memory — per-book folder counts are
+      // small and this keeps the existing query shape.
+      const folderRows = await db
+        .select({
+          id: lorebookFolders.id,
+          parentFolderId: lorebookFolders.parentFolderId,
+          enabled: lorebookFolders.enabled,
+        })
         .from(lorebookFolders)
-        .where(and(inArray(lorebookFolders.lorebookId, bookIds), eq(lorebookFolders.enabled, "false")));
-      const disabledFolderIds = new Set(disabledFolderRows.map((r) => r.id));
+        .where(inArray(lorebookFolders.lorebookId, bookIds));
+      const disabledFolderIds = collectEffectivelyDisabledFolderIds(
+        folderRows.map((r) => ({ id: r.id, parentFolderId: r.parentFolderId, enabled: r.enabled === "true" })),
+      );
 
       const rows = await db
         .select()
@@ -790,14 +798,35 @@ export function createLorebooksStorage(db: DB) {
      * `/lorebooks/A/folders/B` cannot reach a folder belonging to lorebook
      * `X` and accidentally reparent that other lorebook's entries.
      */
-    async removeFolder(folderId: string, lorebookId?: string) {
+    async removeFolder(folderId: string, lorebookId?: string, cascade = false) {
       const folder = (await this.getFolder(folderId, lorebookId)) as Record<string, unknown> | null;
       if (!folder) return;
       const ownerLorebookId = folder.lorebookId as string;
+      // Cascade: delete the folder, every descendant folder, and all their entries.
+      if (cascade) {
+        const subtreeIds = collectFolderSubtreeIds(
+          (await this.listFolders(ownerLorebookId)) as unknown as Array<{ id: string; parentFolderId: string | null }>,
+          folderId,
+        );
+        await db
+          .delete(lorebookEntries)
+          .where(and(eq(lorebookEntries.lorebookId, ownerLorebookId), inArray(lorebookEntries.folderId, subtreeIds)));
+        await db
+          .delete(lorebookFolders)
+          .where(and(eq(lorebookFolders.lorebookId, ownerLorebookId), inArray(lorebookFolders.id, subtreeIds)));
+        return;
+      }
+      // Entries in this folder fall back to root...
       await db
         .update(lorebookEntries)
         .set({ folderId: null, updatedAt: now() })
         .where(and(eq(lorebookEntries.lorebookId, ownerLorebookId), eq(lorebookEntries.folderId, folderId)));
+      // ...and direct child folders are promoted to the top level (not cascade-
+      // deleted), so deleting a parent lifts its subtree up one level intact.
+      await db
+        .update(lorebookFolders)
+        .set({ parentFolderId: null, updatedAt: now() })
+        .where(and(eq(lorebookFolders.lorebookId, ownerLorebookId), eq(lorebookFolders.parentFolderId, folderId)));
       await db
         .delete(lorebookFolders)
         .where(and(eq(lorebookFolders.id, folderId), eq(lorebookFolders.lorebookId, ownerLorebookId)));
@@ -822,6 +851,89 @@ export function createLorebooksStorage(db: DB) {
           .where(and(eq(lorebookFolders.id, id), eq(lorebookFolders.lorebookId, lorebookId)));
       }
       return this.listFolders(lorebookId);
+    },
+
+    /**
+     * Deep-clone a folder into the same lorebook: the folder itself, its entries,
+     * and its entire subtree of sub-folders (with their entries). The clone is
+     * created as a sibling of the original (same parent); only the root copy is
+     * renamed "<name> (Copy)" — sub-folders keep their names. Folder and entry
+     * order is preserved within each group. Returns the new root folder.
+     *
+     * Folders are created top-down so each parent exists before its children, and
+     * entries are created afterwards so createEntry's "folder must belong to this
+     * lorebook" guard passes against the freshly-created folders.
+     */
+    async cloneFolder(folderId: string, lorebookId: string) {
+      const allFolders = (await this.listFolders(lorebookId)) as unknown as Array<{
+        id: string;
+        name: string;
+        enabled: boolean;
+        parentFolderId: string | null;
+        order: number;
+      }>;
+      const root = allFolders.find((f) => f.id === folderId);
+      if (!root) throw new Error("folder not found");
+      const allEntries = (await this.listEntries(lorebookId)) as unknown as Array<
+        Record<string, unknown> & { id: string; folderId: string | null; order: number }
+      >;
+
+      // Children indexed by parent, each group kept in display order.
+      const childrenByParent = new Map<string, typeof allFolders>();
+      for (const f of allFolders) {
+        if (f.parentFolderId == null) continue;
+        const group = childrenByParent.get(f.parentFolderId) ?? [];
+        group.push(f);
+        childrenByParent.set(f.parentFolderId, group);
+      }
+
+      // Depth-first list of the subtree (root first). A seen guard keeps a
+      // malformed cycle from looping forever.
+      const subtree: typeof allFolders = [];
+      const seen = new Set<string>();
+      const walk = (f: (typeof allFolders)[number]) => {
+        if (seen.has(f.id)) return;
+        seen.add(f.id);
+        subtree.push(f);
+        const kids = (childrenByParent.get(f.id) ?? []).slice().sort((a, b) => a.order - b.order);
+        for (const k of kids) walk(k);
+      };
+      walk(root);
+
+      // Recreate the folders. createFolder appends order, so creating in
+      // depth-first order preserves each group's relative ordering.
+      const idMap = new Map<string, string>();
+      for (const folder of subtree) {
+        const isRoot = folder.id === root.id;
+        const newParentId = isRoot ? root.parentFolderId : (idMap.get(folder.parentFolderId as string) ?? null);
+        const created = (await this.createFolder(lorebookId, {
+          name: isRoot ? `${folder.name} (Copy)` : folder.name,
+          enabled: folder.enabled,
+          parentFolderId: newParentId,
+        })) as { id: string } | null;
+        if (created) idMap.set(folder.id, created.id);
+      }
+
+      // Clone each entry into its matching new folder, preserving order. Drop the
+      // server-managed fields — createEntry re-derives id/timestamps and embedding
+      // is re-derived on demand, mirroring the single-entry duplicate path.
+      const subtreeFolderIds = new Set(subtree.map((f) => f.id));
+      const entriesToClone = allEntries
+        .filter((e) => e.folderId != null && subtreeFolderIds.has(e.folderId))
+        .sort((a, b) => a.order - b.order);
+      for (const entry of entriesToClone) {
+        const newFolderId = idMap.get(entry.folderId as string);
+        if (!newFolderId) continue;
+        const clone: Record<string, unknown> = { ...entry, lorebookId, folderId: newFolderId };
+        delete clone.id;
+        delete clone.createdAt;
+        delete clone.updatedAt;
+        delete clone.embedding;
+        await this.createEntry(clone as unknown as CreateLorebookEntryInput);
+      }
+
+      const newRootId = idMap.get(root.id);
+      return newRootId ? this.getFolder(newRootId, lorebookId) : null;
     },
 
     // ── Search ──
