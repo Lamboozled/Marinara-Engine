@@ -14,6 +14,7 @@ import {
 } from "../../hooks/use-custom-emojis";
 import { useConversationCustomEmojis, type ConversationCustomEmoji } from "../../hooks/use-conversation-custom-emojis";
 import { useChat, useUpdateChatMetadata } from "../../hooks/use-chats";
+import { useConnections } from "../../hooks/use-connections";
 import { useChatStore } from "../../stores/chat.store";
 import { parseChatMetadata } from "../../lib/chat-display";
 import { readImageDimensions, validateDimensionsForKind, slugifyCustomName } from "../../lib/custom-emoji";
@@ -35,6 +36,7 @@ export function CustomEmojiTab({ onInsert }: { onInsert: (token: string) => void
   const activeChatId = useChatStore((s) => s.activeChatId);
   const { data: activeChat } = useChat(activeChatId);
   const updateMeta = useUpdateChatMetadata();
+  const { data: connections } = useConnections();
   const fileRef = useRef<HTMLInputElement>(null);
   const [editing, setEditing] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -184,7 +186,7 @@ export function CustomEmojiTab({ onInsert }: { onInsert: (token: string) => void
             When a character has more custom emojis than the max, how should the ones offered to the model be chosen?
           </p>
           <div className="mb-1.5 flex items-center gap-1">
-            {(["semantic", "random"] as const).map((mode) => (
+            {(["semantic", "random", "tool-call"] as const).map((mode) => (
               <button
                 key={mode}
                 type="button"
@@ -203,8 +205,31 @@ export function CustomEmojiTab({ onInsert }: { onInsert: (token: string) => void
           <p className="mb-2 text-[0.625rem] text-foreground/40">
             {selectionPrefs.mode === "semantic"
               ? "Offers the emojis most relevant to the recent conversation (falls back to random if the local embedder is unavailable)."
-              : "Offers a random set for each reply."}
+              : selectionPrefs.mode === "random"
+                ? "Offers a random set for each reply."
+                : "A model call picks the fitting emojis each reply — choose a capable connection below. Falls back to semantic if it's unset or fails."}
           </p>
+          {selectionPrefs.mode === "tool-call" && (
+            <div className="mb-2">
+              <select
+                value={selectionPrefs.toolConnectionId ?? ""}
+                onChange={(e) => saveSelectionPrefs({ toolConnectionId: e.target.value || null })}
+                className="w-full rounded bg-foreground/5 px-2 py-1 text-xs text-foreground ring-1 ring-foreground/10 focus:outline-none focus:ring-[var(--primary)]"
+              >
+                <option value="">Select a connection…</option>
+                {((connections ?? []) as Array<{ id: string; name?: string }>).map((connection) => (
+                  <option key={connection.id} value={connection.id}>
+                    {connection.name || connection.id}
+                  </option>
+                ))}
+              </select>
+              {!selectionPrefs.toolConnectionId && (
+                <p className="mt-1 text-[0.625rem] text-amber-400/80">
+                  No connection set — this falls back to semantic selection.
+                </p>
+              )}
+            </div>
+          )}
           <label className="flex items-center justify-between gap-2 text-xs text-foreground/60">
             <span>Max emojis offered</span>
             <input

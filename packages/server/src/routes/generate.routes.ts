@@ -787,12 +787,73 @@ async function rankEmojiNamesBySemantic(names: string[], query: string): Promise
 /** Order a pool of emoji names per the selection mode (does NOT cap — the formatter slices to maxCount). */
 async function orderEmojiNames(names: string[], prefs: CustomEmojiSelectionPrefs, query: string): Promise<string[]> {
   if (names.length <= 1) return names;
-  // "tool-call" falls back to semantic until its dedicated selection path lands.
+  // Reached for random/semantic, and as the tool-call fallback path — rank semantically when possible.
   if (prefs.mode === "semantic" || prefs.mode === "tool-call") {
     const ranked = await rankEmojiNamesBySemantic(names, query);
     if (ranked) return ranked;
   }
   return shuffleInPlace([...names]);
+}
+
+/**
+ * Tool-call selection: one short auxiliary completion (on the chosen connection)
+ * picks which candidate emoji names fit the latest message. Returns the validated
+ * picks (≤ maxCount), or null on any failure so the caller can fall back to
+ * semantic/random. Never throws — generation must not depend on it.
+ */
+async function selectEmojiNamesByToolCall(
+  candidates: string[],
+  query: string,
+  connectionId: string,
+  connections: ReturnType<typeof createConnectionsStorage>,
+  maxCount: number,
+): Promise<string[] | null> {
+  if (candidates.length === 0 || !query.trim()) return null;
+  try {
+    const conn = await connections.getWithKey(connectionId);
+    if (!conn?.model) return null;
+    const provider = createLLMProvider(
+      conn.provider,
+      resolveBaseUrl(conn),
+      conn.apiKey,
+      conn.maxContext,
+      conn.openrouterProvider,
+      conn.maxTokensOverride,
+    );
+    const completion = provider.chatComplete(
+      [
+        {
+          role: "system",
+          content:
+            `You select which custom emojis fit the current moment in a chat. You receive a list of available emoji names and the latest message. ` +
+            `Reply with ONLY a comma-separated list of at most ${maxCount} names taken verbatim from the list (most fitting first), or "none". No other text, no colons.`,
+        },
+        {
+          role: "user",
+          content: `Available custom emojis: ${candidates.join(", ")}\n\nLatest message: "${query}"\n\nFitting emoji names:`,
+        },
+      ],
+      { model: conn.model, temperature: 0.3, maxTokens: 200 },
+    );
+    const result = await Promise.race([
+      completion,
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("custom-emoji tool-call timeout")), 5000)),
+    ]);
+    const text = (result.content ?? "").toLowerCase();
+    const candidateSet = new Set(candidates);
+    const picked: string[] = [];
+    for (const token of text.split(/[\s,]+/)) {
+      const name = token.replace(/[^a-z0-9_]/g, "");
+      if (name && candidateSet.has(name) && !picked.includes(name)) {
+        picked.push(name);
+        if (picked.length >= maxCount) break;
+      }
+    }
+    return picked.length > 0 ? picked : null;
+  } catch (err) {
+    logger.debug(err, "[custom-emoji] tool-call selection failed; falling back to semantic/random");
+    return null;
+  }
 }
 
 /**
@@ -2430,17 +2491,45 @@ export async function generateRoutes(app: FastifyInstance) {
             if (allGlobalEmojiNames.length > 0 || ownEmojisByChar.size > 0) {
               const emojiPrefs = normalizeCustomEmojiSelection(chatMeta.customEmojiSelection);
               const emojiQuery = typeof input.userMessage === "string" ? input.userMessage : "";
-              const orderedGlobal = await orderEmojiNames(allGlobalEmojiNames, emojiPrefs, emojiQuery);
-              const orderedOwnByChar = new Map<string, string[]>();
-              for (const [charId, names] of ownEmojisByChar) {
-                orderedOwnByChar.set(charId, await orderEmojiNames(names, emojiPrefs, emojiQuery));
+              let emojiAdvertisement: string | null = null;
+
+              // Tool-call mode (single responder only): one model call picks from the full candidate set.
+              if (emojiPrefs.mode === "tool-call" && emojiPrefs.toolConnectionId && respondingConvoCharInfo.length === 1) {
+                const responder = respondingConvoCharInfo[0]!;
+                const own = ownEmojisByChar.get(responder.charId) ?? [];
+                const candidates = [...own, ...allGlobalEmojiNames.filter((name) => !own.includes(name))];
+                const picked = await selectEmojiNamesByToolCall(
+                  candidates,
+                  emojiQuery,
+                  emojiPrefs.toolConnectionId,
+                  connections,
+                  emojiPrefs.maxCount,
+                );
+                if (picked) {
+                  emojiAdvertisement = buildCustomEmojiAdvertisement(
+                    respondingConvoCharInfo,
+                    [],
+                    new Map([[responder.charId, picked]]),
+                    emojiPrefs.maxCount,
+                  );
+                }
               }
-              const emojiAdvertisement = buildCustomEmojiAdvertisement(
-                respondingConvoCharInfo,
-                orderedGlobal,
-                orderedOwnByChar,
-                emojiPrefs.maxCount,
-              );
+
+              // Random/semantic — and the fallback when tool-call is unset, multi-responder, or failed.
+              if (!emojiAdvertisement) {
+                const orderedGlobal = await orderEmojiNames(allGlobalEmojiNames, emojiPrefs, emojiQuery);
+                const orderedOwnByChar = new Map<string, string[]>();
+                for (const [charId, names] of ownEmojisByChar) {
+                  orderedOwnByChar.set(charId, await orderEmojiNames(names, emojiPrefs, emojiQuery));
+                }
+                emojiAdvertisement = buildCustomEmojiAdvertisement(
+                  respondingConvoCharInfo,
+                  orderedGlobal,
+                  orderedOwnByChar,
+                  emojiPrefs.maxCount,
+                );
+              }
+
               if (emojiAdvertisement) conversationSystemPrompt += "\n\n" + emojiAdvertisement;
             }
           }
