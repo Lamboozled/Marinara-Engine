@@ -743,11 +743,29 @@ function buildInstructions(state: UnoState, seatId: string): string {
   return parts.join(" ");
 }
 
+/** The last `max` human-readable game events (excluding the deal), oldest→newest. */
+function recentPlayLines(state: UnoState, max: number): string[] {
+  return state.log
+    .filter((e) => e.type !== "deal" && typeof e.message === "string" && e.message.trim().length > 0)
+    .slice(-max)
+    .map((e) => `  • ${e.message}`);
+}
+
 /** Hand-free board summary for injecting game awareness into other (free-chat) prompts. */
 function buildSpectatorSummary(state: UnoState): string {
   if (state.status === "finished") {
     const winner = state.winnerSeatId ? nameOf(state, state.winnerSeatId) : null;
-    return `A game of UNO just finished${winner ? ` — ${winner} won` : ""}.`;
+    const standings = [...state.seatOrder]
+      .sort((a, b) => (state.hands[a]?.length ?? 0) - (state.hands[b]?.length ?? 0))
+      .map((s) => `${nameOf(state, s)} (${state.hands[s]?.length ?? 0} left)`)
+      .join(", ");
+    const lines: string[] = [
+      `The game of UNO just finished${winner ? ` — ${winner} emptied their hand first and won` : ""}.`,
+      `Final hands (fewer cards is better): ${standings}.`,
+    ];
+    const plays = recentPlayLines(state, 6);
+    if (plays.length) lines.push("How it played out:", ...plays);
+    return lines.join("\n");
   }
   const top = topCard(state);
   const lines: string[] = ["A game of UNO is in progress at the table."];
@@ -764,9 +782,8 @@ function buildSpectatorSummary(state: UnoState): string {
       ".",
   );
   lines.push(`It is currently ${nameOf(state, currentSeatId(state))}'s turn.`);
-  if (state.lastAction) {
-    lines.push(`Most recent move: ${nameOf(state, state.lastAction.seatId)} ${state.lastAction.summary}.`);
-  }
+  const plays = recentPlayLines(state, 6);
+  if (plays.length) lines.push("Recent plays:", ...plays);
   return lines.join("\n");
 }
 

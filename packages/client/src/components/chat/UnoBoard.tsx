@@ -166,25 +166,33 @@ export function UnoBoard({ chatId }: Props) {
         </div>
       )}
 
-      {/* Opponents + discard */}
+      {/* Seats (turn order, including you) + discard */}
       <div className="mb-2 flex items-center gap-3">
         <div className="flex flex-1 flex-wrap items-center gap-3">
-          {opponents.map((seat) => {
-            const catchable = view.catchableSeatIds.includes(seat.seatId);
+          {view.seats.map((seat) => {
+            const isYou = seat.seatId === view.yourSeatId;
+            const catchable = !isYou && view.catchableSeatIds.includes(seat.seatId);
             return (
               <div
                 key={seat.seatId}
                 className={`flex items-center gap-1.5 rounded-lg px-1.5 py-1 ${
-                  seat.isCurrent ? "bg-[var(--primary)]/10 ring-1 ring-[var(--primary)]/40" : ""
+                  seat.isCurrent
+                    ? "bg-[var(--primary)]/10 ring-1 ring-[var(--primary)]/40"
+                    : isYou
+                      ? "ring-1 ring-[var(--border)]"
+                      : ""
                 }`}
               >
                 <CardBack />
                 <div className="leading-tight">
                   <div className="flex items-center gap-1 text-xs font-medium text-[var(--foreground)]">
                     {seat.displayName}
+                    {isYou && <span className="text-[0.6rem] font-semibold text-[var(--muted-foreground)]">(you)</span>}
                     {seat.vulnerable && <span className="text-[0.6rem] font-bold text-amber-500">UNO?</span>}
                   </div>
-                  <div className="text-[0.7rem] text-[var(--muted-foreground)]">{seat.handCount} cards</div>
+                  <div className="text-[0.7rem] text-[var(--muted-foreground)]">
+                    {seat.handCount} {seat.handCount === 1 ? "card" : "cards"}
+                  </div>
                 </div>
                 {catchable && (
                   <button

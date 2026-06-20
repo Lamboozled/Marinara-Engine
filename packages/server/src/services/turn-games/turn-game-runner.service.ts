@@ -75,11 +75,26 @@ async function resolveSeats(
   opts: TurnGameStartOptions,
 ): Promise<Seat[]> {
   const personaId = chat.personaId || null;
+  const characters = createCharactersStorage(db);
+
+  // The human seat carries the persona's real name so bots reference the player
+  // by name (e.g. in board summaries and narration), not the UI-only label "You".
+  let humanName = "You";
+  if (personaId) {
+    try {
+      const persona = await characters.getPersona(personaId);
+      const name = (persona as { name?: unknown } | null)?.name;
+      if (typeof name === "string" && name.trim()) humanName = name.trim();
+    } catch {
+      // best-effort — fall back to "You"
+    }
+  }
+
   const human: Seat = {
     seatId: personaId || HUMAN_FALLBACK_SEAT,
     kind: "human",
     ...(personaId ? { personaId } : {}),
-    displayName: "You",
+    displayName: humanName,
   };
 
   let allCharIds: string[] = [];
@@ -95,7 +110,6 @@ async function resolveSeats(
       ? opts.botCharacterIds.filter((id) => allCharIds.includes(id))
       : allCharIds;
 
-  const characters = createCharactersStorage(db);
   const bots: Seat[] = [];
   for (const id of botIds) {
     bots.push({ seatId: id, kind: "bot", characterId: id, displayName: await resolveCharacterName(characters, id) });
@@ -263,21 +277,25 @@ export async function getActiveTurnGame(db: DB, chatId: string): Promise<LoadedG
 }
 
 /**
- * A short context block telling conversation bots that a game is in progress and
- * what the board looks like, so their free-chat replies are game-aware. Returns
- * null when no unfinished game exists.
+ * A short context block telling conversation bots about the table's game so their
+ * free-chat replies are game-aware. Covers both an in-progress game AND one that
+ * just finished (until it's dismissed), so post-game banter stays connected to
+ * what actually happened. Returns null when no game row exists for the chat.
  */
 export async function getTurnGameContextText(db: DB, chatId: string): Promise<string | null> {
-  const active = await getActiveTurnGame(db, chatId);
-  if (!active) return null;
+  const loaded = await loadGame(db, chatId);
+  if (!loaded) return null;
   try {
-    const summary = active.engine.spectatorSummary(active.state);
+    const summary = loaded.engine.spectatorSummary(loaded.state);
     if (!summary) return null;
-    return (
-      `${summary}\n` +
-      `You are at this table. Stay fully in character; you may reference the game naturally when it's relevant, ` +
-      `but never restate these stats verbatim and never reveal anyone's specific cards.`
-    );
+    const finished = loaded.engine.isTerminal(loaded.state).done;
+    const guidance = finished
+      ? `The game is over. Stay fully in character; you may talk about how it went — react to the result, ` +
+        `tease the winner, lament a bad beat, call for a rematch — drawing on the moves above. ` +
+        `Don't restate these stats verbatim.`
+      : `You are at this table. Stay fully in character; you may reference the game naturally when it's relevant, ` +
+        `but never restate these stats verbatim and never reveal anyone's specific cards.`;
+    return `${summary}\n${guidance}`;
   } catch (err) {
     logger.warn(err, "Failed to build turn-game context text for chat %s", chatId);
     return null;
