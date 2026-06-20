@@ -2186,7 +2186,10 @@ export async function generateRoutes(app: FastifyInstance) {
                   break;
                 }
               }
-              chatMessages = rStartIdx > 0 ? refreshed.slice(rStartIdx) : refreshed;
+              const rScoped = rStartIdx > 0 ? refreshed.slice(rStartIdx) : refreshed;
+              chatMessages = supportsHiddenFromAI
+                ? rScoped.filter((m: any) => !isMessageHiddenFromAI(m))
+                : rScoped;
               if (contextMessageLimit && contextMessageLimit > 0 && chatMessages.length > contextMessageLimit) {
                 chatMessages = chatMessages.slice(-contextMessageLimit);
               }
