@@ -3921,61 +3921,69 @@ export function ChatSettingsDrawer({
             >
               <div className="space-y-2">
                 {/* Enable autonomous messages toggle */}
-                <button
-                  onClick={() => {
-                    updateMeta.mutate({ id: chat.id, autonomousMessages: !metadata.autonomousMessages });
-                  }}
+                <div
                   className={cn(
-                    "mari-chat-option-field flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-left transition-all",
+                    "mari-chat-option-field rounded-lg transition-all",
                     metadata.autonomousMessages && "mari-chat-option-field--active",
                   )}
                 >
-                  <div className="flex-1 min-w-0">
-                    <span className="text-xs font-medium">Autonomous Messages</span>
-                    <p className="text-[0.625rem] text-[var(--muted-foreground)]">
-                      Characters message you when you&apos;re inactive, even without schedules
-                    </p>
-                  </div>
-                  <div
-                    className={cn(
-                      "mari-chat-option-switch h-5 w-9 shrink-0 rounded-full p-0.5 transition-colors",
-                      metadata.autonomousMessages && "mari-chat-option-switch--active",
-                    )}
+                  <button
+                    onClick={() => {
+                      updateMeta.mutate({ id: chat.id, autonomousMessages: !metadata.autonomousMessages });
+                    }}
+                    className="flex w-full items-center justify-between px-3 py-2.5 text-left"
                   >
+                    <div className="flex-1 min-w-0">
+                      <span className="text-xs font-medium">Autonomous Messages</span>
+                      <p className="text-[0.625rem] text-[var(--muted-foreground)]">
+                        Characters message you when you&apos;re inactive, even without schedules
+                      </p>
+                    </div>
                     <div
                       className={cn(
-                        "h-4 w-4 rounded-full bg-white shadow-sm transition-transform",
-                        metadata.autonomousMessages && "translate-x-3.5",
+                        "mari-chat-option-switch h-5 w-9 shrink-0 rounded-full p-0.5 transition-colors",
+                        metadata.autonomousMessages && "mari-chat-option-switch--active",
                       )}
-                    />
-                  </div>
-                </button>
+                    >
+                      <div
+                        className={cn(
+                          "h-4 w-4 rounded-full bg-white shadow-sm transition-transform",
+                          metadata.autonomousMessages && "translate-x-3.5",
+                        )}
+                      />
+                    </div>
+                  </button>
 
-                <label className="space-y-1.5">
-                  <span className="block text-[0.625rem] font-medium text-[var(--muted-foreground)]">
-                    Daily Check-In Cap
-                  </span>
-                  <select
-                    value={autonomousDailyCapOverride ?? ""}
-                    onChange={(e) =>
-                      updateMeta.mutate({
-                        id: chat.id,
-                        autonomousDailyCapOverride: e.target.value ? Number(e.target.value) : null,
-                      })
-                    }
-                    className="w-full rounded-lg bg-[var(--secondary)] px-3 py-2 text-xs outline-none ring-1 ring-transparent transition-shadow focus:ring-[var(--primary)]/40"
-                  >
-                    <option value="">Default (talkativeness-based)</option>
-                    {AUTONOMOUS_DAILY_CAP_OPTIONS.map((cap) => (
-                      <option key={cap} value={cap}>
-                        {cap} check-in{cap === 1 ? "" : "s"} / day
-                      </option>
-                    ))}
-                  </select>
-                  <p className="text-[0.55rem] text-[var(--muted-foreground)]">
-                    Overrides the talkativeness-based daily limit for each character.
-                  </p>
-                </label>
+                  {metadata.autonomousMessages && (
+                    <div className="border-t border-[var(--border)]/50 px-3 pb-2.5 pt-2">
+                      <label className="space-y-1.5">
+                        <span className="block text-[0.625rem] font-medium text-[var(--muted-foreground)]">
+                          Daily Check-In Cap
+                        </span>
+                        <select
+                          value={autonomousDailyCapOverride ?? ""}
+                          onChange={(e) =>
+                            updateMeta.mutate({
+                              id: chat.id,
+                              autonomousDailyCapOverride: e.target.value ? Number(e.target.value) : null,
+                            })
+                          }
+                          className="w-full rounded-lg bg-[var(--secondary)] px-3 py-2 text-xs outline-none ring-1 ring-transparent transition-shadow focus:ring-[var(--primary)]/40"
+                        >
+                          <option value="">Default (talkativeness-based)</option>
+                          {AUTONOMOUS_DAILY_CAP_OPTIONS.map((cap) => (
+                            <option key={cap} value={cap}>
+                              {cap} check-in{cap === 1 ? "" : "s"} / day
+                            </option>
+                          ))}
+                        </select>
+                        <p className="text-[0.55rem] text-[var(--muted-foreground)]">
+                          Overrides the talkativeness-based daily limit for each character.
+                        </p>
+                      </label>
+                    </div>
+                  )}
+                </div>
 
                 <button
                   onClick={() => {

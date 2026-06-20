@@ -590,14 +590,17 @@ export async function conversationRoutes(app: FastifyInstance) {
     const chat = await chats.getById(req.params.chatId);
     if (!chat) return reply.status(404).send({ error: "Chat not found" });
 
-    const schedules: CharacterSchedules = await chats.inheritFreshConversationSchedules(req.params.chatId);
+    const [schedules, lastContactMap] = await Promise.all([
+      chats.inheritFreshConversationSchedules(req.params.chatId),
+      chats.lastContactByCharacter(req.params.chatId),
+    ]);
     const characterIds: string[] =
       typeof chat.characterIds === "string" ? JSON.parse(chat.characterIds) : chat.characterIds;
     const meta = typeof chat.metadata === "string" ? JSON.parse(chat.metadata) : (chat.metadata ?? {});
     const statusOverrides = parseConversationStatusOverrides(meta.conversationStatusOverrides);
 
     const now = new Date();
-    const statuses: Record<string, { status: string; activity: string; schedule?: WeekSchedule; override?: object }> = {};
+    const statuses: Record<string, { status: string; activity: string; schedule?: WeekSchedule; override?: object; lastContact?: string }> = {};
 
     for (const charId of characterIds) {
       const schedule = schedules[charId];
@@ -618,7 +621,7 @@ export async function conversationRoutes(app: FastifyInstance) {
             });
           }
         }
-        statuses[charId] = { status, activity, override };
+        statuses[charId] = { status, activity, override, lastContact: lastContactMap[charId] };
         continue;
       }
       const { status, activity, override } = getEffectiveCurrentStatus(schedule, statusOverrides[charId], now);
@@ -642,7 +645,7 @@ export async function conversationRoutes(app: FastifyInstance) {
         }
       }
 
-      statuses[charId] = { status, activity, schedule, override };
+      statuses[charId] = { status, activity, schedule, override, lastContact: lastContactMap[charId] };
     }
 
     return reply.send({ statuses, needsRefresh: Object.values(schedules).some((s) => scheduleNeedsRefresh(s)) });

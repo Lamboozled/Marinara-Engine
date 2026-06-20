@@ -48,6 +48,7 @@ type StatusEntry = {
   activity: string;
   schedule?: WeekSchedule;
   override?: ConversationStatusOverride;
+  lastContact?: string;
 };
 
 type StatusResponse = {
@@ -124,10 +125,10 @@ function buildOverrides(
   existing: Record<string, ConversationStatusOverride>,
   characterId: string,
   override: ConversationStatusOverride | null,
-) {
-  const next = { ...existing };
-  if (override) next[characterId] = override;
-  else delete next[characterId];
+): Record<string, ConversationStatusOverride | null> {
+  const next: Record<string, ConversationStatusOverride | null> = { ...existing };
+  // Null signals deletion to the server merge; the server strips these tombstones.
+  next[characterId] = override;
   return next;
 }
 
@@ -485,6 +486,21 @@ export function ConversationPresenceCard({
     }
   };
 
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const refreshStatuses = async () => {
+    if (isRefreshing) return;
+    setIsRefreshing(true);
+    try {
+      if (statusesQuery.data?.needsRefresh) {
+        await api.post("/conversation/schedule/generate", { chatId, characterIds: chatCharIds });
+        await queryClient.refetchQueries({ queryKey: ["chat", chatId] });
+      }
+      await statusesQuery.refetch();
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
   const replyNow = async (characterId: string) => {
     if (replyNowCharacterId || !delayedInfo?.characterIds?.includes(characterId)) return;
     setReplyNowCharacterId(characterId);
@@ -656,9 +672,9 @@ export function ConversationPresenceCard({
                     type="button"
                     className="rounded-lg p-1.5 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
                     title="Refresh status"
-                    onClick={() => void statusesQuery.refetch()}
+                    onClick={() => void refreshStatuses()}
                   >
-                    <RefreshCw size="0.8125rem" className={cn(statusesQuery.isFetching && "animate-spin")} />
+                    <RefreshCw size="0.8125rem" className={cn((statusesQuery.isFetching || isRefreshing) && "animate-spin")} />
                   </button>
                 </div>
               </div>
@@ -674,7 +690,7 @@ export function ConversationPresenceCard({
                 const hasUpcomingScheduleBlocks = upcomingScheduleBlocks.length > 0;
                 const isNextScheduleVisible = !!visibleNextSchedule[character.id];
                 const isStatusMenuOpen = statusMenuCharacterId === character.id;
-                const lastContact = lastContactByCharacterId[character.id];
+                const lastContact = statusesQuery.data?.statuses[character.id]?.lastContact ?? lastContactByCharacterId[character.id];
                 const lastContactLabel = lastContact ? formatRelativeContact(lastContact) : null;
                 const canReplyNow = !!activeAbortController && !!delayedInfo?.characterIds?.includes(character.id);
                 const isReplyNowPending = replyNowCharacterId === character.id;

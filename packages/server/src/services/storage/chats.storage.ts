@@ -1,7 +1,7 @@
 // ──────────────────────────────────────────────
 // Storage: Chats
 // ──────────────────────────────────────────────
-import { eq, desc, and, gt, inArray, isNull } from "drizzle-orm";
+import { eq, desc, and, gt, inArray, isNull, isNotNull, sql } from "drizzle-orm";
 import type { DB } from "../../db/connection.js";
 import {
   chats,
@@ -85,7 +85,14 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
 function mergeConversationStatusOverrides(current: unknown, incoming: unknown): unknown {
   if (incoming === null) return null;
   if (incoming === undefined) return current;
-  if (isPlainRecord(current) && isPlainRecord(incoming)) return { ...current, ...incoming };
+  if (isPlainRecord(current) && isPlainRecord(incoming)) {
+    const merged = { ...current, ...incoming };
+    // Strip null tombstones (explicit deletion signals from the client)
+    for (const key of Object.keys(merged)) {
+      if (merged[key] === null) delete merged[key];
+    }
+    return merged;
+  }
   return incoming;
 }
 
@@ -494,6 +501,22 @@ export function createChatsStorage(db: DB) {
     },
 
     // ── Messages ──
+
+    async lastContactByCharacter(chatId: string): Promise<Record<string, string>> {
+      const rows = await db
+        .select({
+          characterId: messages.characterId,
+          lastAt: sql<string>`MAX(${messages.createdAt})`.as("last_at"),
+        })
+        .from(messages)
+        .where(and(eq(messages.chatId, chatId), isNotNull(messages.characterId)))
+        .groupBy(messages.characterId);
+      const result: Record<string, string> = {};
+      for (const row of rows) {
+        if (row.characterId && row.lastAt) result[row.characterId] = row.lastAt;
+      }
+      return result;
+    },
 
     async countMessages(chatId: string): Promise<number> {
       const rows = await db.select({ id: messages.id }).from(messages).where(eq(messages.chatId, chatId));
