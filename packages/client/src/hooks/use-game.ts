@@ -184,6 +184,9 @@ export function useCreateGame() {
     },
     onError: (err) => {
       console.error("[createGame] Error:", err);
+      toast.error(err.message || "Failed to create game. Check the selected connection and try again.", {
+        duration: 10000,
+      });
     },
   });
 }

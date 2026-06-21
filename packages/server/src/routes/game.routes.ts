@@ -2559,10 +2559,35 @@ function validateGameSetupPayload(setupData: Record<string, unknown>): string | 
   if (!setupData.storyArc) missing.push("storyArc");
   if (!setupData.worldOverview) missing.push("worldOverview");
   if (!Array.isArray(setupData.plotTwists) || setupData.plotTwists.length === 0) missing.push("plotTwists");
-  if (!Array.isArray(setupData.startingNpcs) || setupData.startingNpcs.length === 0) missing.push("startingNpcs");
+  const startingNpcs = setupData.startingNpcs;
+  if (!Array.isArray(startingNpcs) || startingNpcs.length === 0) {
+    missing.push("startingNpcs");
+  } else {
+    for (let index = 0; index < startingNpcs.length; index++) {
+      const npc = startingNpcs[index];
+      const name = npc && typeof npc === "object" && !Array.isArray(npc) ? (npc as Record<string, unknown>).name : null;
+      if (typeof name !== "string" || !name.trim()) {
+        missing.push(`startingNpcs[${index}].name`);
+      }
+    }
+  }
   return missing.length > 0
     ? `Setup generation incomplete — missing: ${missing.join(", ")}. Try again or repair the JSON manually.`
     : null;
+}
+
+function sendGameSetupApplyError(reply: FastifyReply, rawJson: string, chatId: string): void {
+  sendJsonRepairError(
+    reply,
+    "Game setup JSON could not be applied cleanly. Review the setup JSON or try again.",
+    buildJsonRepairPayload({
+      kind: "game_setup",
+      title: "Repair Game Setup JSON",
+      rawJson,
+      applyEndpoint: "/game/setup/apply-json",
+      applyBody: { chatId },
+    }),
+  );
 }
 
 function parseStoredJson<T>(raw: unknown): T | null {
@@ -3171,18 +3196,20 @@ export async function gameRoutes(app: FastifyInstance) {
         }
       }
 
-      const npcs = (setupData.startingNpcs as Array<Record<string, unknown>>).map((n, i) => {
-        const name = (n.name as string) || `NPC ${i + 1}`;
+      const npcs = Array.from(setupData.startingNpcs as unknown[]).map((value, i) => {
+        const n = value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+        const name = typeof n.name === "string" && n.name.trim() ? n.name.trim() : `NPC ${i + 1}`;
+        const description = typeof n.description === "string" ? n.description : "";
         return {
           id: randomUUID(),
           name,
-          emoji: (n.emoji as string) || "🧑",
-          description: (n.description as string) || "",
-          descriptionSource: n.description ? "model" : undefined,
+          emoji: typeof n.emoji === "string" && n.emoji ? n.emoji : "🧑",
+          description,
+          descriptionSource: description ? "model" : undefined,
           gender: typeof n.gender === "string" ? n.gender : null,
           pronouns: typeof n.pronouns === "string" ? n.pronouns : null,
-          location: (n.location as string) || "Unknown",
-          reputation: (n.reputation as number) || 0,
+          location: typeof n.location === "string" && n.location ? n.location : "Unknown",
+          reputation: typeof n.reputation === "number" ? n.reputation : 0,
           notes: [] as string[],
           avatarUrl: charAvatarByName.get(name.toLowerCase()) ?? undefined,
         };
@@ -3829,12 +3856,19 @@ export async function gameRoutes(app: FastifyInstance) {
     }
 
     logger.info("[game/setup] Validation passed, transitioning to ready");
-    const setupResult = await applyGameSetupPayload({
-      chatId,
-      meta,
-      setupData,
-      rpgContext: { partyRpgStats, personaRpgStats, personaName },
-    });
+    let setupResult: Awaited<ReturnType<typeof applyGameSetupPayload>>;
+    try {
+      setupResult = await applyGameSetupPayload({
+        chatId,
+        meta,
+        setupData,
+        rpgContext: { partyRpgStats, personaRpgStats, personaName },
+      });
+    } catch (err) {
+      logger.error(err, "[game/setup] Failed to apply setup payload");
+      sendGameSetupApplyError(reply, responseText, chatId);
+      return;
+    }
     reply.send(setupResult);
   });
 
@@ -3885,12 +3919,19 @@ export async function gameRoutes(app: FastifyInstance) {
       return;
     }
 
-    const setupResult = await applyGameSetupPayload({
-      chatId,
-      meta,
-      setupData,
-      rpgContext: await loadSetupRpgContext(chat, setupConfig),
-    });
+    let setupResult: Awaited<ReturnType<typeof applyGameSetupPayload>>;
+    try {
+      setupResult = await applyGameSetupPayload({
+        chatId,
+        meta,
+        setupData,
+        rpgContext: await loadSetupRpgContext(chat, setupConfig),
+      });
+    } catch (err) {
+      logger.error(err, "[game/setup/apply-json] Failed to apply setup payload");
+      sendGameSetupApplyError(reply, rawJson, chatId);
+      return;
+    }
     reply.send(setupResult);
   });
 
