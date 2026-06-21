@@ -1445,7 +1445,7 @@ export async function registerDryRunRoute(app: FastifyInstance) {
     }
 
     if (typeof chatParams?.assistantPrefill === "string") assistantPrefill = chatParams.assistantPrefill;
-    if (assistantPrefill.trim()) {
+    if (!impersonate && assistantPrefill.trim()) {
       // Mirror the real send path: the trailing edge is stripped because Anthropic
       // rejects a final assistant message ending in whitespace.
       finalMessages.push({ role: "assistant", content: assistantPrefill.trimEnd() });

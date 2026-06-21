@@ -5912,7 +5912,11 @@ export async function generateRoutes(app: FastifyInstance) {
           fullResponse = "";
           fullThinking = "";
           providerThinking = "";
-          if (tailMessages.assistantPrefillInjected && assistantPrefill) {
+          if (
+            tailMessages.assistantPrefillInjected &&
+            !tailMessages.googleUserRegenerationInjected &&
+            assistantPrefill
+          ) {
             await writeContentChunked(assistantPrefill);
           }
           let geminiResponseParts: unknown[] | null = null;
