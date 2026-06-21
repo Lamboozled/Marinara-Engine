@@ -9533,11 +9533,19 @@ export async function generateRoutes(app: FastifyInstance) {
                       logger.info("[commands] UNO requested but a game is already active in chat %s", input.chatId);
                     } else {
                       const unoChat = await chats.getById(input.chatId);
-                      const unoCharIds: string[] = unoChat
-                        ? typeof unoChat.characterIds === "string"
-                          ? JSON.parse(unoChat.characterIds)
-                          : (unoChat.characterIds as string[])
-                        : [];
+                      // Parse defensively so malformed chat metadata can't throw and
+                      // silently abort the command (mirrors resolveSeats).
+                      let unoCharIds: string[] = [];
+                      try {
+                        const rawCharIds = unoChat?.characterIds;
+                        const parsedCharIds =
+                          typeof rawCharIds === "string" ? JSON.parse(rawCharIds) : rawCharIds;
+                        if (Array.isArray(parsedCharIds)) {
+                          unoCharIds = parsedCharIds.filter((x): x is string => typeof x === "string");
+                        }
+                      } catch {
+                        unoCharIds = [];
+                      }
                       // Seat the human + every character who isn't offline (asleep) right now.
                       const unoSchedules = getEnabledConversationSchedules(chatMeta) as Record<
                         string,

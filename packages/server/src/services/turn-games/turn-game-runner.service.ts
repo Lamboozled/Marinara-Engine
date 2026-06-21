@@ -14,6 +14,7 @@ import { createCharactersStorage } from "../storage/characters.storage.js";
 import {
   createGameEngineStateStorage,
   type GameEngineStateRow,
+  type GameEngineVisibleAnchor,
 } from "../storage/game-engine-state.storage.js";
 
 export interface TurnGameStartOptions {
@@ -134,10 +135,49 @@ async function resolveSeats(
   return seats;
 }
 
-async function loadGame(db: DB, chatId: string): Promise<LoadedGame | null> {
+/**
+ * The (messageId, swipeIndex) of the latest visible assistant message, so editing,
+ * branching, or regenerating a message rewinds the game to that point. Mirrors
+ * resolveVisibleGameStateAnchor used by game mode (kept local to avoid a
+ * service -> route-utils dependency).
+ */
+async function resolveTurnGameAnchor(db: DB, chatId: string): Promise<GameEngineVisibleAnchor | null> {
+  const messages = (await createChatsStorage(db).listMessages(chatId)) as Array<{
+    role?: unknown;
+    id?: unknown;
+    activeSwipeIndex?: unknown;
+  }>;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]!;
+    if (m.role !== "assistant" || typeof m.id !== "string" || !m.id) continue;
+    const swipeIndex =
+      typeof m.activeSwipeIndex === "number" && Number.isInteger(m.activeSwipeIndex) && m.activeSwipeIndex >= 0
+        ? m.activeSwipeIndex
+        : 0;
+    return { messageId: m.id, swipeIndex };
+  }
+  return null;
+}
+
+/**
+ * Load the game for a chat. By default it selects the snapshot anchored to the
+ * currently-visible message (so a message edit / branch / regeneration rewinds the
+ * authoritative game state), falling back to the latest snapshot. Pass an explicit
+ * `anchor` to reuse an already-resolved one; pass `null` to force the latest
+ * snapshot and skip the message scan (used where rewind is irrelevant, e.g. the
+ * "is a game active" check and the live bot loop).
+ */
+async function loadGame(
+  db: DB,
+  chatId: string,
+  anchor?: GameEngineVisibleAnchor | null,
+): Promise<LoadedGame | null> {
   const storage = createGameEngineStateStorage(db);
-  const row = await storage.getLatest(chatId);
-  if (!row) return null;
+  // Fast path: a chat with no game pays nothing extra (no message scan).
+  const latest = await storage.getLatest(chatId);
+  if (!latest) return null;
+  const resolved = anchor === undefined ? await resolveTurnGameAnchor(db, chatId) : anchor;
+  const row = resolved ? (await storage.getForGeneration(chatId, { visibleAnchor: resolved })) ?? latest : latest;
   const engine = getTurnGameEngine(row.gameType);
   if (!engine) {
     logger.warn("Active game in chat %s has unknown gameType %s", chatId, row.gameType);
@@ -214,7 +254,12 @@ export async function applyTurnGameMove(
   rawMove: unknown,
   seatId?: string,
 ): Promise<TurnGameOutcome> {
-  const loaded = await loadGame(db, chatId);
+  // Resolve the visible anchor once: it both selects the state to mutate (so play
+  // continues from a rewound point after an edit/branch) and anchors the resulting
+  // snapshot to the latest visible message, so a later read — or a regeneration of
+  // the following turn — resolves to this move's state.
+  const anchor = await resolveTurnGameAnchor(db, chatId);
+  const loaded = await loadGame(db, chatId, anchor);
   if (!loaded) return { ok: false, error: "No active game in this chat." };
   const { row, engine, state } = loaded;
 
@@ -234,8 +279,20 @@ export async function applyTurnGameMove(
 
   const storage = createGameEngineStateStorage(db);
   const serialized = JSON.stringify(result.state);
-  // While unanchored to a narration message, keep a single live row.
-  if (row.messageId === "") {
+  if (anchor?.messageId) {
+    // Anchor to the latest visible assistant message so this state is what a read
+    // (or a regenerate of the following turn) resolves to.
+    await storage.create({
+      chatId,
+      messageId: anchor.messageId,
+      swipeIndex: anchor.swipeIndex,
+      gameType: engine.gameType,
+      schemaVersion: engine.schemaVersion,
+      state: serialized,
+      committed: true,
+    });
+  } else if (row.messageId === "") {
+    // No assistant message yet (e.g. the human plays first) — keep a single live row.
     await storage.updateStateById(row.id, serialized, true);
   } else {
     await storage.create({
@@ -269,9 +326,13 @@ export async function getTurnGameView(db: DB, chatId: string, seatId?: string): 
   return engine.publicView(state, viewer);
 }
 
-/** True when an unfinished game exists for the chat (for tool-scoping / autonomous suppression). */
+/**
+ * True when an unfinished game exists for the chat (for tool-scoping / autonomous
+ * suppression / the live bot loop). Uses the latest snapshot directly — rewind is
+ * irrelevant here, and skipping the message scan keeps the hot paths cheap.
+ */
 export async function getActiveTurnGame(db: DB, chatId: string): Promise<LoadedGame | null> {
-  const loaded = await loadGame(db, chatId);
+  const loaded = await loadGame(db, chatId, null);
   if (!loaded) return null;
   return loaded.engine.isTerminal(loaded.state).done ? null : loaded;
 }

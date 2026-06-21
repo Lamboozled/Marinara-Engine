@@ -110,7 +110,7 @@ export function UnoBoard({ chatId }: Props) {
   const submit = (m: Record<string, unknown>) => {
     if (disabled) return;
     setPending(null);
-    move.mutate({ move: m, seatId: view.yourSeatId ?? undefined });
+    move.mutate({ move: m });
   };
 
   // Playing one of your two cards leaves you at one: declare UNO on that play so a

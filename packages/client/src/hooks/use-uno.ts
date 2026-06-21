@@ -107,8 +107,7 @@ export function useUnoMove(chatId: string) {
   const qc = useQueryClient();
   const { generate } = useGenerate();
   return useMutation({
-    mutationFn: (vars: { move: unknown; seatId?: string }) =>
-      api.post<OutcomeResponse>(`/turn-games/${chatId}/move`, vars),
+    mutationFn: (vars: { move: unknown }) => api.post<OutcomeResponse>(`/turn-games/${chatId}/move`, vars),
     onSuccess: (res) => {
       if (res?.view) useUnoGameStore.getState().setUno(res.view, chatId);
       // Open a generate request so the server drives the bot seats over SSE.
