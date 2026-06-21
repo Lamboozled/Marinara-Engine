@@ -10625,6 +10625,9 @@ export async function generateRoutes(app: FastifyInstance) {
         }
       }
     } catch (err) {
+      if (!abortController.signal.aborted) {
+        abortController.abort();
+      }
       const message =
         err instanceof Error
           ? (err as { cause?: unknown }).cause instanceof Error

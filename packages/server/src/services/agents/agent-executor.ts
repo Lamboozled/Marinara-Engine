@@ -22,6 +22,7 @@ const EXPRESSION_AGENT_RESPONSE_CHAR_LIMIT = 6000;
 const CHARACTER_LORE_DESCRIPTION_LIMIT = 2000;
 const CHARACTER_LORE_FIELD_LIMIT = 1200;
 const DEFAULT_AGENT_TEMPERATURE = 0.3;
+const DEFAULT_AGENT_CALL_TIMEOUT_MS = 5 * 60_000;
 
 /** Strip HTML/XML-style tags (e.g. <div style="..."> <br> <speaker>) from text to save tokens. */
 function stripHtmlTags(text: string): string {
@@ -219,6 +220,26 @@ function agentCustomParameters(config: AgentExecConfig): Record<string, unknown>
     : undefined;
 }
 
+function combineAbortSignals(signals: AbortSignal[]): AbortSignal {
+  const activeSignals = signals.filter((signal) => !signal.aborted);
+  const abortedSignal = signals.find((signal) => signal.aborted);
+  if (abortedSignal) return abortedSignal;
+  if (activeSignals.length === 1) return activeSignals[0]!;
+  if (typeof AbortSignal.any === "function") return AbortSignal.any(activeSignals);
+
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  for (const signal of activeSignals) {
+    signal.addEventListener("abort", abort, { once: true });
+  }
+  return controller.signal;
+}
+
+function agentCallSignal(parentSignal?: AbortSignal): AbortSignal {
+  const timeoutSignal = AbortSignal.timeout(DEFAULT_AGENT_CALL_TIMEOUT_MS);
+  return parentSignal ? combineAbortSignals([parentSignal, timeoutSignal]) : timeoutSignal;
+}
+
 function applyProviderMaxTokensOverride(provider: BaseLLMProvider, maxTokens: number): number {
   return provider.maxTokensOverrideValue !== null ? Math.min(maxTokens, provider.maxTokensOverrideValue) : maxTokens;
 }
@@ -379,7 +400,7 @@ export async function executeAgent(
             responseText += chunk;
           }
         : undefined,
-      signal: context.signal,
+      signal: agentCallSignal(context.signal),
     });
 
     if (!responseText && result.content) responseText = result.content;
@@ -422,7 +443,7 @@ export async function executeAgent(
               retryResponseText += chunk;
             }
           : undefined,
-        signal: context.signal,
+        signal: agentCallSignal(context.signal),
       });
       totalTokens += retryResult.usage?.totalTokens ?? 0;
       if (!retryResponseText && retryResult.content) retryResponseText = retryResult.content;
@@ -512,7 +533,7 @@ async function executeAgentWithTools(
       customParameters,
       stream: streamResponses,
       tools: toolContext.tools,
-      signal: context.signal,
+      signal: agentCallSignal(context.signal),
     });
 
     totalTokens += result.usage?.totalTokens ?? 0;
@@ -592,7 +613,7 @@ async function executeAgentWithTools(
     maxTokens,
     customParameters,
     stream: streamResponses,
-    signal: context.signal,
+    signal: agentCallSignal(context.signal),
   });
   totalTokens += finalResult.usage?.totalTokens ?? 0;
   const responseText = finalResult.content?.trim() ?? "";
@@ -758,7 +779,7 @@ export async function executeAgentBatch(
             responseText += chunk;
           }
         : undefined,
-      signal: context.signal,
+      signal: agentCallSignal(context.signal),
     });
 
     // chatComplete also accumulates content, but streaming via onToken is
