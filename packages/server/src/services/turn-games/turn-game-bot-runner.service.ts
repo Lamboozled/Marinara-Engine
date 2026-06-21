@@ -18,7 +18,7 @@ import type { DB } from "../../db/connection.js";
 import { logger } from "../../lib/logger.js";
 import type { BaseLLMProvider, ChatMessage, LLMToolDefinition } from "../llm/base-provider.js";
 import { createLLMProvider } from "../llm/provider-registry.js";
-import { sendSseEvent, trySendSseEvent } from "../../routes/generate/sse.js";
+import { trySendSseEvent } from "../../routes/generate/sse.js";
 import { createCharactersStorage } from "../storage/characters.storage.js";
 import { createChatsStorage } from "../storage/chats.storage.js";
 import { createGameEngineStateStorage } from "../storage/game-engine-state.storage.js";
@@ -150,7 +150,9 @@ export async function runTurnGameBotTurns(args: RunBotTurnsArgs): Promise<void> 
     const seatName = state.seatNames?.[seatId] ?? seatId;
 
     // Announce whose turn it is (reuses the established multi-actor marker).
-    sendSseEvent(reply, { type: "group_turn", data: { characterId: seatId, characterName: seatName, index: turn } });
+    // Non-critical marker — use the swallowing variant so a client disconnect
+    // can't throw and abort the bot-turn loop (matches the other emits below).
+    trySendSseEvent(reply, { type: "group_turn", data: { characterId: seatId, characterName: seatName, index: turn } });
 
     // ── Ask the bot for a move ──
     const view = engine.describeForModel(state, seatId);
