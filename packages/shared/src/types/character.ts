@@ -25,6 +25,7 @@ export interface CharacterData {
   alternate_greetings: string[];
   extensions: CharacterExtensions;
   character_book: CharacterBook | null;
+  [key: string]: unknown;
 }
 
 /** ST-compatible extension fields. */
@@ -110,6 +111,7 @@ export interface CharacterBookEntry {
   position: CharacterBookEntryPosition;
   depth?: number;
   role?: CharacterBookEntryRole;
+  [key: string]: unknown;
 }
 
 /** Our internal Character representation (extends V2 with engine-specific fields). */

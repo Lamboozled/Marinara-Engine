@@ -487,13 +487,14 @@ function normalizeCharacterData(raw: Record<string, unknown>): CharacterData {
     // V2 / V3 format — extract from data wrapper
     return normalizeV2(raw.data as Record<string, unknown>);
   }
+  if (raw.type === "character" && raw.data) {
+    // RisuAI format
+    const data = raw.data && typeof raw.data === "object" ? (raw.data as Record<string, unknown>) : {};
+    return convertRisuToV2({ ...raw, ...data });
+  }
   if (raw.char_name || raw.name) {
     // V1 / Pygmalion format — convert to V2
     return convertV1toV2(raw);
-  }
-  if (raw.type === "character" && raw.data) {
-    // RisuAI format
-    return convertRisuToV2((raw.data as Record<string, unknown>) ?? {});
   }
   // Try treating the whole object as character data
   return normalizeV2(raw);
@@ -558,6 +559,51 @@ function normalizeCharacterBookRole(value: unknown): CharacterBookEntryRole | un
   }
   return undefined;
 }
+
+function optionalRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function pickDefinedFields(source: Record<string, unknown>, fields: string[]): Record<string, unknown> {
+  const picked: Record<string, unknown> = {};
+  for (const field of fields) {
+    if (source[field] !== undefined) picked[field] = source[field];
+  }
+  return picked;
+}
+
+const V3_CHARACTER_DATA_FIELDS = [
+  "group_only_greetings",
+  "nickname",
+  "assets",
+  "creation_date",
+  "source",
+  "creator_notes_multilingual",
+];
+
+const CHARACTER_BOOK_ENTRY_PASSTHROUGH_FIELDS = [
+  "probability",
+  "useProbability",
+  "use_probability",
+  "selectiveLogic",
+  "sticky",
+  "cooldown",
+  "delay",
+  "group",
+  "groupWeight",
+  "scanDepth",
+  "scan_depth",
+  "matchWholeWords",
+  "match_whole_words",
+  "caseSensitive",
+  "case_sensitive",
+  "useRegex",
+  "regex",
+  "preventRecursion",
+  "excludeRecursion",
+  "delayUntilRecursion",
+  "vectorized",
+];
 
 function buildCardSpecMetadata(raw: Record<string, unknown>) {
   const spec = typeof raw.spec === "string" ? raw.spec : null;
@@ -635,8 +681,7 @@ function resolveCharXAsset(zip: AdmZip, uri: string, ext?: string): string | nul
 }
 
 function normalizeV2(raw: Record<string, unknown>): CharacterData {
-  const rawExtensions =
-    raw.extensions && typeof raw.extensions === "object" ? (raw.extensions as Record<string, unknown>) : {};
+  const rawExtensions = optionalRecord(raw.extensions);
   return {
     name: String(raw.name ?? "Unknown"),
     description: String(raw.description ?? ""),
@@ -667,6 +712,7 @@ function normalizeV2(raw: Record<string, unknown>): CharacterData {
       appearance: String(rawExtensions.appearance ?? ""),
     },
     character_book: normalizeCharacterBook(raw.character_book),
+    ...pickDefinedFields(raw, V3_CHARACTER_DATA_FIELDS),
   };
 }
 
@@ -697,6 +743,7 @@ function normalizeCharacterBook(raw: unknown): CharacterData["character_book"] {
     const depth = typeof e.depth === "number" && Number.isFinite(e.depth) ? e.depth : null;
     const role = normalizeCharacterBookRole(e.role);
     const title = firstNonEmptyString(e.comment, e.name) ?? `Entry ${i + 1}`;
+    const passthrough = pickDefinedFields(e, CHARACTER_BOOK_ENTRY_PASSTHROUGH_FIELDS);
 
     return {
       keys: normalizeStringArray(e.key ?? e.keys),
@@ -713,6 +760,7 @@ function normalizeCharacterBook(raw: unknown): CharacterData["character_book"] {
       selective: Boolean(e.selective ?? false),
       constant: Boolean(e.constant ?? false),
       position,
+      ...passthrough,
       ...(depth !== null ? { depth } : {}),
       ...(role !== undefined ? { role } : {}),
     };
@@ -751,21 +799,47 @@ function convertV1toV2(raw: Record<string, unknown>): CharacterData {
 }
 
 function convertRisuToV2(raw: Record<string, unknown>): CharacterData {
+  const risuExtensions: Record<string, unknown> = {
+    ...optionalRecord(raw.extensions),
+    ...pickDefinedFields(raw, [
+      "depth_prompt",
+      "depthPrompt",
+      "talkativeness",
+      "fav",
+      "world",
+      "regex_scripts",
+      "regexScripts",
+      "backstory",
+      "appearance",
+    ]),
+  };
+  if (risuExtensions.depth_prompt === undefined && raw.depthPrompt !== undefined) {
+    risuExtensions.depth_prompt = raw.depthPrompt;
+  }
+  if (risuExtensions.regex_scripts === undefined && raw.regexScripts !== undefined) {
+    risuExtensions.regex_scripts = raw.regexScripts;
+  }
+
   return normalizeV2({
     name: raw.name ?? "Unknown",
     description: raw.description ?? "",
     personality: raw.personality ?? "",
     scenario: raw.scenario ?? "",
-    first_mes: raw.firstMessage ?? raw.first_mes ?? "",
-    mes_example: raw.exampleMessage ?? raw.mes_example ?? "",
+    first_mes: raw.firstMessage ?? raw.first_mes ?? raw.first_message ?? "",
+    mes_example: raw.exampleMessage ?? raw.mes_example ?? raw.example_dialogue ?? "",
     system_prompt: raw.systemPrompt ?? "",
     creator_notes: raw.creatorNotes ?? "",
-    post_history_instructions: "",
+    post_history_instructions:
+      raw.postHistoryInstructions ?? raw.post_history_instructions ?? raw.jailbreak ?? raw.jailbreakPrompt ?? "",
     tags: Array.isArray(raw.tags) ? raw.tags.map(String) : [],
     creator: String(raw.creator ?? ""),
-    character_version: "",
-    alternate_greetings: Array.isArray(raw.alternateGreetings) ? raw.alternateGreetings.map(String) : [],
-    extensions: {},
-    character_book: null,
+    character_version: raw.characterVersion ?? raw.character_version ?? "",
+    alternate_greetings: Array.isArray(raw.alternateGreetings)
+      ? raw.alternateGreetings.map(String)
+      : Array.isArray(raw.alternate_greetings)
+        ? raw.alternate_greetings.map(String)
+        : [],
+    extensions: risuExtensions,
+    character_book: raw.character_book ?? raw.characterBook ?? raw.lorebook ?? raw.world_info ?? raw.worldInfo ?? null,
   });
 }
