@@ -4680,10 +4680,12 @@ export async function generateRoutes(app: FastifyInstance) {
                 {};
               // Skip:
               //   - Disabled entries (off-limits, by global flag or per-chat override).
+              //   - Constant entries, which are already injected by the standard lorebook path.
               //   - Exhausted ephemeral entries (countdown reached 0 in this chat).
               //   - Entries excluded by character/tag/generation-trigger filters.
               knowledgeRouterEntries = entries
                 .filter((e: LorebookEntry) => {
+                  if (e.constant === true) return false;
                   const ov = entryStateOverrides[e.id];
                   const isEnabled = ov?.enabled ?? e.enabled !== false;
                   if (!isEnabled) return false;
