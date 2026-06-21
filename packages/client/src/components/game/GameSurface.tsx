@@ -3126,7 +3126,7 @@ export function GameSurface({
             context,
             limit: 50,
           },
-          { signal: AbortSignal.timeout(25_000) },
+          { signal: AbortSignal.timeout(8_000) },
         );
         return result.enabled ? (result.tracks ?? []) : [];
       } catch (error) {
@@ -4062,12 +4062,15 @@ export function GameSurface({
 
     if (useSpotifyGameMusic && (useSidecar || sceneConnId)) {
       void fetchSpotifySceneCandidates(tags.cleanContent, sceneContext).then((availableSpotifyTracks) => {
-        runSceneAnalysis({
-          ...sceneContext,
-          availableSpotifyTracks,
+        const fallback = availableSpotifyTracks[0];
+        if (!fallback) return;
+        void playSpotifySceneTrack({
+          uri: fallback.uri,
+          name: fallback.name,
+          artist: fallback.artist,
+          album: fallback.album ?? null,
         });
       });
-      return;
     }
 
     runSceneAnalysis(sceneContext);

@@ -16,7 +16,7 @@ import { createLorebooksStorage } from "../services/storage/lorebooks.storage.js
 import { createAgentsStorage } from "../services/storage/agents.storage.js";
 import { createLLMProvider } from "../services/llm/provider-registry.js";
 import { extractLeadingThinkingBlocks } from "../services/llm/inline-thinking.js";
-import { type ChatMessage, type ChatOptions } from "../services/llm/base-provider.js";
+import { type ChatCompletionResult, type ChatMessage, type ChatOptions } from "../services/llm/base-provider.js";
 import { isDiceNotation, rollDice } from "../services/game/dice.service.js";
 import { parseGameJsonish } from "../services/game/jsonish.js";
 import { validateTransition } from "../services/game/state-machine.service.js";
@@ -1666,6 +1666,47 @@ const SESSION_SUMMARY_CHARS_PER_TOKEN = 4;
 const SESSION_SUMMARY_MIN_TRANSCRIPT_CHARS = 256;
 const SESSION_CONCLUSION_MIN_OUTPUT_TOKENS = 8192;
 const CAMPAIGN_PROGRESSION_MIN_OUTPUT_TOKENS = SESSION_CONCLUSION_MIN_OUTPUT_TOKENS;
+const GAME_GENERATION_TIMEOUT_MS = 4 * 60 * 1000;
+
+class GameGenerationTimeoutError extends Error {
+  constructor(label: string, timeoutMs: number) {
+    super(`${label} timed out after ${Math.round(timeoutMs / 1000)} seconds`);
+    this.name = "GameGenerationTimeoutError";
+  }
+}
+
+async function runGameChatComplete(
+  provider: { chatComplete(messages: ChatMessage[], options: ChatOptions): Promise<ChatCompletionResult> },
+  messages: ChatMessage[],
+  options: ChatOptions,
+  label: string,
+  timeoutMs = GAME_GENERATION_TIMEOUT_MS,
+): Promise<ChatCompletionResult> {
+  const controller = new AbortController();
+  let timedOut = false;
+  const parentSignal = options.signal;
+  const abortFromParent = () => controller.abort(parentSignal?.reason);
+  if (parentSignal?.aborted) {
+    abortFromParent();
+  } else {
+    parentSignal?.addEventListener("abort", abortFromParent, { once: true });
+  }
+
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    controller.abort(new GameGenerationTimeoutError(label, timeoutMs));
+  }, timeoutMs);
+
+  try {
+    return await provider.chatComplete(messages, { ...options, signal: controller.signal });
+  } catch (err) {
+    if (timedOut) throw new GameGenerationTimeoutError(label, timeoutMs);
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+    parentSignal?.removeEventListener("abort", abortFromParent);
+  }
+}
 const GAME_LOREBOOK_KEEPER_MIN_OUTPUT_TOKENS = 16_384;
 const GAME_LOREBOOK_KEEPER_MAX_ENTRIES = 32;
 const SESSION_SUMMARY_TRUNCATION_MARKER = "\n\n[Middle of session transcript truncated to fit context window]\n\n";
@@ -2348,7 +2389,12 @@ async function runGameLorebookKeeperAfterConclusion(args: {
       maxTokens: options.maxTokens,
     });
 
-    const result = await provider.chatComplete(fitted.trimmed ? fitted.messages : keeperMessages, options);
+    const result = await runGameChatComplete(
+      provider,
+      fitted.trimmed ? fitted.messages : keeperMessages,
+      options,
+      "Game lorebook keeper",
+    );
     const extraction = extractLeadingThinkingBlocks(result.content ?? "", generationParameters?.customThinkingTags);
     const parsed = parseJSON(extraction.content) as Record<string, unknown>;
     const entries = normalizeGameLorebookKeeperEntries(parsed);
@@ -3631,7 +3677,7 @@ export async function gameRoutes(app: FastifyInstance) {
       );
     }
 
-    const result = await provider.chatComplete(messages, setupOptions);
+    const result = await runGameChatComplete(provider, messages, setupOptions, "Game setup");
     const setupExtraction = extractLeadingThinkingBlocks(
       result.content ?? "",
       setupGenerationParameters?.customThinkingTags,
@@ -3993,7 +4039,8 @@ export async function gameRoutes(app: FastifyInstance) {
             { role: "user", content: "Generate the session recap." },
           ];
 
-          const result = await provider.chatComplete(
+          const result = await runGameChatComplete(
+            provider,
             recapMessages,
             gameGenOptions(
               conn.model,
@@ -4003,6 +4050,7 @@ export async function gameRoutes(app: FastifyInstance) {
               null,
               conn.provider,
             ),
+            "Game session recap",
           );
           const recapExtraction = extractLeadingThinkingBlocks(result.content ?? "");
           recapText = recapExtraction.content;
@@ -4186,7 +4234,12 @@ export async function gameRoutes(app: FastifyInstance) {
       );
     }
 
-    const result = await provider.chatComplete(conclusionMessages, conclusionOptions);
+    const result = await runGameChatComplete(
+      provider,
+      conclusionMessages,
+      conclusionOptions,
+      "Game session conclusion",
+    );
     logger.info("[game/session/conclude] Conclusion generation completed for chat %s", chatId);
     const conclusionExtraction = extractLeadingThinkingBlocks(
       result.content ?? "",
@@ -4566,7 +4619,12 @@ export async function gameRoutes(app: FastifyInstance) {
       );
     }
 
-    const result = await provider.chatComplete(conclusionMessages, conclusionOptions);
+    const result = await runGameChatComplete(
+      provider,
+      conclusionMessages,
+      conclusionOptions,
+      "Game session conclusion regeneration",
+    );
     const conclusionExtraction = extractLeadingThinkingBlocks(
       result.content ?? "",
       conclusionGenerationParameters?.customThinkingTags,
@@ -4837,7 +4895,12 @@ export async function gameRoutes(app: FastifyInstance) {
       );
     }
 
-    const result = await provider.chatComplete(fit.trimmed ? fit.messages : progressionMessages, progressionOptions);
+    const result = await runGameChatComplete(
+      provider,
+      fit.trimmed ? fit.messages : progressionMessages,
+      progressionOptions,
+      "Game campaign progression update",
+    );
     const rawProgressionContent = result.content ?? "";
     const extraction = extractLeadingThinkingBlocks(
       rawProgressionContent,
@@ -5150,12 +5213,14 @@ export async function gameRoutes(app: FastifyInstance) {
           language: setupConfig.language ?? null,
         });
 
-        const result = await provider.chatComplete(
+        const result = await runGameChatComplete(
+          provider,
           [
             { role: "system", content: prompt },
             { role: "user", content: `Create the recruited companion card for ${recruitName} now.` },
           ],
           gameGenOptions(conn.model, { temperature: 0.6, maxTokens: 1200 }, generationParameters, conn.provider),
+          "Game party recruit card",
         );
         const recruitExtraction = extractLeadingThinkingBlocks(
           result.content ?? "",
@@ -5510,7 +5575,8 @@ export async function gameRoutes(app: FastifyInstance) {
       { role: "user", content: "Generate the map." },
     ];
 
-    const result = await provider.chatComplete(
+    const result = await runGameChatComplete(
+      provider,
       messages,
       gameGenOptions(
         conn.model,
@@ -5520,6 +5586,7 @@ export async function gameRoutes(app: FastifyInstance) {
         null,
         conn.provider,
       ),
+      "Game map generation",
     );
     const mapExtraction = extractLeadingThinkingBlocks(result.content ?? "");
     const mapContent = mapExtraction.content;
@@ -6264,7 +6331,8 @@ export async function gameRoutes(app: FastifyInstance) {
       conn.openrouterProvider,
       conn.maxTokensOverride,
     );
-    const result = await provider.chatComplete(
+    const result = await runGameChatComplete(
+      provider,
       messages,
       gameGenOptions(
         conn.model ?? "",
@@ -6274,6 +6342,7 @@ export async function gameRoutes(app: FastifyInstance) {
         gameGenerationParameters,
         conn.provider,
       ),
+      "Game party turn",
     );
     const partyTurnExtraction = extractLeadingThinkingBlocks(
       result.content || "",
@@ -6590,7 +6659,7 @@ export async function gameRoutes(app: FastifyInstance) {
       gameGenerationParameters,
       conn.provider,
     );
-    const result = await provider.chatComplete(messages, sceneWrapOptions);
+    const result = await runGameChatComplete(provider, messages, sceneWrapOptions, "Game scene wrap");
 
     let sceneWrapExtraction = extractLeadingThinkingBlocks(
       result.content || "",
