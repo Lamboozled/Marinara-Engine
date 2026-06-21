@@ -10,6 +10,7 @@ import { formatAgentFailuresToast, toAgentFailure, type AgentFailure } from "../
 import { chatBackgroundMetadataToUrl } from "../lib/backgrounds";
 import { requestChatScrollToBottom } from "../lib/chat-scroll-events";
 import { agentKeys } from "./use-agents";
+import { discardPendingGameStatePatch } from "./use-game-state-patcher";
 import type { PendingAgentWriteApproval, PendingCardUpdate } from "../stores/agent.store";
 import type { DelayedCharacterInfo } from "../stores/chat.store";
 import {
@@ -1681,6 +1682,7 @@ export function useGenerate() {
               const patch = event.data as Record<string, unknown>;
               console.warn(`[Generate] ${event.type} received:`, patch);
               if (!isActiveChat()) break;
+              discardPendingGameStatePatch(params.chatId);
               applyGameStatePatchToStore(params.chatId, patch, gameStatePatchAnchor);
               break;
             }
@@ -2440,7 +2442,11 @@ export function useGenerate() {
     async (chatId: string, agentTypes: string[], options?: RetryAgentsOptions): Promise<boolean> => {
       const isActiveChat = () => useChatStore.getState().activeChatId === chatId;
       const abortController = new AbortController();
+      const isTrackerRetry = agentTypes.some(
+        (agentType) => BUILT_IN_TRACKER_AGENT_TYPE_SET.has(agentType) || !BUILT_IN_AGENT_TYPE_SET.has(agentType),
+      );
       setProcessing(true);
+      if (isTrackerRetry) useGameStateStore.getState().setRefreshingChat(chatId);
       clearFailedAgentTypes();
       clearThoughtBubbles();
       let hasError = false;
@@ -2459,9 +2465,6 @@ export function useGenerate() {
         let agentResultCount = 0;
         let trackerPatchCount = 0;
         let spriteChangeReceived = false;
-        const isTrackerRetry = agentTypes.some(
-          (agentType) => BUILT_IN_TRACKER_AGENT_TYPE_SET.has(agentType) || !BUILT_IN_AGENT_TYPE_SET.has(agentType),
-        );
         const failedRetryFailures: Array<ReturnType<typeof toAgentFailure>> = [];
         for await (const event of api.streamEvents(
           "/generate/retry-agents",
@@ -2652,6 +2655,7 @@ export function useGenerate() {
               console.warn(`[Retry] ${event.type} received:`, patch);
               if (patch && Object.keys(patch).length > 0) trackerPatchCount += 1;
               if (!isActiveChat()) break;
+              discardPendingGameStatePatch(chatId);
               applyGameStatePatchToStore(chatId, patch);
               break;
             }
@@ -2729,6 +2733,7 @@ export function useGenerate() {
         showError(msg);
       } finally {
         setProcessing(false);
+        if (isTrackerRetry) useGameStateStore.getState().clearRefreshingChat(chatId);
         if (hasError && isActiveChat()) {
           void refreshMessagesAuthoritatively(qc, chatId);
         }
