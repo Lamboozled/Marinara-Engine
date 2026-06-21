@@ -52,8 +52,11 @@ export function UnoSetup({ chatId, open, onClose }: Props) {
   const selectedIds = selected ?? new Set(charIds);
 
   const toggleSelected = (id: string) =>
-    setSelected(() => {
-      const next = new Set(selectedIds);
+    // Derive from the updater's `current` (not the render-time `selectedIds`) so
+    // batched toggles don't clobber each other; fall back to every chat character
+    // only before the user's first selection (current === null).
+    setSelected((current) => {
+      const next = new Set(current ?? charIds);
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;

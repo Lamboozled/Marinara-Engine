@@ -1259,8 +1259,11 @@ export function ConversationView({
 
       {/* ── Turn-game board (UNO, etc.) — self-hides when no game is active ── */}
       <UnoBoard chatId={chatId} />
-      {/* Setup modal mounted once here (stable position) so it never double-renders. */}
-      <UnoSetup chatId={chatId} open={unoSetupOpen} onClose={closeUnoSetup} />
+      {/* Setup modal mounted once here (stable position) so it never double-renders.
+          Keyed by chatId so its internal selection/house-rule state resets on a
+          chat switch (matches ConversationInput below) — otherwise stale selected
+          ids would inflate botCount and could deal an empty botCharacterIds list. */}
+      <UnoSetup key={chatId} chatId={chatId} open={unoSetupOpen} onClose={closeUnoSetup} />
 
       {/* ── Input area ── */}
       <ConversationInput
