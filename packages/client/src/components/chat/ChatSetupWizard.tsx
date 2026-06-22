@@ -827,6 +827,8 @@ function ConversationQuickSetup({ chat, onFinish }: ChatSetupWizardProps) {
           characterIds: chatCharIds,
           scheduleGenerationPreferences,
         });
+        await queryClient.invalidateQueries({ queryKey: chatKeys.detail(chat.id) });
+        await queryClient.invalidateQueries({ queryKey: ["conversation-status", chat.id] });
       } catch {
         // Schedule generation is non-critical — continue anyway
       }
