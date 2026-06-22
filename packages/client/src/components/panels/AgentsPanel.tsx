@@ -852,7 +852,7 @@ export function AgentsPanel() {
         />
       </div>
 
-      {isLoading && <div className="py-4 text-center text-xs text-[var(--muted-foreground)]">Loading...</div>}
+      {isLoading && <div className="mari-chrome-text-muted py-4 text-center text-xs">Loading...</div>}
 
       {!hasVisibleAgents && (
         <p className="px-1 py-2 text-[0.625rem] text-[var(--muted-foreground)]">No agents match your search.</p>

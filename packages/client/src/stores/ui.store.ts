@@ -10,7 +10,7 @@ import {
   type ImageStyleProfileSettings,
   type QuoteFormat,
 } from "@marinara-engine/shared";
-import { isCssGradient } from "../lib/css-colors";
+import { isCssGradient, RAINBOW_GRADIENT_PRESET } from "../lib/css-colors";
 
 type Panel =
   | "chat"
@@ -1772,7 +1772,7 @@ export const useUIStore = create<UIState>()(
     }),
     {
       name: "marinara-engine-ui",
-      version: 61,
+      version: 62,
       // Debounce localStorage writes to avoid sync I/O on every state change
       storage: createJSONStorage(() => {
         let timer: ReturnType<typeof setTimeout> | null = null;
@@ -2181,6 +2181,16 @@ export const useUIStore = create<UIState>()(
         }
         if (version <= 60 && persisted.appAccentPulseMode === undefined) {
           persisted.appAccentPulseMode = false;
+        }
+        if (
+          version <= 61 &&
+          persisted.appAccentRgbMode === true &&
+          persisted.appAccentColor === RAINBOW_GRADIENT_PRESET &&
+          persisted.appAccentColorBeforeRgbMode !== null &&
+          persisted.appAccentColorBeforeRgbMode !== undefined
+        ) {
+          persisted.appAccentColor = persisted.appAccentColorBeforeRgbMode;
+          persisted.appAccentColorBeforeRgbMode = null;
         }
         persisted.characterLibrarySort = normalizeCharacterLibrarySort(persisted.characterLibrarySort);
         persisted.characterPanelScrollTop = normalizeScrollTop(persisted.characterPanelScrollTop);

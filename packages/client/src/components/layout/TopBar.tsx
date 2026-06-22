@@ -62,6 +62,7 @@ const TOPBAR_BUTTON_CLASS = "relative rounded-lg p-2 transition-all hover:bg-[va
 const TOPBAR_PANEL_BUTTON_CLASS = "relative rounded-lg p-2 transition-all duration-200 max-sm:p-1.5";
 const TOPBAR_ACTIVE_BUTTON_CLASS = "bg-[var(--accent)] shadow-sm";
 const TOPBAR_FORCE_HOVER_CLASS = "bg-[var(--accent)]";
+const TOPBAR_ACCENT_ICON_CLASS = "mari-topbar-accent-icon mari-accent-animated";
 const CHAT_TOPBAR_GRADIENT_ID = "mari-topbar-chats-gradient";
 
 export function TopBar() {
@@ -224,7 +225,7 @@ export function TopBar() {
             )}
             title="Chats"
           >
-            <MessageSquareText size="0.9375rem">
+            <MessageSquareText size="0.9375rem" className={TOPBAR_ACCENT_ICON_CLASS}>
               <defs>
                 <linearGradient
                   id={CHAT_TOPBAR_GRADIENT_ID}
@@ -255,7 +256,7 @@ export function TopBar() {
             className={cn(
               TOPBAR_BUTTON_CLASS,
               isHomeActive
-                ? cn(TOPBAR_ACTIVE_BUTTON_CLASS, "mari-chrome-accent-icon mari-accent-animated")
+                ? TOPBAR_ACTIVE_BUTTON_CLASS
                 : cn(
                     "text-[var(--muted-foreground)] hover:text-[var(--marinara-chat-chrome-button-text-hover)]",
                     isTopbarHovered("home") &&
@@ -264,9 +265,9 @@ export function TopBar() {
             )}
             title="Home"
           >
-            <Home size="0.9375rem" />
+            <Home size="0.9375rem" className={TOPBAR_ACCENT_ICON_CLASS} />
             {isHomeActive && (
-              <span className="mari-topbar-active-underline mari-accent-animated absolute -bottom-0.5 left-1/2 h-0.5 w-3 -translate-x-1/2 rounded-full" />
+              <span className="mari-topbar-active-underline absolute -bottom-0.5 left-1/2 h-0.5 w-3 -translate-x-1/2 rounded-full" />
             )}
           </button>
         </div>
@@ -297,7 +298,7 @@ export function TopBar() {
           )}
           title="Browser"
         >
-          <Bot size="0.9375rem" />
+          <Bot size="0.9375rem" className={TOPBAR_ACCENT_ICON_CLASS} />
           {isBotBrowserActive && (
             <span className="absolute -bottom-0.5 left-1/2 h-0.5 w-3 -translate-x-1/2 rounded-full bg-gradient-to-r from-lime-400 via-green-500 to-cyan-500" />
           )}
@@ -318,7 +319,7 @@ export function TopBar() {
           )}
           title="Characters"
         >
-          <Users size="0.9375rem" />
+          <Users size="0.9375rem" className={TOPBAR_ACCENT_ICON_CLASS} />
           {isCharactersPanelActive && (
             <span className="absolute -bottom-0.5 left-1/2 h-0.5 w-3 -translate-x-1/2 rounded-full bg-gradient-to-r from-pink-400 to-rose-500" />
           )}
@@ -342,7 +343,7 @@ export function TopBar() {
               )}
               title={label}
             >
-              <Icon size="0.9375rem" />
+              <Icon size="0.9375rem" className={TOPBAR_ACCENT_ICON_CLASS} />
               {isActive && (
                 <span
                   className={cn(
@@ -374,7 +375,7 @@ export function TopBar() {
           )}
           title="Settings"
         >
-          <Settings size="0.9375rem" />
+          <Settings size="0.9375rem" className={TOPBAR_ACCENT_ICON_CLASS} />
           {rightPanelOpen && rightPanel === "settings" && (
             <span className="absolute -bottom-0.5 left-1/2 h-0.5 w-3 -translate-x-1/2 rounded-full bg-gradient-to-r from-gray-400 to-gray-500" />
           )}

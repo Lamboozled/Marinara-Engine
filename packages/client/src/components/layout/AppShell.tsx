@@ -126,7 +126,7 @@ function getViewportWidth() {
 
 function MainPaneFallback() {
   return (
-    <div className="flex flex-1 items-center justify-center text-sm text-[var(--muted-foreground)]">Loading...</div>
+    <div className="mari-chrome-text-muted flex flex-1 items-center justify-center text-sm">Loading...</div>
   );
 }
 /** Mounts children once `open` becomes true, then keeps them mounted so state persists.
@@ -169,7 +169,7 @@ function MountOnceWhenOpened({
 
 function SidePanelFallback() {
   return (
-    <div className="flex h-full items-center justify-center text-sm text-[var(--muted-foreground)]">Loading...</div>
+    <div className="mari-chrome-text-muted flex h-full items-center justify-center text-sm">Loading...</div>
   );
 }
 

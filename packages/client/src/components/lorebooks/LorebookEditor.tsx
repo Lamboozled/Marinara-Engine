@@ -1564,7 +1564,7 @@ export function LorebookEditor() {
 
   // ── Main editor ──
   return (
-    <div className="mari-editor-shell flex flex-1 flex-col overflow-hidden">
+    <div className="mari-editor-shell mari-editor-legacy-bridge flex flex-1 flex-col overflow-hidden">
       <ExportFormatDialog
         open={exportDialogOpen}
         title="Export Lorebook"

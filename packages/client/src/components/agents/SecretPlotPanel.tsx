@@ -216,7 +216,7 @@ export function SecretPlotPanel({
 
       {open && (
         <div className="space-y-2 border-t border-[var(--border)] pt-2 text-[0.625rem]">
-          {isLoading && <p className="py-2 text-center text-[var(--muted-foreground)]">Loading secret plot...</p>}
+          {isLoading && <p className="mari-chrome-text-muted py-2 text-center">Loading secret plot...</p>}
           {isError && (
             <p className="rounded-md border border-[var(--destructive)]/25 bg-[var(--destructive)]/10 px-2 py-1.5 text-center text-[var(--destructive)]">
               Could not load Director memory.

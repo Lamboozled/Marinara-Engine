@@ -20,7 +20,12 @@ import {
 import { useSidecarStore } from "./stores/sidecar.store";
 import { api } from "./lib/api-client";
 import { forceRefreshSpa } from "./lib/browser-runtime";
-import { getCssColorFallback, getCssGradientColorStops, isCssGradient } from "./lib/css-colors";
+import {
+  getCssColorFallback,
+  getCssGradientColorStops,
+  isCssGradient,
+  RAINBOW_GRADIENT_PRESET,
+} from "./lib/css-colors";
 import { useLegacyThemeMigration } from "./hooks/use-themes";
 import { useLegacyExtensionMigration } from "./hooks/use-extensions";
 import { useSettingsSync } from "./hooks/use-settings-sync";
@@ -269,8 +274,13 @@ export function App() {
     const accentSource = accent || defaultAccent;
     const solidAccent = getCssColorFallback(accentSource, defaultAccent);
     const accentIsGradient = isCssGradient(accentSource);
-    const accentAnimationEnabled = (appAccentRgbMode && accentIsGradient) || (appAccentPulseMode && !accentIsGradient);
-    const gradientStops = accentIsGradient ? getCssGradientColorStops(accentSource, solidAccent) : [solidAccent];
+    const animatedAccentSource = appAccentRgbMode ? RAINBOW_GRADIENT_PRESET : accentSource;
+    const animatedSolidAccent = getCssColorFallback(animatedAccentSource, solidAccent);
+    const animatedAccentIsGradient = isCssGradient(animatedAccentSource);
+    const animatedGradientStops = animatedAccentIsGradient
+      ? getCssGradientColorStops(animatedAccentSource, animatedSolidAccent)
+      : [animatedSolidAccent];
+    const accentAnimationEnabled = appAccentRgbMode || appAccentPulseMode;
 
     let accentAnimationTimer: ReturnType<typeof window.setInterval> | null = null;
 
@@ -301,7 +311,9 @@ export function App() {
 
     const applyLiveAccent = () => {
       const liveAccent =
-        accentIsGradient && gradientStops.length > 1 ? getGradientRgbAccent(gradientStops) : getSolidRgbAccent(solidAccent);
+        animatedAccentIsGradient && animatedGradientStops.length > 1
+          ? getGradientRgbAccent(animatedGradientStops)
+          : getSolidRgbAccent(animatedSolidAccent);
 
       applyAppAccentVariables({
         root,
@@ -323,7 +335,8 @@ export function App() {
     };
 
     const startAccentAnimation = () => {
-      root.dataset.marinaraAccentAnimation = accentIsGradient && gradientStops.length > 1 ? "gradient" : "solid";
+      root.dataset.marinaraAccentAnimation =
+        animatedAccentIsGradient && animatedGradientStops.length > 1 ? "gradient" : "solid";
       applyLiveAccent();
       if (accentAnimationTimer === null) {
         accentAnimationTimer = window.setInterval(applyLiveAccent, ACCENT_RGB_TICK_MS);

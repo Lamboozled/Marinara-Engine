@@ -1089,7 +1089,7 @@ export function ChatSidebar() {
           title={`New ${activeModeConfig.label}`}
           aria-label={`New ${activeModeConfig.label}`}
         >
-          <Plus size="0.8125rem" />
+          <Plus size="0.8125rem" className="mari-chrome-accent-icon mari-accent-animated" />
         </button>
         <button
           onClick={() => chatImportInputRef.current?.click()}
@@ -1295,7 +1295,8 @@ export function ChatSidebar() {
                 activeModeConfig.logoModeClass,
               )}
             >
-              + New {activeTab === "conversation" ? "Conversation" : activeTab === "game" ? "Game" : "Roleplay"}
+              <span className="mari-chrome-accent-icon mari-accent-animated">+</span>
+              New {activeTab === "conversation" ? "Conversation" : activeTab === "game" ? "Game" : "Roleplay"}
             </button>
           </div>
         )}

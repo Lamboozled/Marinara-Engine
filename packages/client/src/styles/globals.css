@@ -888,6 +888,11 @@
   stroke: url(#mari-topbar-chats-gradient);
 }
 
+.mari-topbar .mari-topbar-accent-icon {
+  color: var(--marinara-chat-chrome-button-text-active);
+  stroke: currentcolor;
+}
+
 .mari-topbar-chat-gradient-underline {
   background: linear-gradient(
     90deg,
@@ -1081,13 +1086,16 @@
   --sidebar-foreground: var(--marinara-chat-chrome-panel-text);
 }
 
-.mari-chrome-accent-text,
+.mari-chrome-accent-text {
+  color: var(--marinara-chat-chrome-panel-title);
+}
+
 .mari-chrome-accent-icon {
   color: var(--marinara-chat-chrome-button-text-active);
 }
 
 .mari-chrome-accent-text-muted {
-  color: var(--marinara-chat-chrome-button-text);
+  color: var(--marinara-chat-chrome-panel-muted);
 }
 
 .mari-chrome-accent-surface {
@@ -1171,18 +1179,22 @@
   background: var(--marinara-chat-chrome-accent);
 }
 
-[data-marinara-chat-chrome-accent-mode="gradient"] .mari-chrome-control:not(.mari-chrome-control--danger) {
+[data-marinara-chat-chrome-accent-mode="gradient"]
+  .mari-chrome-control:not(.mari-chrome-control--danger):not(.mari-chat-mode-action):not(.mari-panel-gradient-button) {
   border-color: var(--marinara-chat-chrome-button-border);
   background: var(--marinara-chat-chrome-button-bg);
 }
 
-[data-marinara-chat-chrome-accent-mode="gradient"] .mari-chrome-control:not(.mari-chrome-control--danger):hover {
+[data-marinara-chat-chrome-accent-mode="gradient"]
+  .mari-chrome-control:not(.mari-chrome-control--danger):not(.mari-chat-mode-action):not(.mari-panel-gradient-button):hover {
   border-color: var(--marinara-chat-chrome-button-border-hover);
   background: var(--marinara-chat-chrome-surface-bg-hover);
 }
 
-[data-marinara-chat-chrome-accent-mode="gradient"] .mari-chrome-control--selected,
-[data-marinara-chat-chrome-accent-mode="gradient"] .mari-chrome-control[aria-pressed="true"] {
+[data-marinara-chat-chrome-accent-mode="gradient"]
+  .mari-chrome-control--selected:not(.mari-chrome-control--danger):not(.mari-chat-mode-action):not(.mari-panel-gradient-button),
+[data-marinara-chat-chrome-accent-mode="gradient"]
+  .mari-chrome-control[aria-pressed="true"]:not(.mari-chrome-control--danger):not(.mari-chat-mode-action):not(.mari-panel-gradient-button) {
   border-color: var(--marinara-chat-chrome-button-border-active);
   background: var(--marinara-chat-chrome-surface-bg-active);
   color: var(--marinara-chat-chrome-button-text-active);
@@ -1200,7 +1212,7 @@
 }
 
 [data-marinara-accent-animation]
-  :where(.mari-chrome-token-scope, .mari-rgb-icon-scope, .mari-editor-shell, .mari-settings-panel-chrome)
+  :where(.mari-chrome-token-scope, .mari-rgb-icon-scope, .mari-settings-panel-chrome)
   svg:not(.mari-rgb-static-icon) {
   color: var(--marinara-chat-chrome-button-text-active);
   stroke: currentColor;
@@ -1210,8 +1222,11 @@
     filter 140ms linear;
 }
 
-.mari-accent-gradient-fill,
 .mari-topbar-active-underline {
+  background: var(--marinara-chat-chrome-button-text-hover);
+}
+
+.mari-accent-gradient-fill {
   background: var(--marinara-app-accent-gradient);
 }
 
@@ -1253,7 +1268,6 @@
   :where(
     .mari-accent-animated,
     .mari-accent-gradient-fill,
-    .mari-topbar-active-underline,
     .mari-chrome-accent-text,
     .mari-chrome-accent-icon,
     .mari-chrome-accent-surface,
@@ -1612,6 +1626,33 @@
   background: color-mix(in srgb, var(--marinara-editor-control-bg) 54%, transparent);
 }
 
+.mari-editor-shell [class~="text-[var(--foreground)]"],
+.mari-editor-shell [class~="text-[var(--primary)]"],
+.mari-editor-shell [class~="text-sky-400"],
+.mari-editor-shell [class~="text-sky-300"],
+.mari-editor-shell [class~="text-sky-400/80"],
+.mari-editor-shell .mari-chrome-accent-text {
+  color: var(--marinara-editor-text);
+}
+
+.mari-editor-shell [class~="text-[var(--muted-foreground)]"],
+.mari-editor-shell [class~="text-[var(--muted-foreground)]/40"],
+.mari-editor-shell [class~="text-[var(--muted-foreground)]/45"],
+.mari-editor-shell [class~="text-[var(--muted-foreground)]/50"],
+.mari-editor-shell [class~="text-[var(--muted-foreground)]/60"],
+.mari-editor-shell [class~="text-[var(--muted-foreground)]/70"],
+.mari-editor-shell .mari-chrome-accent-text-muted,
+.mari-editor-shell .mari-chrome-accent-icon {
+  color: var(--marinara-editor-muted);
+}
+
+.mari-editor-shell [class~="hover:text-[var(--foreground)]"]:hover,
+.mari-editor-shell [class~="hover:text-[var(--primary)]"]:hover,
+.mari-editor-shell [class~="hover:text-sky-300"]:hover,
+.mari-editor-shell [class~="hover:text-sky-400"]:hover {
+  color: var(--marinara-editor-text);
+}
+
 .mari-editor-legacy-bridge
   input:not([type="range"]):not([type="checkbox"]):not([type="radio"]):not(.mari-editor-title-input):not(
     .mari-editor-subtitle-input
@@ -1669,11 +1710,21 @@
   --tw-ring-color: var(--marinara-editor-border);
 }
 
+.mari-editor-legacy-bridge [class~="text-[var(--foreground)]"],
 .mari-editor-legacy-bridge [class~="text-[var(--primary)]"],
 .mari-editor-legacy-bridge [class~="text-sky-400"],
 .mari-editor-legacy-bridge [class~="text-sky-300"],
 .mari-editor-legacy-bridge [class~="text-sky-400/80"] {
-  color: var(--marinara-editor-accent);
+  color: var(--marinara-editor-text);
+}
+
+.mari-editor-legacy-bridge [class~="text-[var(--muted-foreground)]"],
+.mari-editor-legacy-bridge [class~="text-[var(--muted-foreground)]/40"],
+.mari-editor-legacy-bridge [class~="text-[var(--muted-foreground)]/45"],
+.mari-editor-legacy-bridge [class~="text-[var(--muted-foreground)]/50"],
+.mari-editor-legacy-bridge [class~="text-[var(--muted-foreground)]/60"],
+.mari-editor-legacy-bridge [class~="text-[var(--muted-foreground)]/70"] {
+  color: var(--marinara-editor-muted);
 }
 
 .mari-editor-legacy-bridge [class~="bg-[var(--primary)]/10"],
@@ -1730,7 +1781,7 @@
 .mari-editor-legacy-bridge [class~="hover:text-[var(--primary)]"]:hover,
 .mari-editor-legacy-bridge [class~="hover:text-sky-300"]:hover,
 .mari-editor-legacy-bridge [class~="hover:text-sky-400"]:hover {
-  color: var(--marinara-editor-accent);
+  color: var(--marinara-editor-text);
 }
 
 .mari-editor-legacy-bridge [class~="hover:bg-[var(--primary)]/25"]:hover,

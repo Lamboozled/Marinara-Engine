@@ -28,7 +28,6 @@ import { ADMIN_SECRET_STORAGE_KEY, ApiError, api, getAdminSecretHeader } from ".
 import { chatBackgroundUrlToMetadata } from "../../lib/backgrounds";
 import { normalizeThemeCss } from "../../lib/theme-css";
 import { forceRefreshSpa } from "@/lib/browser-runtime";
-import { isCssGradient, RAINBOW_GRADIENT_PRESET } from "../../lib/css-colors";
 import React, { useRef, useState, useCallback, useEffect, useMemo } from "react";
 import { toast } from "sonner";
 import {
@@ -1771,8 +1770,6 @@ function AppearanceSettings() {
   const setAppBackgroundColor = useUIStore((s) => s.setAppBackgroundColor);
   const appAccentColor = useUIStore((s) => s.appAccentColor);
   const setAppAccentColor = useUIStore((s) => s.setAppAccentColor);
-  const appAccentColorBeforeRgbMode = useUIStore((s) => s.appAccentColorBeforeRgbMode);
-  const setAppAccentColorBeforeRgbMode = useUIStore((s) => s.setAppAccentColorBeforeRgbMode);
   const appAccentPulseMode = useUIStore((s) => s.appAccentPulseMode);
   const setAppAccentPulseMode = useUIStore((s) => s.setAppAccentPulseMode);
   const appAccentRgbMode = useUIStore((s) => s.appAccentRgbMode);
@@ -1783,7 +1780,6 @@ function AppearanceSettings() {
   const defaultAppAccentColor = getDefaultAppAccentColor(theme);
   const displayedAppAccentColor =
     appAccentColor.trim().toLowerCase() === defaultAppAccentColor.toLowerCase() ? "" : appAccentColor;
-  const appAccentIsGradient = isCssGradient(displayedAppAccentColor || defaultAppAccentColor);
   const visualTheme = useUIStore((s) => s.visualTheme);
   const setVisualTheme = useUIStore((s) => s.setVisualTheme);
   const chatBackground = useUIStore((s) => s.chatBackground);
@@ -1807,49 +1803,28 @@ function AppearanceSettings() {
     (color: string) => {
       const normalized = color.trim();
       const normalizedAccent = normalized.toLowerCase() === defaultAppAccentColor.toLowerCase() ? "" : normalized;
-      const nextAccent = normalizedAccent || defaultAppAccentColor;
 
       setAppAccentColor(normalizedAccent);
-
-      if (isCssGradient(nextAccent)) {
-        setAppAccentPulseMode(false);
-      }
-
-      if (appAccentRgbMode && !isCssGradient(nextAccent)) {
-        setAppAccentRgbMode(false);
-        setAppAccentColorBeforeRgbMode(null);
-      }
     },
-    [
-      appAccentRgbMode,
-      defaultAppAccentColor,
-      setAppAccentColor,
-      setAppAccentColorBeforeRgbMode,
-      setAppAccentPulseMode,
-      setAppAccentRgbMode,
-    ],
+    [defaultAppAccentColor, setAppAccentColor],
   );
   const handleAppAccentRgbModeChange = useCallback(
     (enabled: boolean) => {
-      if (enabled) {
-        setAppAccentColorBeforeRgbMode(appAccentColor);
-        setAppAccentColor(RAINBOW_GRADIENT_PRESET);
-        setAppAccentRgbMode(true);
-        return;
+      if (enabled && appAccentPulseMode) {
+        setAppAccentPulseMode(false);
       }
-      setAppAccentRgbMode(false);
-      if (appAccentColorBeforeRgbMode !== null) {
-        setAppAccentColor(appAccentColorBeforeRgbMode);
-        setAppAccentColorBeforeRgbMode(null);
-      }
+      setAppAccentRgbMode(enabled);
     },
-    [
-      appAccentColor,
-      appAccentColorBeforeRgbMode,
-      setAppAccentColor,
-      setAppAccentColorBeforeRgbMode,
-      setAppAccentRgbMode,
-    ],
+    [appAccentPulseMode, setAppAccentPulseMode, setAppAccentRgbMode],
+  );
+  const handleAppAccentPulseModeChange = useCallback(
+    (enabled: boolean) => {
+      if (enabled && appAccentRgbMode) {
+        setAppAccentRgbMode(false);
+      }
+      setAppAccentPulseMode(enabled);
+    },
+    [appAccentRgbMode, setAppAccentPulseMode, setAppAccentRgbMode],
   );
   // Persist background changes to the active chat's metadata immediately so
   // a clear (or pick) survives chat switches and page reloads. The effect-based
@@ -2115,41 +2090,30 @@ function AppearanceSettings() {
             gradient
             compact
             label="Accent Color"
-            helpText={
-              appAccentRgbMode
-                ? "Turn off RGB Mode to edit the saved accent color. While RGB Mode is on, the app accent is controlled by the animated rainbow preset."
-                : "Colors the shared app accent layer: buttons, active icons, focus rings, highlights, panel outlines, and chat chrome."
-            }
+            helpText="Colors the shared app accent layer: buttons, active icons, focus rings, highlights, panel outlines, and chat chrome. Accent Pulse animates this selected color."
             emptyText={`Default ${defaultAppAccentColor}`}
             emptyPreviewValue={defaultAppAccentColor}
             clearLabel="Reset to default"
-            disabled={appAccentRgbMode}
+          />
+
+          <ToggleSetting
+            label="Accent Pulse"
+            checked={appAccentPulseMode}
+            onChange={handleAppAccentPulseModeChange}
+            help="Animates the selected Accent Color. Solid colors gently brighten and darken; gradients cycle through their selected colors. Reduced-motion preferences are respected."
           />
 
           <ToggleSetting
             label={
-              <span
-                className={cn(
-                  appAccentRgbMode && appAccentIsGradient && "mari-logo-gradient-text mari-logo-gradient-text--active",
-                )}
-              >
+              <span className={cn(appAccentRgbMode && "mari-logo-gradient-text mari-logo-gradient-text--active")}>
                 RGB Mode
               </span>
             }
             checked={appAccentRgbMode}
             onChange={handleAppAccentRgbModeChange}
-            switchClassName={appAccentRgbMode && appAccentIsGradient ? "mari-rgb-toggle-track" : undefined}
-            help="Switches the app accent to the rainbow gradient while enabled, then restores your previous accent when disabled. Reduced-motion preferences are respected."
+            switchClassName={appAccentRgbMode ? "mari-rgb-toggle-track" : undefined}
+            help="Cycles the app accent through Marinara's rainbow palette while enabled. Your saved Accent Color stays unchanged. Reduced-motion preferences are respected."
           />
-
-          {!appAccentIsGradient && (
-            <ToggleSetting
-              label="Accent Pulse"
-              checked={appAccentPulseMode}
-              onChange={setAppAccentPulseMode}
-              help="Gently brightens and darkens solid accent colors. Reduced-motion preferences are respected."
-            />
-          )}
 
           <label className="flex flex-col gap-1">
             <span className="text-xs font-medium inline-flex items-center gap-1">
@@ -3731,7 +3695,7 @@ function ThemesSettings() {
             ))}
 
             {isLoading && syncedThemes.length === 0 && (
-              <p className="py-2 text-center text-[0.625rem] text-[var(--muted-foreground)]">
+              <p className="mari-chrome-text-muted py-2 text-center text-[0.625rem]">
                 Loading synced themes...
               </p>
             )}
