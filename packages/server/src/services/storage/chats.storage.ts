@@ -568,6 +568,33 @@ export function createChatsStorage(db: DB) {
       return rows.length;
     },
 
+    async hasGameDeletePayload(chatId: string): Promise<boolean> {
+      const existingMessage = await db
+        .select({ id: messages.id })
+        .from(messages)
+        .where(eq(messages.chatId, chatId))
+        .limit(1);
+      if (existingMessage.length > 0) return true;
+      const existingSnapshot = await db
+        .select({ id: gameStateSnapshots.id })
+        .from(gameStateSnapshots)
+        .where(eq(gameStateSnapshots.chatId, chatId))
+        .limit(1);
+      if (existingSnapshot.length > 0) return true;
+      const existingCheckpoint = await db
+        .select({ id: gameCheckpoints.id })
+        .from(gameCheckpoints)
+        .where(eq(gameCheckpoints.chatId, chatId))
+        .limit(1);
+      if (existingCheckpoint.length > 0) return true;
+      const existingImage = await db
+        .select({ id: chatImages.id })
+        .from(chatImages)
+        .where(eq(chatImages.chatId, chatId))
+        .limit(1);
+      return existingImage.length > 0;
+    },
+
     async listMessages(chatId: string) {
       const rows = await db
         .select()
