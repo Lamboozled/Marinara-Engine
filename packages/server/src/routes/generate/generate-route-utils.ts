@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import {
   PROVIDERS,
+  SUMMARY_TAIL_MESSAGES,
   applyTrackerFieldLocksToGameStatePatch,
   generationParametersSchema,
   normalizeTextForMatch,
@@ -474,14 +475,17 @@ export function isRoleplaySummaryMode(chatMode: string): boolean {
 /**
  * Resolve the roleplay summary tail (how many recent messages stay visible when
  * the auto-summary hides the rest) from the chat's `summaryTailMessages` value.
- * Default 10 when unset/invalid; an explicit 0 means "hide the whole batch".
- * Clamped to 0-50.
+ * `DEFAULT` only when the value is genuinely unset; an explicit `MIN` (0) means
+ * "hide the whole batch". A present-but-invalid value (NaN, negative) fails
+ * closed to `MIN` so corrupt metadata hides more rather than silently leaking
+ * extra context. Clamped to [MIN, MAX].
  */
 export function resolveRoleplaySummaryTail(value: unknown): number {
-  if (value === undefined || value === null) return 10;
+  const { MIN, MAX, DEFAULT } = SUMMARY_TAIL_MESSAGES;
+  if (value === undefined || value === null) return DEFAULT;
   const n = Math.floor(Number(value));
-  if (!Number.isFinite(n) || n < 0) return 10;
-  return Math.min(50, n);
+  if (!Number.isFinite(n) || n < MIN) return MIN;
+  return Math.min(MAX, n);
 }
 
 /**
@@ -497,7 +501,8 @@ export function computeSummaryHideIds(args: {
 }): string[] {
   const { messages, entryMessageIds, tail } = args;
   if (entryMessageIds.length === 0) return [];
-  const clampedTail = Number.isFinite(tail) ? Math.max(0, Math.min(50, Math.floor(tail))) : 0;
+  const { MIN, MAX } = SUMMARY_TAIL_MESSAGES;
+  const clampedTail = Number.isFinite(tail) ? Math.max(MIN, Math.min(MAX, Math.floor(tail))) : MIN;
   const visible = messages.filter((message) => !isMessageHiddenFromAI(message));
   const tailIdSet = new Set(clampedTail > 0 ? visible.slice(-clampedTail).map((message) => message.id) : []);
   const entryIdSet = new Set(entryMessageIds);

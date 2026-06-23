@@ -48,6 +48,7 @@ import {
 import {
   type APIConnection,
   DEFAULT_CHAT_SUMMARY_PROMPT,
+  SUMMARY_TAIL_MESSAGES,
   estimateChatSummaryTokens,
   normalizeChatSummaryEntries,
   type ChatSummaryEntry,
@@ -878,9 +879,7 @@ export function SummaryPopover({
                 <SummarySettingsToggle
                   label="Hide summarised messages"
                   checked={hideSummarisedResolved}
-                  // Per-chat metadata is the source of truth; do not write the global
-                  // ui.store here, or one chat's choice would leak into the fallback
-                  // other chats use when they have no persisted value of their own.
+                  // Writes per-chat metadata only — never the global ui.store.
                   onChange={(checked) => updateMeta.mutate({ id: chatId, hideSummarisedMessages: checked })}
                 />
                 {hideSummarisedResolved && (
@@ -889,13 +888,15 @@ export function SummaryPopover({
                       <span>Recent message tail</span>
                       <input
                         type="number"
-                        min={0}
-                        max={50}
+                        min={SUMMARY_TAIL_MESSAGES.MIN}
+                        max={SUMMARY_TAIL_MESSAGES.MAX}
                         step={1}
-                        value={summaryTailMessages ?? 10}
+                        value={summaryTailMessages ?? SUMMARY_TAIL_MESSAGES.DEFAULT}
                         onChange={(event) => {
                           const raw = Number(event.target.value);
-                          const clamped = Number.isFinite(raw) ? Math.max(0, Math.min(50, Math.floor(raw))) : 10;
+                          const clamped = Number.isFinite(raw)
+                            ? Math.max(SUMMARY_TAIL_MESSAGES.MIN, Math.min(SUMMARY_TAIL_MESSAGES.MAX, Math.floor(raw)))
+                            : SUMMARY_TAIL_MESSAGES.DEFAULT;
                           updateMeta.mutate({ id: chatId, summaryTailMessages: clamped });
                         }}
                         className="w-16 rounded-md bg-[var(--secondary)] px-2 py-1 text-right text-xs outline-none ring-1 ring-transparent transition-shadow focus:ring-[var(--primary)]/40"

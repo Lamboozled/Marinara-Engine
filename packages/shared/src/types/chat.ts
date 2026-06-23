@@ -170,6 +170,14 @@ export interface ChatMemoryChunk {
   embeddingStatus?: "vectorized" | "pending" | "unavailable";
 }
 
+/**
+ * Bounds for `ChatMetadata.summaryTailMessages` — the single source of truth for
+ * the tail limits, shared by the server resolver (read) and the popover slider
+ * (write) so display and persistence can't drift. `DEFAULT` applies only when the
+ * value is unset; an explicit `MIN` (0) means "hide the whole batch".
+ */
+export const SUMMARY_TAIL_MESSAGES = { MIN: 0, MAX: 50, DEFAULT: 10 } as const;
+
 /** Extra metadata stored on a chat. */
 export interface ChatMetadata {
   /** Compiled enabled rolling summary text for context injection. Derived from summaryEntries when present. */

@@ -61,12 +61,10 @@ import { DATA_DIR } from "../utils/data-dir.js";
 import { normalizeTimestampOverrides } from "../services/import/import-timestamps.js";
 import {
   appendNonLeadingSystemMessagesToLastUser,
-  computeSummaryHideIds,
   findTrackerContextInsertIndex,
   isManualTrackerCharacterId,
   parseExtra,
   resolveRoleplayChatSummary,
-  resolveRoleplaySummaryTail,
   isMessageHiddenFromAI,
   resolveBaseUrl,
   resolveActiveCharacterIds,
@@ -642,11 +640,11 @@ export async function chatsRoutes(app: FastifyInstance) {
     }
 
     // For delete: restore visibility of the messages this entry covered (except
-    // any still covered by another enabled entry) BEFORE removing it, so deleting
-    // an entry can never strand messages hidden with nothing left to summarize
-    // them. `unhidden` is tracked so we can re-hide (compensate) if the metadata
-    // write below fails, keeping the two writes consistent either way.
-    let unhidden: string[] = [];
+    // any still covered by another enabled entry) BEFORE removing the entry.
+    // Unhiding first is what keeps this safe without a transaction: if the
+    // metadata write below fails, the messages are visible and the entry still
+    // exists (a benign, self-consistent state) — never hidden with no entry to
+    // justify them. So no rollback bookkeeping is needed.
     if (body.operation === "delete") {
       const current = await storage.getById(req.params.id);
       if (!current) return reply.status(404).send({ error: "Chat not found" });
@@ -664,74 +662,52 @@ export async function chatsRoutes(app: FastifyInstance) {
         }
         const toUnhide = covered.filter((id) => !stillCovered.has(id));
         if (toUnhide.length > 0) {
-          // Capture the exact rows the store actually unhid (request scoped to
-          // this chat) so compensation re-hides precisely that set, not the
-          // speculative request.
-          unhidden = await storage.bulkSetHiddenFromAI(req.params.id, toUnhide, false);
+          await storage.bulkSetHiddenFromAI(req.params.id, toUnhide, false);
         }
       }
     }
 
-    // Compensation: if the entry removal does not persist, re-hide whatever we
-    // optimistically unhid so the entry and its messages' visibility stay
-    // consistent — a delete never leaves a half-applied state in either direction.
-    const reHide = async () => {
-      if (unhidden.length === 0) return;
-      await storage.bulkSetHiddenFromAI(req.params.id, unhidden, true).catch((err) => {
-        logger.error(err, "[chat-summary] Failed to re-hide messages after a failed summary-entry delete");
+    const updated = await storage.patchMetadata(req.params.id, (freshMeta) => {
+      const entries = normalizeChatSummaryEntries(freshMeta.summaryEntries, {
+        legacySummary: typeof freshMeta.summary === "string" ? freshMeta.summary : null,
       });
-    };
+      let nextEntries: ChatSummaryEntry[];
 
-    let updated: Awaited<ReturnType<typeof storage.patchMetadata>>;
-    try {
-      updated = await storage.patchMetadata(req.params.id, (freshMeta) => {
-        const entries = normalizeChatSummaryEntries(freshMeta.summaryEntries, {
-          legacySummary: typeof freshMeta.summary === "string" ? freshMeta.summary : null,
-        });
-        let nextEntries: ChatSummaryEntry[];
+      if (body.operation === "replace") {
+        const now = new Date().toISOString();
+        const existing = entries.find((entry) => entry.id === body.entry.id);
+        const replacement = createChatSummaryEntry(
+          {
+            ...existing,
+            ...body.entry,
+            id: body.entry.id,
+            content: body.entry.content,
+            updatedAt: now,
+            createdAt: existing?.createdAt ?? body.entry.createdAt ?? now,
+          },
+          { createId: newId, now },
+        );
+        nextEntries = entries.some((entry) => entry.id === replacement.id)
+          ? entries.map((entry) => (entry.id === replacement.id ? replacement : entry))
+          : [...entries, replacement];
+      } else if (body.operation === "delete") {
+        nextEntries = entries.filter((entry) => entry.id !== body.entryId);
+      } else if (body.operation === "toggle") {
+        const now = new Date().toISOString();
+        nextEntries = entries.map((entry) =>
+          entry.id === body.entryId ? { ...entry, enabled: body.enabled, updatedAt: now } : entry,
+        );
+      } else {
+        nextEntries = entries;
+      }
 
-        if (body.operation === "replace") {
-          const now = new Date().toISOString();
-          const existing = entries.find((entry) => entry.id === body.entry.id);
-          const replacement = createChatSummaryEntry(
-            {
-              ...existing,
-              ...body.entry,
-              id: body.entry.id,
-              content: body.entry.content,
-              updatedAt: now,
-              createdAt: existing?.createdAt ?? body.entry.createdAt ?? now,
-            },
-            { createId: newId, now },
-          );
-          nextEntries = entries.some((entry) => entry.id === replacement.id)
-            ? entries.map((entry) => (entry.id === replacement.id ? replacement : entry))
-            : [...entries, replacement];
-        } else if (body.operation === "delete") {
-          nextEntries = entries.filter((entry) => entry.id !== body.entryId);
-        } else if (body.operation === "toggle") {
-          const now = new Date().toISOString();
-          nextEntries = entries.map((entry) =>
-            entry.id === body.entryId ? { ...entry, enabled: body.enabled, updatedAt: now } : entry,
-          );
-        } else {
-          nextEntries = entries;
-        }
+      return {
+        summaryEntries: nextEntries,
+        summary: compileChatSummaryEntries(nextEntries),
+      };
+    });
 
-        return {
-          summaryEntries: nextEntries,
-          summary: compileChatSummaryEntries(nextEntries),
-        };
-      });
-    } catch (err) {
-      await reHide();
-      throw err;
-    }
-
-    if (!updated) {
-      await reHide();
-      return reply.status(404).send({ error: "Chat not found" });
-    }
+    if (!updated) return reply.status(404).send({ error: "Chat not found" });
     return updated;
   });
 
@@ -795,25 +771,11 @@ export async function chatsRoutes(app: FastifyInstance) {
         };
       });
       if (!updated) return reply.status(404).send({ error: "Chat not found" });
-      // Mirror the auto-summary token compression on the approval-gated path:
-      // once the user approves the entry, hide the messages it covered (except
-      // the protected recent tail) when the chat has opted in. Best-effort.
-      const committedMeta = parseExtra(updated.metadata) as Record<string, unknown>;
-      if (committedMeta.hideSummarisedMessages === true && messageIds.length > 0) {
-        try {
-          const allMessages = await storage.listMessages(req.params.id);
-          const toHide = computeSummaryHideIds({
-            messages: allMessages,
-            entryMessageIds: messageIds,
-            tail: resolveRoleplaySummaryTail(committedMeta.summaryTailMessages),
-          });
-          if (toHide.length > 0) {
-            await storage.bulkSetHiddenFromAI(req.params.id, toHide, true);
-          }
-        } catch (err) {
-          logger.error(err, "[chat-summary] Failed to auto-hide summarized messages on approval commit");
-        }
-      }
+      // Auto-hide is intentionally NOT applied on the approval-gated commit path:
+      // the proposal's messageIds/ordering are captured at proposal time but the
+      // entry commits later, so hiding here could target a drifted snapshot.
+      // Approval-gated chats hide via the manual popover toggle; only the inline
+      // auto-summary path (no approval delay) auto-hides.
       return { ok: true, summary: combined, entry: createdEntry, entries: summaryEntries };
     }
 
@@ -1417,8 +1379,8 @@ export async function chatsRoutes(app: FastifyInstance) {
       if (typeof hidden !== "boolean") {
         return reply.status(400).send({ error: "hidden must be a boolean" });
       }
-      const updatedIds = await storage.bulkSetHiddenFromAI(req.params.chatId, messageIds, hidden);
-      return { updated: updatedIds.length };
+      const updated = await storage.bulkSetHiddenFromAI(req.params.chatId, messageIds, hidden);
+      return { updated };
     },
   );
 
