@@ -2854,13 +2854,21 @@ export async function chatsRoutes(app: FastifyInstance) {
     // `summaryTailMessages` like the automatic path. Persisted on the entry (when
     // hiding is enabled) so deletion restores exactly what was hidden.
     const hideEnabled = chatMeta.hideSummarisedMessages === true;
-    const hideMessageIds = hideEnabled
+    const eligibleToHide = hideEnabled
       ? computeSummaryHideIds({
           messages: allMessages,
           entryMessageIds: messageIds,
           tail: resolveRoleplaySummaryTail(chatMeta.summaryTailMessages),
         })
       : [];
+    // Only the messages this attempt actually flips from visible to hidden. (The
+    // summary's source already excludes hidden messages, so this is normally the
+    // whole set, but snapshot the prior state explicitly so a rollback can never
+    // resurrect a message that was already hidden by something else.)
+    const hiddenAtLoad = new Set(
+      allMessages.filter((message) => isMessageHiddenFromAI(message)).map((message) => message.id),
+    );
+    const hideMessageIds = eligibleToHide.filter((id) => !hiddenAtLoad.has(id));
     // Perform the hide on the server, BEFORE the entry records hiddenMessageIds,
     // so the recorded set always reflects messages actually hidden (no phantom
     // set if a separate client call were to fail). The client no longer hides.
@@ -2868,13 +2876,12 @@ export async function chatsRoutes(app: FastifyInstance) {
       await storage.bulkSetHiddenFromAI(req.params.id, hideMessageIds, true);
     }
     // If the entry that owns hiddenMessageIds is not persisted (chat vanished, or
-    // the write throws), roll the hide back so we never leave messages hidden with
-    // no entry to delete and no recorded subset to restore.
+    // the write throws), roll back only the hides this attempt newly applied so we
+    // never leave messages hidden with no entry. A rollback failure is surfaced
+    // (re-thrown), not swallowed, so the caller learns recovery did not complete.
     const rollbackHide = async () => {
       if (hideMessageIds.length === 0) return;
-      await storage.bulkSetHiddenFromAI(req.params.id, hideMessageIds, false).catch((err) => {
-        logger.error(err, "[chat-summary] Failed to roll back hide after summary entry was not persisted");
-      });
+      await storage.bulkSetHiddenFromAI(req.params.id, hideMessageIds, false);
     };
 
     // Append as a structured entry and recompile the prompt-facing summary
