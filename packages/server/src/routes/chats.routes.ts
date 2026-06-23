@@ -61,10 +61,12 @@ import { DATA_DIR } from "../utils/data-dir.js";
 import { normalizeTimestampOverrides } from "../services/import/import-timestamps.js";
 import {
   appendNonLeadingSystemMessagesToLastUser,
+  computeSummaryHideIds,
   findTrackerContextInsertIndex,
   isManualTrackerCharacterId,
   parseExtra,
   resolveRoleplayChatSummary,
+  resolveRoleplaySummaryTail,
   isMessageHiddenFromAI,
   resolveBaseUrl,
   resolveActiveCharacterIds,
@@ -454,6 +456,8 @@ export async function chatsRoutes(app: FastifyInstance) {
       const updated = await storage.patchMetadata(existing.id, {
         internalAssistant: PROFESSOR_MARI_INTERNAL_CHAT_MARKER,
         enableAgents: false,
+        autonomousMessages: false,
+        characterExchanges: false,
         tags: ["internal"],
       });
       return sanitizeChatGameNpcAvatars(updated ?? existing);
@@ -472,6 +476,8 @@ export async function chatsRoutes(app: FastifyInstance) {
     const updated = await storage.patchMetadata(created.id, {
       internalAssistant: PROFESSOR_MARI_INTERNAL_CHAT_MARKER,
       enableAgents: false,
+      autonomousMessages: false,
+      characterExchanges: false,
       tags: ["internal"],
     });
     return sanitizeChatGameNpcAvatars(updated ?? created);
@@ -639,6 +645,36 @@ export async function chatsRoutes(app: FastifyInstance) {
       return reply.status(400).send({ error: "Unsupported summary entry operation" });
     }
 
+    // For delete: restore visibility of the messages this entry covered (except
+    // any still covered by another enabled entry) BEFORE removing the entry.
+    // Unhiding first is what keeps this safe without a transaction: if the
+    // metadata write below fails, the messages are visible and the entry still
+    // exists (a benign, self-consistent state) — never hidden with no entry to
+    // justify them. So no rollback bookkeeping is needed.
+    if (body.operation === "delete") {
+      const current = await storage.getById(req.params.id);
+      if (!current) return reply.status(404).send({ error: "Chat not found" });
+      const currentMeta = parseExtra(current.metadata) as Record<string, unknown>;
+      const currentEntries = normalizeChatSummaryEntries(currentMeta.summaryEntries, {
+        legacySummary: typeof currentMeta.summary === "string" ? currentMeta.summary : null,
+      });
+      const target = currentEntries.find((entry) => entry.id === body.entryId);
+      if (target) {
+        // Restore exactly what this entry hid. `hiddenMessageIds` records the
+        // precise hidden subset; older entries without it fall back to messageIds.
+        const covered = target.hiddenMessageIds ?? target.messageIds ?? [];
+        const stillCovered = new Set<string>();
+        for (const entry of currentEntries) {
+          if (entry.id === body.entryId || !entry.enabled) continue;
+          for (const id of entry.hiddenMessageIds ?? entry.messageIds ?? []) stillCovered.add(id);
+        }
+        const toUnhide = covered.filter((id) => !stillCovered.has(id));
+        if (toUnhide.length > 0) {
+          await storage.bulkSetHiddenFromAI(req.params.id, toUnhide, false);
+        }
+      }
+    }
+
     const updated = await storage.patchMetadata(req.params.id, (freshMeta) => {
       const entries = normalizeChatSummaryEntries(freshMeta.summaryEntries, {
         legacySummary: typeof freshMeta.summary === "string" ? freshMeta.summary : null,
@@ -743,6 +779,11 @@ export async function chatsRoutes(app: FastifyInstance) {
         };
       });
       if (!updated) return reply.status(404).send({ error: "Chat not found" });
+      // Auto-hide is intentionally NOT applied on the approval-gated commit path:
+      // the proposal's messageIds/ordering are captured at proposal time but the
+      // entry commits later, so hiding here could target a drifted snapshot.
+      // Approval-gated chats hide via the manual popover toggle; only the inline
+      // auto-summary path (no approval delay) auto-hides.
       return { ok: true, summary: combined, entry: createdEntry, entries: summaryEntries };
     }
 
@@ -1346,8 +1387,8 @@ export async function chatsRoutes(app: FastifyInstance) {
       if (typeof hidden !== "boolean") {
         return reply.status(400).send({ error: "hidden must be a boolean" });
       }
-      const count = await storage.bulkSetHiddenFromAI(req.params.chatId, messageIds, hidden);
-      return { updated: count };
+      const updated = (await storage.bulkSetHiddenFromAI(req.params.chatId, messageIds, hidden)).length;
+      return { updated };
     },
   );
 
@@ -1379,7 +1420,8 @@ export async function chatsRoutes(app: FastifyInstance) {
       const chat = await storage.getById(req.params.id);
       const chatCharIds: string[] = (() => {
         try {
-          return JSON.parse((chat?.characterIds as string) ?? "[]");
+          const parsed = JSON.parse((chat?.characterIds as string) ?? "[]");
+          return Array.isArray(parsed) ? parsed.filter((id) => id !== PROFESSOR_MARI_ID) : [];
         } catch {
           return [];
         }
@@ -2671,7 +2713,7 @@ export async function chatsRoutes(app: FastifyInstance) {
     const body = (req.body ?? {}) as Record<string, unknown>;
     const contextSize = Math.max(
       5,
-      Math.min(200, Number(body.contextSize) || (chatMeta.summaryContextSize as number) || 50),
+      Math.min(500, Number(body.contextSize) || (chatMeta.summaryContextSize as number) || 50),
     );
     const requestedRangeStartMessageId = typeof body.rangeStartMessageId === "string" ? body.rangeStartMessageId : null;
     const requestedRangeEndMessageId = typeof body.rangeEndMessageId === "string" ? body.rangeEndMessageId : null;
@@ -2736,8 +2778,8 @@ export async function chatsRoutes(app: FastifyInstance) {
           const from = Math.min(startIndex, endIndex);
           const to = Math.max(startIndex, endIndex);
           const count = to - from + 1;
-          if (count > 200) {
-            return { error: "Summary ranges cannot include more than 200 messages" as const };
+          if (count > 500) {
+            return { error: "Summary ranges cannot include more than 500 messages" as const };
           }
           selectedRangeStartIndex = from + 1;
           selectedRangeEndIndex = to + 1;
@@ -2811,47 +2853,89 @@ export async function chatsRoutes(app: FastifyInstance) {
       summaryText = result.content.trim();
     }
 
+    const messageIds = selectedMessages.map((message) => message.id);
+    // Subset eligible to be hidden when "Hide summarised messages" is on: the
+    // summarized set minus the protected tail, so manual hiding honors
+    // `summaryTailMessages` like the automatic path. Persisted on the entry (when
+    // hiding is enabled) so deletion restores exactly what was hidden.
+    const hideEnabled = chatMeta.hideSummarisedMessages === true;
+    const eligibleToHide = hideEnabled
+      ? computeSummaryHideIds({
+          messages: allMessages,
+          entryMessageIds: messageIds,
+          tail: resolveRoleplaySummaryTail(chatMeta.summaryTailMessages),
+        })
+      : [];
+    // Perform the hide on the server, BEFORE the entry records hiddenMessageIds, so
+    // the recorded set always reflects messages actually hidden (no phantom set if a
+    // separate client call were to fail). The client no longer hides. bulkSetHidden
+    // returns exactly the ids it flipped visible->hidden, read at the moment of
+    // mutation — so ownership can never be a stale pre-provider snapshot that claims
+    // a message another action hid during the (seconds-long) provider call above.
+    const hideMessageIds =
+      eligibleToHide.length > 0 ? await storage.bulkSetHiddenFromAI(req.params.id, eligibleToHide, true) : [];
+    // If the entry that owns hiddenMessageIds is not persisted (chat vanished, or
+    // the write throws), roll back exactly the hides this attempt applied (the set
+    // bulkSetHidden reported flipping) so we never leave messages hidden with no
+    // entry. A rollback failure is surfaced (re-thrown), not swallowed, so the
+    // caller learns recovery did not complete.
+    const rollbackHide = async () => {
+      if (hideMessageIds.length === 0) return;
+      await storage.bulkSetHiddenFromAI(req.params.id, hideMessageIds, false);
+    };
+
     // Append as a structured entry and recompile the prompt-facing summary
     // without replacing concurrent metadata changes.
     let combined: string | null = summaryText;
     let createdEntry: ChatSummaryEntry | null = null;
     let summaryEntries: ChatSummaryEntry[] = [];
-    const updatedChat = await storage.patchMetadata(req.params.id, (freshMeta) => {
-      const now = new Date().toISOString();
-      const result = appendChatSummaryEntryToMetadata(
-        freshMeta,
-        {
-          kind: "rolling",
-          origin: "manual",
-          sourceMode: hasRange ? "range" : "last",
-          content: summaryText,
-          enabled: true,
-          messageCount: selectedMessages.length,
-          rangeStartIndex: selectedRangeStartIndex,
-          rangeEndIndex: selectedRangeEndIndex,
-          messageIds: selectedMessages.map((message) => message.id),
-          promptTemplateId: requestedPromptTemplateId,
-          createdAt: now,
-          updatedAt: now,
-        },
-        { createId: newId, now },
-      );
-      combined = result.summary;
-      createdEntry = result.entry;
-      summaryEntries = result.entries;
-      return {
-        summary: result.summary,
-        summaryEntries: result.entries,
-        ...(!hasRange && typeof body.contextSize !== "undefined" ? { summaryContextSize: contextSize } : {}),
-      };
-    });
-    if (!updatedChat) return reply.status(404).send({ error: "Chat not found" });
+    let updatedChat: Awaited<ReturnType<typeof storage.patchMetadata>>;
+    try {
+      updatedChat = await storage.patchMetadata(req.params.id, (freshMeta) => {
+        const now = new Date().toISOString();
+        const result = appendChatSummaryEntryToMetadata(
+          freshMeta,
+          {
+            kind: "rolling",
+            origin: "manual",
+            sourceMode: hasRange ? "range" : "last",
+            content: summaryText,
+            enabled: true,
+            messageCount: selectedMessages.length,
+            rangeStartIndex: selectedRangeStartIndex,
+            rangeEndIndex: selectedRangeEndIndex,
+            messageIds,
+            ...(hideMessageIds.length > 0 ? { hiddenMessageIds: hideMessageIds } : {}),
+            promptTemplateId: requestedPromptTemplateId,
+            createdAt: now,
+            updatedAt: now,
+          },
+          { createId: newId, now },
+        );
+        combined = result.summary;
+        createdEntry = result.entry;
+        summaryEntries = result.entries;
+        return {
+          summary: result.summary,
+          summaryEntries: result.entries,
+          ...(!hasRange && typeof body.contextSize !== "undefined" ? { summaryContextSize: contextSize } : {}),
+        };
+      });
+    } catch (err) {
+      await rollbackHide();
+      throw err;
+    }
+    if (!updatedChat) {
+      await rollbackHide();
+      return reply.status(404).send({ error: "Chat not found" });
+    }
 
     return {
       summary: combined,
       entry: createdEntry,
       entries: summaryEntries,
-      messageIds: selectedMessages.map((message) => message.id),
+      messageIds,
+      hideMessageIds,
     };
   });
 }

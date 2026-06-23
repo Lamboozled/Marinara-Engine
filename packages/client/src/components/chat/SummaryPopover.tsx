@@ -14,7 +14,6 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import {
-  useBulkSetMessagesHiddenFromAI,
   useDeleteSummaryEntry,
   useGenerateSummary,
   useToggleSummaryEntry,
@@ -40,6 +39,8 @@ import { cn, generateClientId } from "../../lib/utils";
 import { useUIStore } from "../../stores/ui.store";
 import { useConnections } from "../../hooks/use-connections";
 import {
+  ROLEPLAY_POPOVER_CLOSE_BUTTON,
+  ROLEPLAY_POPOVER_CLOSE_ICON_SIZE,
   ROLEPLAY_POPOVER_SCROLL_AREA,
   ROLEPLAY_POPOVER_SHELL,
   ROLEPLAY_POPOVER_SUBTITLE,
@@ -48,6 +49,7 @@ import {
 import {
   type APIConnection,
   DEFAULT_CHAT_SUMMARY_PROMPT,
+  SUMMARY_TAIL_MESSAGES,
   estimateChatSummaryTokens,
   normalizeChatSummaryEntries,
   type ChatSummaryEntry,
@@ -66,6 +68,10 @@ interface SummaryPopoverProps {
   automaticSummaryEnabled?: boolean;
   activeAgentIds?: string[];
   summaryRunInterval?: number;
+  /** Per-chat persisted "Hide summarised messages" preference (metadata-backed). Undefined/false means off (opt-in default). */
+  hideSummarisedMessages?: boolean;
+  /** How many recent messages stay visible when summarised messages are auto-hidden (roleplay tail). Default 10. */
+  summaryTailMessages?: number;
   automaticSummariesAvailable?: boolean;
   totalMessageCount: number;
   summaryInjectionHint?: string | null;
@@ -88,7 +94,7 @@ type SummaryConnectionOption = Pick<APIConnection, "id" | "name" | "provider" | 
 };
 
 const MIN_SUMMARY_MESSAGES = 5;
-const MAX_SUMMARY_MESSAGES = 200;
+const MAX_SUMMARY_MESSAGES = 500;
 const SUMMARY_AGENT_ID = "chat-summary";
 const DEFAULT_AUTOMATIC_SUMMARY_INTERVAL = 5;
 const MIN_AUTOMATIC_SUMMARY_INTERVAL = 1;
@@ -256,6 +262,8 @@ export function SummaryPopover({
   automaticSummaryEnabled = false,
   activeAgentIds = [],
   summaryRunInterval,
+  hideSummarisedMessages,
+  summaryTailMessages,
   automaticSummariesAvailable = true,
   totalMessageCount,
   summaryInjectionHint = null,
@@ -288,7 +296,6 @@ export function SummaryPopover({
   const rangeInputFocused = useRef(false);
   const automaticIntervalFocused = useRef(false);
   const generateSummary = useGenerateSummary();
-  const bulkSetMessagesHiddenFromAI = useBulkSetMessagesHiddenFromAI();
   const updateMeta = useUpdateChatMetadata();
   const { data: connectionsData } = useConnections();
   const updateSummaryEntry = useUpdateSummaryEntry();
@@ -296,6 +303,10 @@ export function SummaryPopover({
   const toggleSummaryEntry = useToggleSummaryEntry();
   const entryTextareaRef = useRef<HTMLTextAreaElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+
+  // Per-chat preference, default off — no global fallback, so one chat never
+  // inherits another's setting.
+  const hideSummarisedResolved = hideSummarisedMessages === true;
 
   const persistSummaryContextSize = useCallback(
     (size: number) => {
@@ -497,10 +508,9 @@ export function SummaryPopover({
 
   const handleGenerate = useCallback(() => {
     if (!canGenerate) return;
-    const maybeHideSummarisedMessages = (messageIds: string[] | undefined) => {
-      if (!summaryPopoverSettings.hideSummarisedMessages || !messageIds?.length) return;
-      bulkSetMessagesHiddenFromAI.mutate({ chatId, messageIds, hidden: true });
-    };
+    // The server hides the tail-excluded subset itself (when the chat opts in)
+    // and the generate-summary mutation refreshes the message list, so there is
+    // no separate client-side hide to keep in sync.
     if (sourceMode === "range") {
       setRangeStart(String(rangeLow));
       setRangeEnd(String(rangeHigh));
@@ -513,7 +523,6 @@ export function SummaryPopover({
             }
             setEditingEntryId(null);
             setDraftEntry(null);
-            maybeHideSummarisedMessages(data.messageIds);
           },
           onError: (error) => toast.error(summaryErrorMessage(error)),
         },
@@ -531,13 +540,11 @@ export function SummaryPopover({
           }
           setEditingEntryId(null);
           setDraftEntry(null);
-          maybeHideSummarisedMessages(data.messageIds);
         },
         onError: (error) => toast.error(summaryErrorMessage(error)),
       },
     );
   }, [
-    bulkSetMessagesHiddenFromAI,
     canGenerate,
     chatId,
     generateSummary,
@@ -547,7 +554,6 @@ export function SummaryPopover({
     persistSummaryContextSize,
     sourceMode,
     activePromptTemplateId,
-    summaryPopoverSettings.hideSummarisedMessages,
   ]);
 
   const handleToggleExpanded = useCallback((entryId: string) => {
@@ -650,17 +656,22 @@ export function SummaryPopover({
         tone: "destructive",
       });
       if (!confirmed) return;
+      // The server unhides the messages this entry covered (minus any still
+      // covered by another enabled entry) as part of the delete, so deletion and
+      // visibility restoration succeed or fail together — no orphaned hidden
+      // messages on the client side.
       try {
         await deleteSummaryEntry.mutateAsync({ chatId, entryId: entry.id });
-        if (editingEntryId === entry.id) handleCancelEditEntry();
-        setExpandedEntryIds((current) => {
-          const next = new Set(current);
-          next.delete(entry.id);
-          return next;
-        });
       } catch {
         toast.error("Could not delete summary entry.");
+        return;
       }
+      if (editingEntryId === entry.id) handleCancelEditEntry();
+      setExpandedEntryIds((current) => {
+        const next = new Set(current);
+        next.delete(entry.id);
+        return next;
+      });
     },
     [chatId, deleteSummaryEntry, editingEntryId, handleCancelEditEntry],
   );
@@ -825,10 +836,10 @@ export function SummaryPopover({
             <button
               type="button"
               onClick={onClose}
-              className="rounded-md p-1 text-[var(--muted-foreground)] hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
+              className={ROLEPLAY_POPOVER_CLOSE_BUTTON}
               aria-label="Close summary"
             >
-              <X size="0.75rem" />
+              <X size={ROLEPLAY_POPOVER_CLOSE_ICON_SIZE} />
             </button>
           </div>
         </div>
@@ -861,9 +872,36 @@ export function SummaryPopover({
                 <p className="px-1 text-[0.6875rem] font-semibold text-[var(--popover-foreground)]">Display</p>
                 <SummarySettingsToggle
                   label="Hide summarised messages"
-                  checked={summaryPopoverSettings.hideSummarisedMessages}
-                  onChange={(checked) => setSummaryPopoverSettings({ hideSummarisedMessages: checked })}
+                  checked={hideSummarisedResolved}
+                  // Writes per-chat metadata only — never the global ui.store.
+                  onChange={(checked) => updateMeta.mutate({ id: chatId, hideSummarisedMessages: checked })}
                 />
+                {hideSummarisedResolved && (
+                  <div className="space-y-1 px-1 pb-0.5">
+                    <label className="flex items-center justify-between gap-2 text-[0.6875rem] font-medium text-[var(--popover-foreground)]">
+                      <span>Recent message tail</span>
+                      <input
+                        type="number"
+                        min={SUMMARY_TAIL_MESSAGES.MIN}
+                        max={SUMMARY_TAIL_MESSAGES.MAX}
+                        step={1}
+                        value={summaryTailMessages ?? SUMMARY_TAIL_MESSAGES.DEFAULT}
+                        onChange={(event) => {
+                          const raw = Number(event.target.value);
+                          const clamped = Number.isFinite(raw)
+                            ? Math.max(SUMMARY_TAIL_MESSAGES.MIN, Math.min(SUMMARY_TAIL_MESSAGES.MAX, Math.floor(raw)))
+                            : SUMMARY_TAIL_MESSAGES.DEFAULT;
+                          updateMeta.mutate({ id: chatId, summaryTailMessages: clamped });
+                        }}
+                        className="w-16 rounded-md bg-[var(--secondary)] px-2 py-1 text-right text-xs outline-none ring-1 ring-transparent transition-shadow focus:ring-[var(--primary)]/40"
+                      />
+                    </label>
+                    <p className="text-[0.625rem] text-[var(--muted-foreground)]">
+                      Most recent messages kept word-for-word when auto-hiding summarised ones. Set to{" "}
+                      <span className="font-medium">0</span> to hide the whole batch.
+                    </p>
+                  </div>
+                )}
                 <SummarySettingsToggle
                   label="Collapse hidden messages"
                   checked={summaryPopoverSettings.collapseHiddenMessages}

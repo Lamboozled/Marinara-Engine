@@ -1,6 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
 import {
+  GENERATION_PARAMETER_SEND_KEYS,
   PROVIDERS,
+  SUMMARY_TAIL_MESSAGES,
   applyTrackerFieldLocksToGameStatePatch,
   generationParametersSchema,
   normalizeTextForMatch,
@@ -8,6 +10,7 @@ import {
   parseTrackerFieldLocks,
   type CharacterStat,
   type GameState,
+  type GenerationParameterSendMap,
   type GenerationParameters,
   type InventoryItem,
   type PlayerStats,
@@ -469,6 +472,45 @@ export function isMessageHiddenFromAI(message: { extra?: unknown }): boolean {
 
 export function isRoleplaySummaryMode(chatMode: string): boolean {
   return chatMode === "roleplay" || chatMode === "visual_novel";
+}
+
+/**
+ * Resolve the roleplay summary tail (how many recent messages stay visible when
+ * the auto-summary hides the rest) from the chat's `summaryTailMessages` value.
+ * `DEFAULT` only when the value is genuinely unset; an explicit `MIN` (0) means
+ * "hide the whole batch". A present-but-invalid value (NaN, negative) fails
+ * closed to `MIN` so corrupt metadata hides more rather than silently leaking
+ * extra context. Clamped to [MIN, MAX].
+ */
+export function resolveRoleplaySummaryTail(value: unknown): number {
+  const { MIN, MAX, DEFAULT } = SUMMARY_TAIL_MESSAGES;
+  if (value === undefined || value === null) return DEFAULT;
+  const n = Math.floor(Number(value));
+  if (!Number.isFinite(n) || n < MIN) return MIN;
+  return Math.min(MAX, n);
+}
+
+/**
+ * Compute which summarized message IDs the roleplay rolling summary should hide,
+ * protecting the most-recent `tail` *visible* messages so recent context stays
+ * in the prompt. Pure: `messages` must be chat-ordered (ascending). Returns the
+ * subset of `entryMessageIds` that is not in the protected tail.
+ */
+export function computeSummaryHideIds(args: {
+  messages: Array<{ id: string; extra?: unknown }>;
+  entryMessageIds: string[];
+  tail: number;
+}): string[] {
+  const { messages, entryMessageIds, tail } = args;
+  if (entryMessageIds.length === 0) return [];
+  const { MIN, MAX } = SUMMARY_TAIL_MESSAGES;
+  const clampedTail = Number.isFinite(tail) ? Math.max(MIN, Math.min(MAX, Math.floor(tail))) : MIN;
+  const visible = messages.filter((message) => !isMessageHiddenFromAI(message));
+  const tailIdSet = new Set(clampedTail > 0 ? visible.slice(-clampedTail).map((message) => message.id) : []);
+  const entryIdSet = new Set(entryMessageIds);
+  return messages
+    .filter((message) => entryIdSet.has(message.id) && !tailIdSet.has(message.id))
+    .map((message) => message.id);
 }
 
 export function resolveRoleplayChatSummary(chatMode: string, chatMetadata: Record<string, unknown>): string | null {
@@ -982,6 +1024,13 @@ export function parseStoredGenerationParameters(raw: unknown): StoredGenerationP
   }
   if (isPlainRecord(source.customParameters)) {
     out.customParameters = mergeCustomParameters({}, source.customParameters);
+  }
+  if (isPlainRecord(source.enabledParameters)) {
+    const enabledParameters: GenerationParameterSendMap = {};
+    for (const key of GENERATION_PARAMETER_SEND_KEYS) {
+      if (typeof source.enabledParameters[key] === "boolean") enabledParameters[key] = source.enabledParameters[key];
+    }
+    if (Object.keys(enabledParameters).length > 0) out.enabledParameters = enabledParameters;
   }
   for (const key of [
     "squashSystemMessages",

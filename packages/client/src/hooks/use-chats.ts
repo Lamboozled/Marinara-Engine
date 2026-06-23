@@ -732,6 +732,11 @@ function useSummaryEntryMutation() {
       }
       qc.invalidateQueries({ queryKey: chatKeys.list() });
       qc.invalidateQueries({ queryKey: lorebookKeys.active(vars.chatId) });
+      // Only delete changes message visibility (it unhides server-side), so scope
+      // the message-list refetch to that operation rather than every summary edit.
+      if (vars.operation === "delete") {
+        qc.invalidateQueries({ queryKey: chatKeys.messages(vars.chatId) });
+      }
     },
   });
 }
@@ -1105,6 +1110,8 @@ export function useGenerateSummary() {
         entry: ChatSummaryEntry | null;
         entries: ChatSummaryEntry[];
         messageIds: string[];
+        /** Subset of messageIds eligible to hide (summarized set minus the protected tail). */
+        hideMessageIds: string[];
       }>(`/chats/${chatId}/generate-summary`, {
         contextSize,
         rangeStartMessageId,
@@ -1126,6 +1133,11 @@ export function useGenerateSummary() {
         });
       }
       qc.invalidateQueries({ queryKey: chatKeys.detail(vars.chatId) });
+      // The server may have hidden the tail-excluded subset; refresh the message
+      // list so the hidden state shows without a manual reload.
+      if (data.hideMessageIds.length > 0) {
+        qc.invalidateQueries({ queryKey: chatKeys.messages(vars.chatId) });
+      }
     },
   });
 }

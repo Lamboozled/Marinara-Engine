@@ -149,6 +149,13 @@ export interface ChatSummaryEntry {
   rangeStartIndex?: number;
   rangeEndIndex?: number;
   messageIds?: string[];
+  /**
+   * The exact messages this entry hid from AI when "Hide summarised messages" was
+   * on (the summarized set minus the protected tail). Persisted so deletion can
+   * restore precisely what was hidden, rather than assuming it equals messageIds.
+   * Absent on entries created before this field or when nothing was hidden.
+   */
+  hiddenMessageIds?: string[];
   promptTemplateId?: string | null;
   tokenEstimate: number;
   createdAt: string;
@@ -170,6 +177,14 @@ export interface ChatMemoryChunk {
   embeddingStatus?: "vectorized" | "pending" | "unavailable";
 }
 
+/**
+ * Bounds for `ChatMetadata.summaryTailMessages` — the single source of truth for
+ * the tail limits, shared by the server resolver (read) and the popover slider
+ * (write) so display and persistence can't drift. `DEFAULT` applies only when the
+ * value is unset; an explicit `MIN` (0) means "hide the whole batch".
+ */
+export const SUMMARY_TAIL_MESSAGES = { MIN: 0, MAX: 50, DEFAULT: 10 } as const;
+
 /** Extra metadata stored on a chat. */
 export interface ChatMetadata {
   /** Compiled enabled rolling summary text for context injection. Derived from summaryEntries when present. */
@@ -190,6 +205,15 @@ export interface ChatMetadata {
   activeSummaryPromptTemplateId?: string | null;
   /** Optional text connection used for manual and automatic Roleplay chat summaries. Null uses the agent default. */
   summaryConnectionId?: string | null;
+  /**
+   * When true, the automatic roleplay/visual-novel rolling summary hides the
+   * messages it summarized (hiddenFromAI=true) except the most-recent
+   * `summaryTailMessages`, so the summary is a net token reduction. Opt-in:
+   * undefined/false never hides (back-compat for existing chats). Read by the
+   * SERVER auto-summary path; promoted from the browser-local ui.store
+   * `summaryPopoverSettings.hideSummarisedMessages` preference.
+   */
+  hideSummarisedMessages?: boolean;
   /** Custom tags for organisation */
   tags: string[];
   /** Whether agents are enabled for this chat */
@@ -468,9 +492,12 @@ export interface ChatMetadata {
    */
   dayRolloverHour?: number;
   /**
-   * How many of the most recent messages to keep verbatim in the prompt even
-   * after they've been summarized. Bridges the day boundary so characters can
-   * pick up the actual flow of recent conversation, not just the gist. 0 disables.
+   * How many of the most recent messages to keep verbatim even after they've
+   * been summarized. In conversation mode this bridges the day boundary so
+   * characters pick up the actual flow of recent conversation, not just the
+   * gist. In roleplay/visual-novel mode it is the protected tail for
+   * `hideSummarisedMessages`: the last N messages stay visible (never hidden)
+   * when the auto-summary hides the rest. 0 disables (hide the whole batch).
    * Valid range: 0-50. Default: 10.
    */
   summaryTailMessages?: number;
@@ -547,6 +574,12 @@ export interface MessageExtra {
   proseGuardianOriginalText?: string | null;
   /** Timestamp for the last post-processing rewrite applied to this message. */
   proseGuardianRewrittenAt?: string | null;
+  /**
+   * Conversation-mode assistant content before hidden character commands were
+   * stripped from visible display. Used for future prompt history so commands
+   * like [selfie] remain part of the model-visible transcript.
+   */
+  conversationCommandContent?: string | null;
   /** Professor Mari workspace trace shown on the home assistant transcript. */
   mariWorkspaceTimeline?: MariWorkspaceTraceItem[] | null;
   /** Per-swipe sprite expressions from the Expression Engine agent */
@@ -621,6 +654,8 @@ export interface GenerateRequest {
   userMessage: string | null;
   /** If set, regenerate the message at this ID */
   regenerateMessageId: string | null;
+  /** If set, append the generated continuation to this assistant message */
+  continueMessageId?: string | null;
   /** Override connection for this generation */
   connectionId: string | null;
   /** One-shot attachments sent with the user message. */
