@@ -47,11 +47,15 @@ import { cn, getAvatarCropStyle, type AvatarCropValue } from "../../lib/utils";
 import { useState, useCallback, useMemo, useRef, useEffect } from "react";
 import { toast } from "sonner";
 import {
+  getActiveStatusOverride,
+  getEffectiveCurrentStatus,
   includesTextForMatch,
   normalizeTextForMatch,
   type Chat,
   type ChatFolder,
   type ChatMode,
+  type ConversationStatusOverride,
+  type WeekSchedule,
 } from "@marinara-engine/shared";
 import { Modal } from "../ui/Modal";
 import { Reorder, useDragControls } from "framer-motion";
@@ -849,18 +853,35 @@ export function ChatSidebar() {
         <div className="relative flex-shrink-0">
           {(() => {
             const charIds = normalizeChatCharacterIds((chat as { characterIds?: unknown }).characterIds);
-            const chatCharStatuses =
-              chat.mode === "conversation"
-                ? (parseChatMetadata(chat.metadata).conversationCharacterStatuses as
-                    | Record<string, { status?: string }>
-                    | undefined)
-                : undefined;
+            const convoMeta = chat.mode === "conversation" ? parseChatMetadata(chat.metadata) : undefined;
+            const chatCharStatuses = convoMeta?.conversationCharacterStatuses as
+              | Record<string, { status?: string }>
+              | undefined;
+            const statusOverrides = convoMeta?.conversationStatusOverrides as
+              | Record<string, ConversationStatusOverride>
+              | undefined;
+            const characterSchedules =
+              convoMeta?.conversationSchedulesEnabled === false
+                ? undefined
+                : (convoMeta?.characterSchedules as Record<string, WeekSchedule> | undefined);
+            const statusNow = new Date();
+            // Prefer the live override/schedule-derived status (matching the presence pill)
+            // over the generation-time snapshot, which only refreshes on the next generated
+            // message. Fall back to the snapshot when there is no active override or schedule.
+            const resolveConvoStatus = (id: string): string | undefined => {
+              const schedule = characterSchedules?.[id];
+              const override = statusOverrides?.[id];
+              if (getActiveStatusOverride(override, statusNow) || schedule) {
+                return getEffectiveCurrentStatus(schedule, override, statusNow).status;
+              }
+              return chatCharStatuses?.[id]?.status;
+            };
             const avatars = charIds
               .slice(0, 3)
               .map((id) => {
                 const base = charLookup.get(id);
                 if (!base) return null;
-                const chatStatus = chatCharStatuses?.[id]?.status;
+                const chatStatus = resolveConvoStatus(id);
                 return chatStatus ? { ...base, conversationStatus: chatStatus } : base;
               })
               .filter(Boolean) as {

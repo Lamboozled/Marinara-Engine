@@ -51,9 +51,13 @@ import {
   APP_VERSION,
   BUILT_IN_AGENTS,
   buildGuidedGenerationInstructionMessage,
+  getActiveStatusOverride,
+  getEffectiveCurrentStatus,
   type AchievementEvent,
+  type ConversationStatusOverride,
   type SpritePlacement,
   type SpriteSide,
+  type WeekSchedule,
 } from "@marinara-engine/shared";
 import { useUIStore } from "../../stores/ui.store";
 import { useAgentStore } from "../../stores/agent.store";
@@ -636,16 +640,43 @@ export function ChatArea() {
       const char = query.data;
       if (char?.id) map.set(char.id, toCharacterMapValue(char));
     }
-    // Overlay per-chat presence status so status dots reflect this chat, not the last chat to generate.
-    const chatStatuses = parseChatMetadata(chat?.metadata).conversationCharacterStatuses as
+    // Overlay per-chat presence status so status dots reflect this chat, not the last chat to
+    // generate. Prefer the live override/schedule-derived status (matching the presence pill)
+    // over the generation-time snapshot, which only refreshes on the next generated message.
+    const convoMeta = parseChatMetadata(chat?.metadata);
+    const chatStatuses = convoMeta.conversationCharacterStatuses as
       | Record<string, { status?: string; activity?: string }>
       | undefined;
-    if (chatStatuses) {
-      for (const [id, info] of Object.entries(chatStatuses)) {
-        const existing = map.get(id);
-        if (existing && info.status) {
-          map.set(id, { ...existing, conversationStatus: info.status as any, conversationActivity: info.activity ?? existing.conversationActivity });
-        }
+    const statusOverrides = convoMeta.conversationStatusOverrides as
+      | Record<string, ConversationStatusOverride>
+      | undefined;
+    const characterSchedules =
+      convoMeta.conversationSchedulesEnabled === false
+        ? undefined
+        : (convoMeta.characterSchedules as Record<string, WeekSchedule> | undefined);
+    const statusNow = new Date();
+    const presenceIds = new Set<string>([
+      ...Object.keys(chatStatuses ?? {}),
+      ...Object.keys(statusOverrides ?? {}),
+      ...Object.keys(characterSchedules ?? {}),
+    ]);
+    for (const id of presenceIds) {
+      const existing = map.get(id);
+      if (!existing) continue;
+      const schedule = characterSchedules?.[id];
+      const override = statusOverrides?.[id];
+      if (getActiveStatusOverride(override, statusNow) || schedule) {
+        const eff = getEffectiveCurrentStatus(schedule, override, statusNow);
+        map.set(id, { ...existing, conversationStatus: eff.status, conversationActivity: eff.activity });
+        continue;
+      }
+      const info = chatStatuses?.[id];
+      if (info?.status) {
+        map.set(id, {
+          ...existing,
+          conversationStatus: info.status as any,
+          conversationActivity: info.activity ?? existing.conversationActivity,
+        });
       }
     }
     return map;
