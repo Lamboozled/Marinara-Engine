@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, Eye, EyeOff, RefreshCw, Save } from "lucide-react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type { Message } from "@marinara-engine/shared";
+import { agentKeys, useAgentMemory } from "../../hooks/use-agents";
 import { useGenerate } from "../../hooks/use-generate";
 import { api } from "../../lib/api-client";
 import { showConfirmDialog } from "../../lib/app-dialogs";
@@ -75,13 +76,10 @@ export function SecretPlotPanel({
   const draftRef = useRef<SecretPlotDraft | null>(null);
   const savedFingerprintRef = useRef<string | null>(null);
 
-  const queryKey = useMemo(() => ["agent-memory", AGENT_TYPE, chatId ?? ""] as const, [chatId]);
-  const { data, isLoading, isError, refetch } = useQuery({
-    queryKey,
-    enabled: !!chatId,
-    queryFn: async () =>
-      api.get<{ agentConfigId: string; memory: Record<string, unknown> }>(`/agents/memory/${AGENT_TYPE}/${chatId}`),
-  });
+  // Shared hook so this key has exactly one queryFn cache-wide (the Agent
+  // Suite modal reads the same key; two different queryFns would race).
+  const queryKey = useMemo(() => agentKeys.memory(AGENT_TYPE, chatId ?? ""), [chatId]);
+  const { data, isLoading, isError, refetch } = useAgentMemory(AGENT_TYPE, chatId);
 
   const target = useMemo(() => findLastAssistant(messages), [messages]);
   const draftSignature = useMemo(() => (draft ? draftFingerprint(draft) : null), [draft]);

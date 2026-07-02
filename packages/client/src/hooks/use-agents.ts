@@ -135,7 +135,9 @@ export function useAgentMemory(agentType: string | null, chatId: string | null, 
     queryKey: agentKeys.memory(agentType ?? "", chatId ?? ""),
     queryFn: async (): Promise<AgentMemoryResponse> => {
       try {
-        return await api.get<AgentMemoryResponse>(`/agents/memory/${agentType}/${chatId}`);
+        return await api.get<AgentMemoryResponse>(
+          `/agents/memory/${encodeURIComponent(agentType ?? "")}/${encodeURIComponent(chatId ?? "")}`,
+        );
       } catch (err) {
         // Agents without a saved config 404 here — that just means no stored memory.
         if (err instanceof ApiError && err.status === 404) {
@@ -160,7 +162,11 @@ export function useUpdateAgentMemory() {
       agentType: string;
       chatId: string;
       patch: Record<string, unknown>;
-    }) => api.patch<AgentMemoryResponse>(`/agents/memory/${agentType}/${chatId}`, { patch }),
+    }) =>
+      api.patch<AgentMemoryResponse>(
+        `/agents/memory/${encodeURIComponent(agentType)}/${encodeURIComponent(chatId)}`,
+        { patch },
+      ),
     onSuccess: (_data, variables) => {
       qc.invalidateQueries({ queryKey: agentKeys.memory(variables.agentType, variables.chatId) });
     },

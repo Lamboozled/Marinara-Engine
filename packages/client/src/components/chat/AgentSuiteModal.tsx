@@ -3,7 +3,7 @@
 // active chat have stored (memory, tracker state, custom
 // outputs), manually or via AI-assisted selection rewrites.
 // ──────────────────────────────────────────────
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Bot, Eye, EyeOff, Loader2, RotateCcw, Save, Trash2, Wand2 } from "lucide-react";
 import { toast } from "sonner";
@@ -96,13 +96,13 @@ const TRACKER_SLICES: Record<
         return { error: "Scene data must be a JSON object" };
       }
       const record = parsed as Record<string, unknown>;
-      return {
-        date: record.date ?? null,
-        time: record.time ?? null,
-        location: record.location ?? null,
-        weather: record.weather ?? null,
-        temperature: record.temperature ?? null,
-      };
+      // Only send keys present in the edited JSON: a dropped key (e.g. from an
+      // AI rewrite) means "leave unchanged" — an explicit null still clears.
+      const patch: Record<string, unknown> = {};
+      for (const key of ["date", "time", "location", "weather", "temperature"] as const) {
+        if (key in record) patch[key] = record[key] ?? null;
+      }
+      return patch;
     },
   },
   "character-tracker": {
@@ -153,11 +153,13 @@ function formatRunTimestamp(value: string): string {
 // ── Editable data block with AI-assisted selection rewrite ──
 
 interface DataBlockProps {
+  blockId: string;
   label: string;
   description?: string;
   mode: "text" | "json";
   value: string;
   onSave: (draft: string) => Promise<void>;
+  onDirtyChange: (blockId: string, dirty: boolean) => void;
   disabled: boolean;
   agentName: string;
   connectionOptions: ConnectionOption[];
@@ -166,11 +168,13 @@ interface DataBlockProps {
 }
 
 function DataBlock({
+  blockId,
   label,
   description,
   mode,
   value,
   onSave,
+  onDirtyChange,
   disabled,
   agentName,
   connectionOptions,
@@ -191,6 +195,13 @@ function DataBlock({
 
   const currentText = draft ?? value;
   const isDirty = draft !== null && draft !== value;
+  const busy = saving || rewrite.isPending;
+
+  // Report dirty state so the modal can guard close/agent-switch transitions.
+  useEffect(() => {
+    onDirtyChange(blockId, isDirty);
+    return () => onDirtyChange(blockId, false);
+  }, [blockId, isDirty, onDirtyChange]);
 
   const captureSelection = useCallback(() => {
     const el = textareaRef.current;
@@ -199,7 +210,7 @@ function DataBlock({
   }, []);
 
   const handleSave = useCallback(async () => {
-    if (!isDirty || saving) return;
+    if (!isDirty || busy) return;
     if (mode === "json") {
       try {
         JSON.parse(currentText);
@@ -218,10 +229,10 @@ function DataBlock({
     } finally {
       setSaving(false);
     }
-  }, [currentText, isDirty, mode, onSave, saving]);
+  }, [busy, currentText, isDirty, mode, onSave]);
 
   const handleRewrite = useCallback(async () => {
-    if (rewrite.isPending || !instruction.trim() || !rewriteConnectionId) return;
+    if (busy || !instruction.trim() || !rewriteConnectionId) return;
     const text = currentText;
     const clamped =
       selection && selection.start < selection.end && selection.end <= text.length
@@ -255,7 +266,7 @@ function DataBlock({
     } catch (err) {
       setError(err instanceof Error ? err.message : "AI rewrite failed");
     }
-  }, [agentName, currentText, instruction, label, rewrite, rewriteConnectionId, selection]);
+  }, [agentName, busy, currentText, instruction, label, rewrite, rewriteConnectionId, selection]);
 
   return (
     <div className="rounded-lg border border-[var(--border)] bg-[var(--secondary)]/35 p-2.5">
@@ -298,14 +309,23 @@ function DataBlock({
           setError(null);
         }}
         onSelect={captureSelection}
-        disabled={disabled}
+        disabled={disabled || busy}
         rows={Math.min(14, Math.max(3, currentText.split("\n").length))}
         spellCheck={false}
         className="mt-2 w-full resize-y rounded-md border border-[var(--input)] bg-[var(--secondary)]/45 px-2 py-1.5 font-mono text-[0.625rem] leading-relaxed text-[var(--foreground)] outline-none transition-colors focus:border-[var(--ring)] focus:ring-1 focus:ring-[var(--ring)] disabled:opacity-60"
       />
 
       {aiOpen && (
-        <div className="mt-2 space-y-2 rounded-md border border-[var(--primary)]/25 bg-[var(--primary)]/5 p-2">
+        <div
+          className="mt-2 space-y-2 rounded-md border border-[var(--primary)]/25 bg-[var(--primary)]/5 p-2"
+          onKeyDown={(event) => {
+            // Habitual Escape should close the AI panel, not the whole modal.
+            if (event.key === "Escape") {
+              event.stopPropagation();
+              setAiOpen(false);
+            }
+          }}
+        >
           <p className="text-[0.625rem] text-[var(--muted-foreground)]">
             {selection && selection.start < selection.end
               ? `Rewriting the selected ${selection.end - selection.start} characters.`
@@ -356,7 +376,7 @@ function DataBlock({
             setDraft(null);
             setError(null);
           }}
-          disabled={!isDirty || saving}
+          disabled={!isDirty || busy}
           className="inline-flex min-h-7 items-center gap-1 rounded-md border border-[var(--border)] px-2 py-1 text-[0.625rem] text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--ring)] disabled:cursor-not-allowed disabled:opacity-40"
         >
           <RotateCcw size="0.625rem" />
@@ -365,7 +385,7 @@ function DataBlock({
         <button
           type="button"
           onClick={handleSave}
-          disabled={disabled || !isDirty || saving}
+          disabled={disabled || !isDirty || busy}
           className="inline-flex min-h-7 items-center gap-1 rounded-md bg-[var(--primary)] px-2.5 py-1 text-[0.625rem] font-medium text-[var(--primary-foreground)] transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--ring)] disabled:cursor-not-allowed disabled:opacity-50"
         >
           {saving ? <Loader2 size="0.625rem" className="animate-spin" /> : <Save size="0.625rem" />}
@@ -384,13 +404,15 @@ export function AgentSuiteModal({ chat, open, onClose, agents }: AgentSuiteModal
   // 1. Zustand selectors
   const isAgentProcessing = useAgentStore((s) => s.processingChatIds.includes(chat.id));
 
-  // 2. React Query hooks
-  const { data: connections } = useConnections();
+  // Agent selection — local state the queries below take as input.
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
-  const effectiveAgentId = selectedAgentId && agents.some((a) => a.id === selectedAgentId) ? selectedAgentId : (agents[0]?.id ?? null);
+  const effectiveAgentId =
+    selectedAgentId && agents.some((a) => a.id === selectedAgentId) ? selectedAgentId : (agents[0]?.id ?? null);
   const selectedAgent = agents.find((a) => a.id === effectiveAgentId) ?? null;
   const isTrackerAgent = !!selectedAgent && !!TRACKER_SLICES[selectedAgent.id];
 
+  // 2. React Query hooks
+  const { data: connections } = useConnections();
   const memoryQuery = useAgentMemory(effectiveAgentId, chat.id, open);
   const updateMemory = useUpdateAgentMemory();
   const gameStateKey = useMemo(() => ["agent-suite", "game-state", chat.id] as const, [chat.id]);
@@ -406,6 +428,20 @@ export function AgentSuiteModal({ chat, open, onClose, agents }: AgentSuiteModal
   // 3. Local state
   const [rewriteConnectionId, setRewriteConnectionId] = useState("");
   const [spoilersRevealed, setSpoilersRevealed] = useState(false);
+  const dirtyBlocksRef = useRef<Set<string>>(new Set());
+  const closingRef = useRef(false);
+  const wasProcessingRef = useRef(isAgentProcessing);
+
+  // Agents finishing a run may have rewritten memory and tracker state on the
+  // server; refetch so pristine blocks show the fresh values instead of
+  // letting a later save silently clobber agent-written data.
+  useEffect(() => {
+    if (wasProcessingRef.current && !isAgentProcessing && open) {
+      void qc.invalidateQueries({ queryKey: ["agent-memory"] });
+      void qc.invalidateQueries({ queryKey: gameStateKey });
+    }
+    wasProcessingRef.current = isAgentProcessing;
+  }, [gameStateKey, isAgentProcessing, open, qc]);
 
   // 4. Memos and callbacks
   const connectionOptions = useMemo(() => {
@@ -423,18 +459,85 @@ export function AgentSuiteModal({ chat, open, onClose, agents }: AgentSuiteModal
     return (agentDefault ?? chatConnection ?? connectionOptions[0])?.id ?? "";
   }, [chat.connectionId, connectionOptions, rewriteConnectionId]);
 
+  const handleBlockDirtyChange = useCallback((blockId: string, dirty: boolean) => {
+    if (dirty) dirtyBlocksRef.current.add(blockId);
+    else dirtyBlocksRef.current.delete(blockId);
+  }, []);
+
+  const confirmDiscardDrafts = useCallback(async () => {
+    if (dirtyBlocksRef.current.size === 0) return true;
+    const ok = await showConfirmDialog({
+      title: "Discard Unsaved Changes",
+      message: "You have unsaved edits in the Agent Suite. Discard them?",
+      confirmLabel: "Discard",
+      cancelLabel: "Keep Editing",
+      tone: "destructive",
+    });
+    if (ok) dirtyBlocksRef.current.clear();
+    return ok;
+  }, []);
+
+  const guardedClose = useCallback(() => {
+    if (closingRef.current) return;
+    closingRef.current = true;
+    void (async () => {
+      try {
+        if (await confirmDiscardDrafts()) onClose();
+      } finally {
+        closingRef.current = false;
+      }
+    })();
+  }, [confirmDiscardDrafts, onClose]);
+
+  const selectAgent = useCallback(
+    (agentId: string) => {
+      if (agentId === effectiveAgentId) return;
+      void (async () => {
+        if (!(await confirmDiscardDrafts())) return;
+        setSelectedAgentId(agentId);
+        setSpoilersRevealed(false);
+      })();
+    },
+    [confirmDiscardDrafts, effectiveAgentId],
+  );
+
   const refreshGameState = useCallback(async () => {
+    // Land any queued HUD tracker edits first so the snapshot includes them.
+    let hudInSync = true;
+    const flushPatch = useGameStateStore.getState().flushPatch;
+    if (flushPatch) {
+      try {
+        await flushPatch();
+      } catch {
+        hudInSync = false; // edits were requeued — don't clobber optimistic HUD state
+      }
+    }
     const fresh = await api.get<GameState | null>(`/chats/${chat.id}/game-state`);
     qc.setQueryData(gameStateKey, fresh);
     // Keep the live tracker HUD in sync when this chat is on screen.
-    if (useChatStore.getState().activeChatId === chat.id) {
+    if (hudInSync && useChatStore.getState().activeChatId === chat.id) {
       useGameStateStore.getState().setGameState(fresh ?? null);
     }
   }, [chat.id, gameStateKey, qc]);
 
   const saveMemoryKey = useCallback(
     async (agentType: string, key: string, mode: "text" | "json", draftText: string) => {
-      const parsed: unknown = mode === "json" ? JSON.parse(draftText) : draftText;
+      let parsed: unknown;
+      if (mode === "json") {
+        parsed = JSON.parse(draftText);
+      } else {
+        // The server stores strings raw and JSON.parses on read, so a text
+        // draft that happens to decode as JSON ("123", "true", '{"a":1}')
+        // would change type on the next read. Pre-encode exactly those drafts
+        // as JSON string literals to keep them strings round-trip.
+        parsed = draftText;
+        try {
+          JSON.parse(draftText);
+          parsed = JSON.stringify(draftText);
+        } catch {
+          /* not JSON-parsable — stored raw and read back verbatim */
+        }
+      }
       await updateMemory.mutateAsync({ agentType, chatId: chat.id, patch: { [key]: parsed } });
     },
     [chat.id, updateMemory],
@@ -443,14 +546,28 @@ export function AgentSuiteModal({ chat, open, onClose, agents }: AgentSuiteModal
   const saveTrackerSlice = useCallback(
     async (agentId: string, draftText: string) => {
       const slice = TRACKER_SLICES[agentId];
-      const snapshot = gameStateQuery.data;
-      if (!slice || !snapshot) throw new Error("No tracker snapshot to update");
+      if (!slice) throw new Error("No tracker snapshot to update");
+      // Flush queued HUD edits, then build the patch from a fresh snapshot so
+      // the whole-playerStats write can't revert concurrent agent or HUD
+      // updates made after the modal fetched its display copy.
+      await useGameStateStore.getState().flushPatch?.();
+      const snapshot = await api.get<GameState | null>(`/chats/${chat.id}/game-state`);
+      if (!snapshot) throw new Error("No tracker snapshot to update");
+      qc.setQueryData(gameStateKey, snapshot);
       const patch = slice.buildPatch(snapshot, JSON.parse(draftText));
       if ("error" in patch && typeof patch.error === "string") throw new Error(patch.error);
-      await api.patch(`/chats/${chat.id}/game-state`, { ...patch, manual: true });
+      // Target the exact row the snapshot came from, like use-game-state-patcher.
+      await api.patch(`/chats/${chat.id}/game-state`, {
+        ...patch,
+        manual: true,
+        ...(snapshot.messageId ? { messageId: snapshot.messageId } : {}),
+        ...(snapshot.messageId && Number.isInteger(snapshot.swipeIndex) && snapshot.swipeIndex >= 0
+          ? { swipeIndex: snapshot.swipeIndex }
+          : {}),
+      });
       await refreshGameState();
     },
-    [chat.id, gameStateQuery.data, refreshGameState],
+    [chat.id, gameStateKey, qc, refreshGameState],
   );
 
   const clearAgentMemory = useCallback(async () => {
@@ -491,7 +608,7 @@ export function AgentSuiteModal({ chat, open, onClose, agents }: AgentSuiteModal
 
   // 5. Render
   return (
-    <Modal open={open} onClose={onClose} title="Agent Suite" width="max-w-3xl" chatFloatingPanel>
+    <Modal open={open} onClose={guardedClose} title="Agent Suite" width="max-w-3xl" chatFloatingPanel>
       {agents.length === 0 ? (
         <div className="rounded-lg border border-dashed border-[var(--border)] px-3 py-6 text-center text-[0.6875rem] text-[var(--muted-foreground)]">
           No agents are active in this chat. Add agents in the Agents section first.
@@ -502,10 +619,7 @@ export function AgentSuiteModal({ chat, open, onClose, agents }: AgentSuiteModal
           <div className="shrink-0 sm:w-44">
             <select
               value={effectiveAgentId ?? ""}
-              onChange={(event) => {
-                setSelectedAgentId(event.target.value);
-                setSpoilersRevealed(false);
-              }}
+              onChange={(event) => selectAgent(event.target.value)}
               className="w-full rounded-lg bg-[var(--secondary)] px-3 py-2 text-xs outline-none ring-1 ring-[var(--border)] transition-shadow focus:ring-[var(--primary)]/40 sm:hidden"
             >
               {agents.map((agent) => (
@@ -519,10 +633,7 @@ export function AgentSuiteModal({ chat, open, onClose, agents }: AgentSuiteModal
                 <button
                   key={agent.id}
                   type="button"
-                  onClick={() => {
-                    setSelectedAgentId(agent.id);
-                    setSpoilersRevealed(false);
-                  }}
+                  onClick={() => selectAgent(agent.id)}
                   className={cn(
                     "flex w-full flex-col rounded-lg px-2.5 py-2 text-left transition-all",
                     agent.id === effectiveAgentId
@@ -609,10 +720,12 @@ export function AgentSuiteModal({ chat, open, onClose, agents }: AgentSuiteModal
                     memoryEntries.map((entry) => (
                       <DataBlock
                         key={`${selectedAgent.id}:memory:${entry.key}`}
+                        blockId={`${selectedAgent.id}:memory:${entry.key}`}
                         label={entry.key}
                         mode={entry.mode}
                         value={entry.serialized}
                         onSave={(draftText) => saveMemoryKey(selectedAgent.id, entry.key, entry.mode, draftText)}
+                        onDirtyChange={handleBlockDirtyChange}
                         disabled={isAgentProcessing}
                         agentName={selectedAgent.name}
                         connectionOptions={connectionOptions}
@@ -646,11 +759,13 @@ export function AgentSuiteModal({ chat, open, onClose, agents }: AgentSuiteModal
                       <>
                         <DataBlock
                           key={`${selectedAgent.id}:tracker`}
+                          blockId={`${selectedAgent.id}:tracker`}
                           label={trackerSlice.label}
                           description={trackerSlice.description}
                           mode="json"
                           value={serializeValue(trackerSlice.getValue(gameStateQuery.data), "json")}
                           onSave={(draftText) => saveTrackerSlice(selectedAgent.id, draftText)}
+                          onDirtyChange={handleBlockDirtyChange}
                           disabled={isAgentProcessing}
                           agentName={selectedAgent.name}
                           connectionOptions={connectionOptions}
@@ -694,6 +809,7 @@ export function AgentSuiteModal({ chat, open, onClose, agents }: AgentSuiteModal
                       return (
                         <DataBlock
                           key={run.id}
+                          blockId={run.id}
                           label={run.resultType.replace(/_/g, " ")}
                           description={formatRunTimestamp(run.createdAt)}
                           mode={mode}
@@ -702,6 +818,7 @@ export function AgentSuiteModal({ chat, open, onClose, agents }: AgentSuiteModal
                             const parsed: unknown = mode === "json" ? JSON.parse(draftText) : draftText;
                             await updateRunData.mutateAsync({ id: run.id, chatId: chat.id, resultData: parsed });
                           }}
+                          onDirtyChange={handleBlockDirtyChange}
                           disabled={isAgentProcessing}
                           agentName={selectedAgent.name}
                           connectionOptions={connectionOptions}
