@@ -116,7 +116,7 @@ import {
   scoreMusic,
   scoreAmbient,
 } from "@marinara-engine/shared";
-import { GameNarration, formatNarration } from "./GameNarration";
+import { GameNarration, formatNarration, parseNarrationSegments, type NarrationSegment } from "./GameNarration";
 import { GameInput } from "./GameInput";
 import { GameMapPanel, MobileMapButton } from "./GameMap";
 import { GamePartyBar } from "./GamePartyBar";
@@ -1899,6 +1899,30 @@ function formatCombatLogContent(message: Message): string {
   return content.replace(/^\[(?:To the party|To the GM)]\s*/i, "").trim();
 }
 
+const EMPTY_GAME_SPEAKER_COLORS = new Map<string, string>();
+
+function formatNarrationSegmentForContext(segment: NarrationSegment, edit?: GameSegmentEdit): string {
+  const content =
+    segment.type === "readable"
+      ? (edit?.readableContent ?? edit?.content ?? segment.readableContent ?? segment.content)
+      : (edit?.content ?? segment.content);
+  const trimmed = content.trim();
+  if (!trimmed) return "";
+
+  if (segment.type === "dialogue") {
+    const speaker = edit?.speaker?.trim() || segment.speaker?.trim();
+    return speaker ? `${speaker}: ${trimmed}` : trimmed;
+  }
+
+  if (segment.type === "readable") {
+    const type = edit?.readableType ?? segment.readableType;
+    if (type === "book") return `Book: ${trimmed}`;
+    if (type === "note") return `Note: ${trimmed}`;
+  }
+
+  return trimmed;
+}
+
 function buildSegmentEditMap(chatMeta: Record<string, unknown>): Map<string, GameSegmentEdit> {
   const map = new Map<string, GameSegmentEdit>();
   for (const [key, value] of Object.entries(chatMeta)) {
@@ -3193,10 +3217,22 @@ function GameSurfaceComponent({
     typeof latestAssistantMsg?.id === "string" &&
     narrationDoneMsgId === latestAssistantMsg.id;
 
-  const latestNarrationText = useMemo(
-    () => (latestAssistantMsg?.content ? parseGmTags(latestAssistantMsg.content).cleanContent.trim() : ""),
-    [latestAssistantMsg?.content],
-  );
+  const latestNarrationText = useMemo(() => {
+    if (!latestAssistantMsg?.content) return "";
+    const segments = parseNarrationSegments(latestAssistantMsg, EMPTY_GAME_SPEAKER_COLORS);
+    const visibleText: string[] = [];
+    for (let index = 0; index < segments.length; index++) {
+      const segment = segments[index]!;
+      if (segmentDeletes.has(`${latestAssistantMsg.id}:${index}`)) continue;
+      if (segment.partyType === "side" || segment.partyType === "extra") continue;
+      const text = formatNarrationSegmentForContext(
+        segment,
+        segmentEdits.get(`${latestAssistantMsg.id}:${index}`),
+      );
+      if (text) visibleText.push(text);
+    }
+    return visibleText.join("\n").trim();
+  }, [latestAssistantMsg, segmentDeletes, segmentEdits]);
 
   const combatLogEntries = useMemo(
     () =>
