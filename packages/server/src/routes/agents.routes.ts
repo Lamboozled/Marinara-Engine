@@ -45,6 +45,11 @@ function stripWrappingCodeFence(text: string): string {
   return match ? match[1]! : text;
 }
 
+function escapePromptFrameDelimiter(text: string, marker: string): string {
+  const pattern = new RegExp(`^${marker}`, "gm");
+  return text.replace(pattern, `${marker.slice(0, -1)} ${marker.slice(-1)}`);
+}
+
 const secretPlotArcSchema = z
   .object({
     description: z.string().optional(),
@@ -483,13 +488,16 @@ export async function agentsRoutes(app: FastifyInstance) {
       : "";
     const documentBlock =
       input.documentText && input.documentText !== input.selectedText
-        ? `Full document (context only — do not output):\n<<<DOCUMENT\n${input.documentText}\nDOCUMENT>>>\n\n`
+        ? `Full document (context only — do not output):\n<<<DOCUMENT\n${escapePromptFrameDelimiter(
+            input.documentText,
+            "DOCUMENT>>>",
+          )}\nDOCUMENT>>>\n\n`
         : "";
     const userContent =
       `${contextLines.length ? `${contextLines.join("\n")}\n\n` : ""}` +
       `${referenceBlock}` +
       `${documentBlock}` +
-      `Excerpt to rewrite:\n<<<EXCERPT\n${input.selectedText}\nEXCERPT>>>\n\n` +
+      `Excerpt to rewrite:\n<<<EXCERPT\n${escapePromptFrameDelimiter(input.selectedText, "EXCERPT>>>")}\nEXCERPT>>>\n\n` +
       `Instruction: ${input.instruction}`;
 
     const result = await provider.chatComplete(

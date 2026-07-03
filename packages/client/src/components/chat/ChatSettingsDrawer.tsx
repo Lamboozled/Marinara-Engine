@@ -69,7 +69,7 @@ import { DiscordMirrorControls } from "../../features/chat-settings/sections/Dis
 import { FunctionCallingSection } from "../../features/chat-settings/sections/FunctionCallingSection";
 import { GameExtraPromptSection } from "../../features/chat-settings/sections/GameExtraPromptSection";
 import { ImpersonateSection } from "../../features/chat-settings/sections/ImpersonateSection";
-import { LorebooksSection, type ActiveLorebookView } from "../../features/chat-settings/sections/LorebooksSection";
+import { LorebooksSection } from "../../features/chat-settings/sections/LorebooksSection";
 import { PromptPresetSection } from "../../features/chat-settings/sections/PromptPresetSection";
 import { SceneInstructionsSection } from "../../features/chat-settings/sections/SceneInstructionsSection";
 import { TranslationSection } from "../../features/chat-settings/sections/TranslationSection";
@@ -114,6 +114,12 @@ import {
   appendLocalSidecarConnectionOption,
   filterLanguageGenerationConnections,
 } from "../../lib/connection-filters";
+import {
+  deriveActiveLorebookViews,
+  getChatActiveLorebookIds,
+  getChatExcludedLorebookIds,
+  type ActiveLorebookView,
+} from "../../lib/chat-lorebooks";
 import { getConnectedChatDisplayName } from "../../lib/chat-display";
 import { getTouchReorderDropIndex } from "../../lib/touch-reorder";
 import {
@@ -601,20 +607,6 @@ function getChatActiveAgentIds(chat: Chat): string[] {
   return Array.isArray(activeIds) ? activeIds.filter((id): id is string => typeof id === "string") : [];
 }
 
-function getChatActiveLorebookIds(chat: Chat): string[] {
-  const metadata = typeof chat.metadata === "string" ? JSON.parse(chat.metadata) : (chat.metadata ?? {});
-  const activeIds =
-    metadata && typeof metadata === "object" ? (metadata as { activeLorebookIds?: unknown }).activeLorebookIds : [];
-  return Array.isArray(activeIds) ? activeIds.filter((id): id is string => typeof id === "string") : [];
-}
-
-function getChatExcludedLorebookIds(chat: Chat): string[] {
-  const metadata = typeof chat.metadata === "string" ? JSON.parse(chat.metadata) : (chat.metadata ?? {});
-  const excludedIds =
-    metadata && typeof metadata === "object" ? (metadata as { excludedLorebookIds?: unknown }).excludedLorebookIds : [];
-  return Array.isArray(excludedIds) ? excludedIds.filter((id): id is string => typeof id === "string") : [];
-}
-
 export function ChatSettingsDrawer({
   chat,
   open,
@@ -632,6 +624,8 @@ export function ChatSettingsDrawer({
   const panelRef = useRef<HTMLDivElement | null>(null);
   const scheduleControlsRef = useRef<HTMLDivElement | null>(null);
   const modePromptDefaultAppliedRef = useRef<string | null>(null);
+  const agentSuiteCloseGuardRef = useRef<(() => Promise<boolean>) | null>(null);
+  const drawerClosingRef = useRef(false);
   const updateChat = useUpdateChat();
   const updateMeta = useUpdateChatMetadata();
   const updateGameWidgets = useUpdateGameWidgets();
@@ -869,18 +863,12 @@ export function ChatSettingsDrawer({
     typeof metadata.autonomousDailyCapOverride === "number" && Number.isFinite(metadata.autonomousDailyCapOverride)
       ? Math.max(1, Math.floor(metadata.autonomousDailyCapOverride))
       : null;
-  const activeLorebookIds = useMemo<string[]>(
-    () => (Array.isArray(metadata.activeLorebookIds) ? metadata.activeLorebookIds : []),
-    [metadata.activeLorebookIds],
-  );
+  const activeLorebookIds = useMemo(() => getChatActiveLorebookIds({ metadata: chat.metadata }), [chat.metadata]);
   const readLatestActiveLorebookIds = useCallback(() => {
     const latestChat = qc.getQueryData<Chat>(chatKeys.detail(chat.id));
     return latestChat ? getChatActiveLorebookIds(latestChat) : [...activeLorebookIds];
   }, [activeLorebookIds, chat.id, qc]);
-  const excludedLorebookIds = useMemo<string[]>(
-    () => (Array.isArray(metadata.excludedLorebookIds) ? metadata.excludedLorebookIds : []),
-    [metadata.excludedLorebookIds],
-  );
+  const excludedLorebookIds = useMemo(() => getChatExcludedLorebookIds({ metadata: chat.metadata }), [chat.metadata]);
   const readLatestExcludedLorebookIds = useCallback(() => {
     const latestChat = qc.getQueryData<Chat>(chatKeys.detail(chat.id));
     return latestChat ? getChatExcludedLorebookIds(latestChat) : [...excludedLorebookIds];
@@ -889,50 +877,18 @@ export function ChatSettingsDrawer({
   const gameLorebookKeeperLorebookId =
     typeof metadata.gameLorebookKeeperLorebookId === "string" ? metadata.gameLorebookKeeperLorebookId : null;
   const activeLorebooks = useMemo<ActiveLorebookView[]>(() => {
-    const pinnedIds = new Set(activeLorebookIds);
-    const excludedIds = new Set(excludedLorebookIds);
-    const lorebookList = (lorebooks ?? []) as Lorebook[];
-
-    return lorebookList.flatMap((lorebook) => {
-      if (
-        isGame &&
-        !gameLorebookKeeperEnabled &&
-        (lorebook.id === gameLorebookKeeperLorebookId || lorebook.sourceAgentId === "game-lorebook-keeper")
-      ) {
-        return [];
-      }
-
-      const reasons: ActiveLorebookView["activeReasons"] = [];
-      const isPinned = pinnedIds.has(lorebook.id);
-
-      if (lorebook.enabled !== false && isLorebookScopeActiveForChat(lorebook.scope, chat.id)) {
-        if (isPinned) reasons.push("Chat");
-        if (lorebook.isGlobal) reasons.push("Global");
-        if (
-          lorebook.characterIds?.some((id) => chatCharIds.includes(id)) ||
-          (lorebook.characterId && chatCharIds.includes(lorebook.characterId))
-        ) {
-          reasons.push("Character");
-        }
-        if (
-          chat.personaId &&
-          (lorebook.personaIds?.includes(chat.personaId) || lorebook.personaId === chat.personaId)
-        ) {
-          reasons.push("Persona");
-        }
-        if (lorebook.chatId === chat.id && !reasons.includes("Chat")) reasons.push("Chat");
-      }
-
-      return reasons.length > 0
-        ? [{ ...lorebook, activeReasons: reasons, isPinned, isExcluded: excludedIds.has(lorebook.id) }]
-        : [];
+    return deriveActiveLorebookViews({
+      activeLorebookIds,
+      chat,
+      excludedLorebookIds,
+      excludeGameLorebookKeeper: isGame && !gameLorebookKeeperEnabled,
+      gameLorebookKeeperLorebookId,
+      lorebooks: (lorebooks ?? []) as Lorebook[],
     });
   }, [
     activeLorebookIds,
     excludedLorebookIds,
-    chat.id,
-    chat.personaId,
-    chatCharIds,
+    chat,
     gameLorebookKeeperEnabled,
     gameLorebookKeeperLorebookId,
     isGame,
@@ -2289,6 +2245,24 @@ export function ChatSettingsDrawer({
   const [showSummariesModal, setShowSummariesModal] = useState(false);
   const [showAgentSuiteModal, setShowAgentSuiteModal] = useState(false);
   const [showMemoriesModal, setShowMemoriesModal] = useState(false);
+  const handleAgentSuiteCloseGuardChange = useCallback((guard: (() => Promise<boolean>) | null) => {
+    agentSuiteCloseGuardRef.current = guard;
+  }, []);
+  const requestClose = useCallback(() => {
+    if (drawerClosingRef.current) return;
+    drawerClosingRef.current = true;
+    void (async () => {
+      try {
+        const canCloseAgentSuite =
+          !showAgentSuiteModal || (await (agentSuiteCloseGuardRef.current?.() ?? Promise.resolve(true)));
+        if (!canCloseAgentSuite) return;
+        setShowAgentSuiteModal(false);
+        onClose();
+      } finally {
+        drawerClosingRef.current = false;
+      }
+    })();
+  }, [onClose, showAgentSuiteModal]);
   // Session-ephemeral: did the user change Day Rollover Hour in this drawer mount?
   // Used to gate the "transitional duplication" warning so it only appears
   // immediately after a change (when the warning is operationally useful) and
@@ -3044,12 +3018,12 @@ export function ChatSettingsDrawer({
       if (!(target instanceof Node)) return;
       if (panelRef.current?.contains(target)) return;
       if (target instanceof Element && target.closest("[data-chat-floating-panel]")) return;
-      onClose();
+      requestClose();
     };
 
     document.addEventListener("pointerdown", handlePointerDown, true);
     return () => document.removeEventListener("pointerdown", handlePointerDown, true);
-  }, [onClose, open]);
+  }, [open, requestClose]);
 
   if (!open) return null;
   const anchoredOnMobile = !!anchor && typeof window !== "undefined" && window.innerWidth < 768;
@@ -3089,7 +3063,7 @@ export function ChatSettingsDrawer({
           </h3>
           <button
             type="button"
-            onClick={onClose}
+            onClick={requestClose}
             aria-label="Close chat settings"
             className={ROLEPLAY_POPOVER_CLOSE_BUTTON}
           >
@@ -7205,6 +7179,7 @@ export function ChatSettingsDrawer({
         chat={chat}
         open={showAgentSuiteModal}
         onClose={() => setShowAgentSuiteModal(false)}
+        onCloseGuardChange={handleAgentSuiteCloseGuardChange}
         agents={agentSuiteAgents}
       />
 

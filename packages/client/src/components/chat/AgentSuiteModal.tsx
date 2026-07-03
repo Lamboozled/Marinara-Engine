@@ -19,7 +19,7 @@ import {
   Wand2,
 } from "lucide-react";
 import { toast } from "sonner";
-import type { Chat, GameState, Lorebook, PlayerStats } from "@marinara-engine/shared";
+import type { Chat, GameState, PlayerStats } from "@marinara-engine/shared";
 import {
   useAgentMemory,
   useAgentSuiteRewrite,
@@ -34,9 +34,9 @@ import { useConnections } from "../../hooks/use-connections";
 import { useEntriesAcrossLorebooks, useLorebooks } from "../../hooks/use-lorebooks";
 import { api } from "../../lib/api-client";
 import { showConfirmDialog } from "../../lib/app-dialogs";
+import { deriveActiveLorebookViews, getChatActiveLorebookIds, getChatExcludedLorebookIds } from "../../lib/chat-lorebooks";
 import { getChatCharacterIds } from "../../lib/chat-macros";
 import { filterLanguageGenerationConnections } from "../../lib/connection-filters";
-import { isLorebookScopeActiveForChat } from "../../lib/lorebook-scope";
 import { cn } from "../../lib/utils";
 import { useAgentStore } from "../../stores/agent.store";
 import { useChatStore } from "../../stores/chat.store";
@@ -55,6 +55,7 @@ interface AgentSuiteModalProps {
   chat: Chat;
   open: boolean;
   onClose: () => void;
+  onCloseGuardChange?: (guard: (() => Promise<boolean>) | null) => void;
   agents: AgentSuiteAgent[];
 }
 
@@ -247,7 +248,7 @@ function DataBlock({
   const [aiOpen, setAiOpen] = useState(false);
   const [contextOpen, setContextOpen] = useState(false);
   const [instruction, setInstruction] = useState("");
-  const [selection, setSelection] = useState<{ start: number; end: number } | null>(null);
+  const [selection, setSelection] = useState<{ start: number; end: number; sourceText: string } | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const currentText = draft ?? value;
@@ -263,8 +264,12 @@ function DataBlock({
   const captureSelection = useCallback(() => {
     const el = textareaRef.current;
     if (!el) return;
-    setSelection(el.selectionStart !== el.selectionEnd ? { start: el.selectionStart, end: el.selectionEnd } : null);
-  }, []);
+    setSelection(
+      el.selectionStart !== el.selectionEnd
+        ? { start: el.selectionStart, end: el.selectionEnd, sourceText: currentText }
+        : null,
+    );
+  }, [currentText]);
 
   const handleSave = useCallback(async () => {
     if (!isDirty || busy) return;
@@ -281,6 +286,7 @@ function DataBlock({
     try {
       await onSave(currentText);
       setDraft(null);
+      setSelection(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save");
     } finally {
@@ -292,7 +298,7 @@ function DataBlock({
     if (busy || !instruction.trim() || !rewriteConnectionId) return;
     const text = currentText;
     const clamped =
-      selection && selection.start < selection.end && selection.end <= text.length
+      selection && selection.sourceText === text && selection.start < selection.end && selection.end <= text.length
         ? { start: selection.start, end: selection.end }
         : null;
     const selectedText = clamped ? text.slice(clamped.start, clamped.end) : text;
@@ -383,6 +389,7 @@ function DataBlock({
         onChange={(event) => {
           setDraft(event.target.value);
           setError(null);
+          setSelection(null);
         }}
         onSelect={captureSelection}
         disabled={disabled || busy}
@@ -467,6 +474,7 @@ function DataBlock({
           onClick={() => {
             setDraft(null);
             setError(null);
+            setSelection(null);
           }}
           disabled={!isDirty || busy}
           className="inline-flex min-h-7 items-center gap-1 rounded-md border border-[var(--border)] px-2 py-1 text-[0.625rem] text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--ring)] disabled:cursor-not-allowed disabled:opacity-40"
@@ -490,7 +498,7 @@ function DataBlock({
 
 // ── Modal ──
 
-export function AgentSuiteModal({ chat, open, onClose, agents }: AgentSuiteModalProps) {
+export function AgentSuiteModal({ chat, open, onClose, onCloseGuardChange, agents }: AgentSuiteModalProps) {
   const qc = useQueryClient();
 
   // 1. Zustand selectors
@@ -519,32 +527,8 @@ export function AgentSuiteModal({ chat, open, onClose, agents }: AgentSuiteModal
 
   // Context sources for AI rewrites: the chat's character cards + entries of
   // its pinned lorebooks. Queries are gated on the modal being open.
-  const metadata = useMemo<Record<string, unknown>>(() => {
-    const raw = chat.metadata as unknown;
-    if (typeof raw === "string") {
-      try {
-        const parsed = JSON.parse(raw);
-        return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
-      } catch {
-        return {};
-      }
-    }
-    return raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
-  }, [chat.metadata]);
-  const activeLorebookIds = useMemo<string[]>(
-    () =>
-      Array.isArray(metadata.activeLorebookIds)
-        ? metadata.activeLorebookIds.filter((id): id is string => typeof id === "string")
-        : [],
-    [metadata.activeLorebookIds],
-  );
-  const excludedLorebookIds = useMemo<string[]>(
-    () =>
-      Array.isArray(metadata.excludedLorebookIds)
-        ? metadata.excludedLorebookIds.filter((id): id is string => typeof id === "string")
-        : [],
-    [metadata.excludedLorebookIds],
-  );
+  const activeLorebookIds = useMemo(() => getChatActiveLorebookIds({ metadata: chat.metadata }), [chat.metadata]);
+  const excludedLorebookIds = useMemo(() => getChatExcludedLorebookIds({ metadata: chat.metadata }), [chat.metadata]);
   // chat.characterIds arrives as a JSON string from the API despite the shared type.
   const chatCharacterIds = useMemo(() => getChatCharacterIds({ characterIds: chat.characterIds }), [chat.characterIds]);
   // includeBuiltIn matches the drawer's query so built-ins (Professor Mari)
@@ -554,24 +538,14 @@ export function AgentSuiteModal({ chat, open, onClose, agents }: AgentSuiteModal
   // Mirror the drawer's active-lorebook derivation: pinned + global + chat-scoped
   // + character-linked + persona-linked, minus explicit exclusions.
   const contextLorebooks = useMemo<Array<{ id: string; name: string }>>(() => {
-    const pinnedIds = new Set(activeLorebookIds);
-    const excludedIds = new Set(excludedLorebookIds);
-    return ((allLorebooks ?? []) as Lorebook[])
-      .filter((lorebook) => {
-        if (excludedIds.has(lorebook.id)) return false;
-        if (lorebook.enabled === false || !isLorebookScopeActiveForChat(lorebook.scope, chat.id)) return false;
-        return (
-          pinnedIds.has(lorebook.id) ||
-          lorebook.isGlobal ||
-          lorebook.chatId === chat.id ||
-          (lorebook.characterIds ?? []).some((id) => chatCharacterIds.includes(id)) ||
-          (!!lorebook.characterId && chatCharacterIds.includes(lorebook.characterId)) ||
-          (!!chat.personaId &&
-            ((lorebook.personaIds ?? []).includes(chat.personaId) || lorebook.personaId === chat.personaId))
-        );
-      })
-      .map((lorebook) => ({ id: lorebook.id, name: lorebook.name }));
-  }, [activeLorebookIds, allLorebooks, chat.id, chat.personaId, chatCharacterIds, excludedLorebookIds]);
+    return deriveActiveLorebookViews({
+      activeLorebookIds,
+      chat,
+      dropExcluded: true,
+      excludedLorebookIds,
+      lorebooks: allLorebooks ?? [],
+    }).map((lorebook) => ({ id: lorebook.id, name: lorebook.name }));
+  }, [activeLorebookIds, allLorebooks, chat, excludedLorebookIds]);
   const contextLorebookIds = useMemo(() => contextLorebooks.map((lorebook) => lorebook.id), [contextLorebooks]);
   const {
     entries: lorebookEntries,
@@ -632,6 +606,12 @@ export function AgentSuiteModal({ chat, open, onClose, agents }: AgentSuiteModal
     if (ok) dirtyBlocksRef.current.clear();
     return ok;
   }, []);
+
+  useEffect(() => {
+    if (!onCloseGuardChange) return;
+    onCloseGuardChange(open ? confirmDiscardDrafts : null);
+    return () => onCloseGuardChange(null);
+  }, [confirmDiscardDrafts, onCloseGuardChange, open]);
 
   const guardedClose = useCallback(() => {
     if (closingRef.current) return;
