@@ -301,7 +301,7 @@ export function parseSnapshotPlayerStats(snapshot: { playerStats?: unknown } | n
 }
 
 export function shouldAbortOnPassiveGenerationDisconnect(args: { chatMode: string; impersonate?: boolean }): boolean {
-  return args.chatMode !== "conversation" || args.impersonate === true;
+  return args.impersonate === true;
 }
 
 export function resolveProviderTopK(provider: unknown, topK: number): number | undefined {

@@ -1747,7 +1747,11 @@ export async function generateRoutes(app: FastifyInstance) {
       clientDisconnected = true;
       if (generationComplete) return;
       if (!shouldAbortOnPassiveGenerationDisconnect({ chatMode: requestChatMode, impersonate: input.impersonate })) {
-        logger.info("[generate] Conversation client disconnected; generation will continue for chat: %s", input.chatId);
+        logger.info(
+          "[generate] Client disconnected; generation will continue for %s chat: %s",
+          requestChatMode,
+          input.chatId,
+        );
         return;
       }
       logger.info("[abort] Client disconnected — aborting generation");
@@ -11452,6 +11456,15 @@ export async function generateRoutes(app: FastifyInstance) {
 
   // Expose the map so the route handler can register/unregister generations
   app.decorate("activeGenerations", activeGenerations);
+
+  /**
+   * GET /api/generate/status/:chatId
+   * Lets clients recover from passive mobile/browser stream disconnects by
+   * waiting until the server-side generation has finished saving.
+   */
+  app.get<{ Params: { chatId: string } }>("/status/:chatId", async (req) => ({
+    active: activeGenerations.has(req.params.chatId),
+  }));
 
   /**
    * POST /api/generate/abort
