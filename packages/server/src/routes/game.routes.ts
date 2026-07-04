@@ -3881,6 +3881,10 @@ type GameTurnStoryboardRow = NonNullable<
 
 type PlannedStoryboardKeyframe = {
   title: string;
+  sectionStartIndex: number | null;
+  sectionEndIndex: number | null;
+  anchorQuote: string;
+  anchorKind: StoryboardAnchorKind | "";
   narrationBeat: string;
   mangaPanelPrompt: string;
   imagePrompt: string;
@@ -3899,6 +3903,15 @@ type PlannedStoryboard = {
   keyframes: PlannedStoryboardKeyframe[];
 };
 
+type StoryboardAnchorKind = "narration" | "dialogue" | "readable" | "system";
+
+type StoryboardSourceSection = {
+  index: number;
+  kind: StoryboardAnchorKind;
+  speaker?: string | null;
+  content: string;
+};
+
 const STORYBOARD_STATUSES = new Set<GameStoryboardStatus>([
   "planning",
   "rendering_images",
@@ -3915,6 +3928,7 @@ const STORYBOARD_KEYFRAME_STATUSES = new Set<GameStoryboardKeyframeStatus>([
   "complete",
   "failed",
 ]);
+const STORYBOARD_ANCHOR_KINDS = new Set<StoryboardAnchorKind>(["narration", "dialogue", "readable", "system"]);
 
 function chatGalleryImageUrl(image: ChatGalleryImageRow, fallbackChatId: string): string {
   const parts = image.filePath.replace(/\\/g, "/").split("/").filter(Boolean);
@@ -3958,6 +3972,122 @@ function compactStoryboardSourceNarration(value: string): string {
     .trim();
 }
 
+function escapeStoryboardXml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function normalizeStoryboardAnchorKind(value: unknown): StoryboardAnchorKind | "" {
+  const text = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return STORYBOARD_ANCHOR_KINDS.has(text as StoryboardAnchorKind) ? (text as StoryboardAnchorKind) : "";
+}
+
+function normalizeStoryboardSourceSectionKind(value: unknown): StoryboardAnchorKind {
+  return normalizeStoryboardAnchorKind(value) || "narration";
+}
+
+function normalizeStoryboardSections(rawSections: unknown, sourceNarration: string): StoryboardSourceSection[] {
+  const sections = Array.isArray(rawSections)
+    ? rawSections
+        .map((raw): StoryboardSourceSection | null => {
+          const section = asStoryboardRecord(raw);
+          const parsedIndex =
+            typeof section.index === "number"
+              ? section.index
+              : Number.parseInt(String(section.index ?? ""), 10);
+          if (!Number.isFinite(parsedIndex)) return null;
+          const index = Math.trunc(parsedIndex);
+          if (index < 0 || index > 1000) return null;
+          const content = compactStoryboardText(section.content, 2000);
+          if (!content) return null;
+          return {
+            index,
+            kind: normalizeStoryboardSourceSectionKind(section.kind),
+            speaker: compactStoryboardText(section.speaker, 200) || null,
+            content,
+          };
+        })
+        .filter((section): section is StoryboardSourceSection => Boolean(section))
+    : [];
+
+  const deduped = new Map<number, StoryboardSourceSection>();
+  for (const section of sections.sort((a, b) => a.index - b.index)) {
+    if (!deduped.has(section.index)) deduped.set(section.index, section);
+  }
+  if (deduped.size > 0) return Array.from(deduped.values()).slice(0, 160);
+
+  const paragraphs = sourceNarration
+    .split(/\n{2,}/)
+    .map((part) => compactStoryboardText(part, 2000))
+    .filter(Boolean);
+  const fallbackSections = (paragraphs.length > 0 ? paragraphs : [compactStoryboardText(sourceNarration, 2000)])
+    .filter(Boolean)
+    .map((content, index) => ({
+      index,
+      kind: "narration" as const,
+      content,
+    }));
+  return fallbackSections.slice(0, 160);
+}
+
+function buildStoryboardSectionsBlock(sections: StoryboardSourceSection[]): string {
+  if (sections.length === 0) return "<turn_sections>\n</turn_sections>";
+  const rows = sections.map((section) => {
+    const speaker = section.speaker ? ` speaker="${escapeStoryboardXml(section.speaker)}"` : "";
+    return `<section index="${section.index}" kind="${section.kind}"${speaker}>${escapeStoryboardXml(
+      section.content,
+    )}</section>`;
+  });
+  return `<turn_sections>\n${rows.join("\n")}\n</turn_sections>`;
+}
+
+function normalizeStoryboardSectionIndex(value: unknown, sections: StoryboardSourceSection[]): number | null {
+  const parsed = typeof value === "number" ? value : Number.parseInt(String(value ?? ""), 10);
+  if (!Number.isFinite(parsed)) return null;
+  const index = Math.trunc(parsed);
+  if (index < 0) return null;
+  if (sections.length === 0) return index;
+  const sorted = sections.map((section) => section.index).sort((a, b) => a - b);
+  if (sorted.includes(index)) return index;
+  if (index <= sorted[0]!) return sorted[0]!;
+  if (index >= sorted[sorted.length - 1]!) return sorted[sorted.length - 1]!;
+  return sorted.reduce((best, candidate) =>
+    Math.abs(candidate - index) < Math.abs(best - index) ? candidate : best,
+  );
+}
+
+function storyboardSectionsForRange(
+  sections: StoryboardSourceSection[],
+  startIndex: number | null,
+  endIndex: number | null,
+): StoryboardSourceSection[] {
+  if (startIndex == null || endIndex == null) return [];
+  const start = Math.min(startIndex, endIndex);
+  const end = Math.max(startIndex, endIndex);
+  return sections.filter((section) => section.index >= start && section.index <= end);
+}
+
+function storyboardSectionText(section: StoryboardSourceSection): string {
+  return section.speaker ? `${section.speaker}: ${section.content}` : section.content;
+}
+
+function dominantStoryboardSectionKind(sections: StoryboardSourceSection[]): StoryboardAnchorKind | "" {
+  const counts = new Map<StoryboardAnchorKind, number>();
+  for (const section of sections) counts.set(section.kind, (counts.get(section.kind) ?? 0) + 1);
+  let best: StoryboardAnchorKind | "" = "";
+  let bestCount = 0;
+  for (const [kind, count] of counts.entries()) {
+    if (count > bestCount) {
+      best = kind;
+      bestCount = count;
+    }
+  }
+  return best;
+}
+
 function parseStoryboardCharacters(value: unknown): string[] {
   if (Array.isArray(value)) {
     return Array.from(
@@ -3983,6 +4113,7 @@ function asStoryboardRecord(value: unknown): Record<string, unknown> {
 
 function fallbackStoryboardPlan(args: {
   sourceNarration: string;
+  sections: StoryboardSourceSection[];
   keyframeCount: number;
   durationSeconds: number;
   aspectRatio: GameSceneVideoAspectRatio;
@@ -3991,27 +4122,48 @@ function fallbackStoryboardPlan(args: {
   const frameCount = Math.min(6, Math.max(2, args.keyframeCount));
   const sentences = cleanNarration.split(/(?<=[.!?])\s+/).filter(Boolean);
   const chunks = Array.from({ length: frameCount }, (_, index) => {
+    if (args.sections.length > 0) {
+      const startPosition = Math.floor((index * args.sections.length) / frameCount);
+      const endPosition = Math.max(startPosition, Math.floor(((index + 1) * args.sections.length) / frameCount) - 1);
+      const sections = args.sections.slice(startPosition, endPosition + 1);
+      return {
+        text: sections.map(storyboardSectionText).join(" ") || cleanNarration,
+        sections,
+      };
+    }
     const picked = sentences.filter((_, sentenceIndex) => sentenceIndex % frameCount === index).join(" ");
-    return picked || cleanNarration;
+    return {
+      text: picked || cleanNarration,
+      sections: [] as StoryboardSourceSection[],
+    };
   });
 
   return {
     title: compactStoryboardText(sentences[0] ?? "Turn storyboard", 120) || "Turn storyboard",
     summary: cleanNarration,
-    keyframes: chunks.map((chunk, index) => ({
-      title: `Keyframe ${index + 1}`,
-      narrationBeat: compactStoryboardText(chunk, 900),
-      mangaPanelPrompt: `Manga illustration keyframe, cinematic anime panel, expressive character acting, detailed environment, dramatic lighting. ${chunk}`,
-      imagePrompt: `Manga illustration keyframe, cinematic anime panel, expressive character acting, detailed environment, dramatic lighting. ${chunk}`,
-      videoPrompt: `Animate this manga keyframe as a short anime shot: subtle camera drift, atmospheric motion, character expression shift, and continuity-preserving movement. Story beat: ${chunk}`,
-      characters: [],
-      continuityNotes:
-        "Preserve character designs, props, setting, lighting, and emotional continuity from the GM narration.",
-      cameraMotion: "subtle cinematic camera drift",
-      transitionHint: index === frameCount - 1 ? "hold on the result of the turn" : "continue into the next beat",
-      durationSeconds: args.durationSeconds,
-      aspectRatio: args.aspectRatio,
-    })),
+    keyframes: chunks.map((chunk, index) => {
+      const firstSection = chunk.sections[0] ?? null;
+      const lastSection = chunk.sections[chunk.sections.length - 1] ?? null;
+      const beat = compactStoryboardText(chunk.text, 900);
+      return {
+        title: `Keyframe ${index + 1}`,
+        sectionStartIndex: firstSection?.index ?? null,
+        sectionEndIndex: lastSection?.index ?? null,
+        anchorQuote: compactStoryboardText(chunk.sections.map(storyboardSectionText).join(" "), 220),
+        anchorKind: dominantStoryboardSectionKind(chunk.sections),
+        narrationBeat: beat,
+        mangaPanelPrompt: `Manga illustration keyframe, cinematic anime panel, expressive character acting, detailed environment, dramatic lighting. ${beat}`,
+        imagePrompt: `Manga illustration keyframe, cinematic anime panel, expressive character acting, detailed environment, dramatic lighting. ${beat}`,
+        videoPrompt: `Animate this manga keyframe as a short anime shot: subtle camera drift, atmospheric motion, character expression shift, and continuity-preserving movement. Story beat: ${beat}`,
+        characters: [],
+        continuityNotes:
+          "Preserve character designs, props, setting, lighting, and emotional continuity from the GM narration.",
+        cameraMotion: "subtle cinematic camera drift",
+        transitionHint: index === frameCount - 1 ? "hold on the result of the turn" : "continue into the next beat",
+        durationSeconds: args.durationSeconds,
+        aspectRatio: args.aspectRatio,
+      };
+    }),
   };
 }
 
@@ -4019,6 +4171,7 @@ function sanitizeStoryboardPlan(
   raw: unknown,
   args: {
     sourceNarration: string;
+    sections: StoryboardSourceSection[];
     keyframeCount: number;
     durationSeconds: number;
     aspectRatio: GameSceneVideoAspectRatio;
@@ -4031,13 +4184,38 @@ function sanitizeStoryboardPlan(
   const frames = rawKeyframes
     .map((rawFrame, index): PlannedStoryboardKeyframe | null => {
       const frame = asStoryboardRecord(rawFrame);
+      const fallbackFrame = fallback.keyframes[index] ?? fallback.keyframes[0] ?? null;
       const narrationBeat = compactStoryboardText(frame.narrationBeat, 1200);
       const mangaPanelPrompt = compactStoryboardText(frame.mangaPanelPrompt, 5000);
       const imagePrompt = compactStoryboardText(frame.imagePrompt, 6500) || mangaPanelPrompt || narrationBeat;
       const videoPrompt = compactStoryboardText(frame.videoPrompt, 6500) || narrationBeat || imagePrompt;
       if (!narrationBeat && !imagePrompt && !videoPrompt) return null;
+      let sectionStartIndex = normalizeStoryboardSectionIndex(frame.sectionStartIndex, args.sections);
+      let sectionEndIndex = normalizeStoryboardSectionIndex(frame.sectionEndIndex, args.sections);
+      if (sectionStartIndex == null && sectionEndIndex != null) sectionStartIndex = sectionEndIndex;
+      if (sectionEndIndex == null && sectionStartIndex != null) sectionEndIndex = sectionStartIndex;
+      if (sectionStartIndex == null && fallbackFrame) sectionStartIndex = fallbackFrame.sectionStartIndex;
+      if (sectionEndIndex == null && fallbackFrame) sectionEndIndex = fallbackFrame.sectionEndIndex;
+      if (sectionStartIndex != null && sectionEndIndex != null && sectionEndIndex < sectionStartIndex) {
+        [sectionStartIndex, sectionEndIndex] = [sectionEndIndex, sectionStartIndex];
+      }
+      const coveredSections = storyboardSectionsForRange(args.sections, sectionStartIndex, sectionEndIndex);
+      const anchorKind =
+        normalizeStoryboardAnchorKind(frame.anchorKind) ||
+        dominantStoryboardSectionKind(coveredSections) ||
+        fallbackFrame?.anchorKind ||
+        "";
+      const anchorQuote =
+        compactStoryboardText(frame.anchorQuote, 300) ||
+        compactStoryboardText(coveredSections.map(storyboardSectionText).join(" "), 220) ||
+        fallbackFrame?.anchorQuote ||
+        "";
       return {
         title: compactStoryboardText(frame.title, 120) || `Keyframe ${index + 1}`,
+        sectionStartIndex,
+        sectionEndIndex,
+        anchorQuote,
+        anchorKind,
         narrationBeat,
         mangaPanelPrompt: mangaPanelPrompt || imagePrompt,
         imagePrompt,
@@ -4132,6 +4310,7 @@ async function buildStoryboardDirectorMessages(args: {
   setupConfig: Record<string, unknown> | null;
   latestState: unknown;
   sourceNarration: string;
+  sections: StoryboardSourceSection[];
   keyframeCount: number;
   durationSeconds: number;
   aspectRatio: GameSceneVideoAspectRatio;
@@ -4141,8 +4320,10 @@ async function buildStoryboardDirectorMessages(args: {
     setupConfig: args.setupConfig,
     latestState: args.latestState,
   });
+  const sourceSectionsBlock = buildStoryboardSectionsBlock(args.sections);
   const systemPrompt = await loadPrompt(args.promptOverridesStorage, GAME_STORYBOARD_DIRECTOR, {
     gameContextBlock,
+    sourceSectionsBlock,
     sourceNarration: args.sourceNarration,
     keyframeCount: args.keyframeCount,
     durationSeconds: args.durationSeconds,
@@ -4156,6 +4337,7 @@ async function buildStoryboardDirectorMessages(args: {
         role: "user",
         content: [
           gameContextBlock,
+          sourceSectionsBlock,
           `<gm_turn_narration>\n${args.sourceNarration}\n</gm_turn_narration>`,
           [
             "Create the storyboard JSON now.",
@@ -4204,6 +4386,10 @@ async function serializeGameTurnStoryboard(args: {
       storyboardId: frame.storyboardId,
       index: frame.index,
       title: frame.title,
+      sectionStartIndex: frame.sectionStartIndex ?? null,
+      sectionEndIndex: frame.sectionEndIndex ?? null,
+      anchorQuote: frame.anchorQuote ?? "",
+      anchorKind: normalizeStoryboardAnchorKind(frame.anchorKind),
       narrationBeat: frame.narrationBeat,
       mangaPanelPrompt: frame.mangaPanelPrompt,
       imagePrompt: frame.imagePrompt,
@@ -8791,6 +8977,17 @@ export async function gameRoutes(app: FastifyInstance) {
     chatId: z.string().min(1),
     messageId: z.string().min(1),
     swipeIndex: z.number().int().min(0).optional().default(0),
+    sections: z
+      .array(
+        z.object({
+          index: z.number().int().min(0).max(1000),
+          kind: z.enum(["narration", "dialogue", "readable", "system"]),
+          speaker: z.string().max(200).optional().nullable(),
+          content: z.string().min(1).max(6000),
+        }),
+      )
+      .max(200)
+      .optional(),
     keyframeCount: z.number().int().min(2).max(6).optional().default(4),
     durationSeconds: z.number().int().min(1).max(15).optional().default(6),
     aspectRatio: z.enum(["16:9", "9:16"]).optional().default("16:9"),
@@ -8856,6 +9053,7 @@ export async function gameRoutes(app: FastifyInstance) {
       const rawNarration = await resolveMessageContentForSwipe(chats, message, input.swipeIndex);
       const sourceNarration = compactStoryboardSourceNarration(stripGmCommandTags(rawNarration));
       if (!sourceNarration) return reply.status(400).send({ error: "This GM turn has no narration to storyboard." });
+      const sourceSections = normalizeStoryboardSections(input.sections, sourceNarration);
 
       const meta = parseMeta(chat.metadata);
       const enableGen = !!meta.enableSpriteGeneration;
@@ -8899,6 +9097,7 @@ export async function gameRoutes(app: FastifyInstance) {
         setupConfig: setupCfg,
         latestState: fallbackState,
         sourceNarration,
+        sections: sourceSections,
         keyframeCount: input.keyframeCount,
         durationSeconds: input.durationSeconds,
         aspectRatio: input.aspectRatio,
@@ -8932,6 +9131,7 @@ export async function gameRoutes(app: FastifyInstance) {
         if (debugLogsEnabled) debugLog("[debug/game/storyboard-director] raw response:\n%s", rawPlan);
         plan = sanitizeStoryboardPlan(parseJSON(rawPlan), {
           sourceNarration,
+          sections: sourceSections,
           keyframeCount: input.keyframeCount,
           durationSeconds: input.durationSeconds,
           aspectRatio: input.aspectRatio,
@@ -8944,6 +9144,7 @@ export async function gameRoutes(app: FastifyInstance) {
         logger.warn(err, "[game/storyboard] Prompt Director failed; using fallback storyboard planner");
         plan = fallbackStoryboardPlan({
           sourceNarration,
+          sections: sourceSections,
           keyframeCount: input.keyframeCount,
           durationSeconds: input.durationSeconds,
           aspectRatio: input.aspectRatio,
@@ -8976,6 +9177,10 @@ export async function gameRoutes(app: FastifyInstance) {
         plan.keyframes.map((frame, index) => ({
           index,
           title: frame.title,
+          sectionStartIndex: frame.sectionStartIndex,
+          sectionEndIndex: frame.sectionEndIndex,
+          anchorQuote: frame.anchorQuote,
+          anchorKind: frame.anchorKind,
           narrationBeat: frame.narrationBeat,
           mangaPanelPrompt: frame.mangaPanelPrompt,
           imagePrompt: frame.imagePrompt,

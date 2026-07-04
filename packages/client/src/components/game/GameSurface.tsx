@@ -52,6 +52,7 @@ import {
   gameStoryboardKeys,
   useGameTurnStoryboards,
   useGenerateGameTurnStoryboard,
+  type GenerateGameTurnStoryboardInput,
 } from "../../hooks/use-game-storyboards";
 import {
   chatKeys,
@@ -101,6 +102,8 @@ import type {
   GameMap,
   GameActiveState,
   GeneratedSceneVideo,
+  GameTurnStoryboard,
+  GameTurnStoryboardKeyframe,
   CombatInitState,
   CombatPartyMember,
   CombatEnemy,
@@ -181,6 +184,8 @@ type JournalReadable = ReadableTag & {
   sourceMessageId?: string | null;
   sourceSegmentIndex?: number | null;
 };
+
+type GameStoryboardSourceSection = NonNullable<GenerateGameTurnStoryboardInput["sections"]>[number];
 
 type GameAssetGenerationPayload = {
   chatId: string;
@@ -1938,6 +1943,65 @@ function formatNarrationSegmentForContext(segment: NarrationSegment, edit?: Game
   return trimmed;
 }
 
+function buildStoryboardSectionsFromMessage(
+  message: Message | null,
+  segmentEdits: Map<string, GameSegmentEdit>,
+  segmentDeletes: Set<string>,
+): GameStoryboardSourceSection[] {
+  if (!message?.id || !message.content) return [];
+  return parseNarrationSegments(message, EMPTY_GAME_SPEAKER_COLORS)
+    .map((segment, fallbackIndex): GameStoryboardSourceSection | null => {
+      const sourceIndex = segment.sourceSegmentIndex ?? fallbackIndex;
+      if (segmentDeletes.has(`${message.id}:${sourceIndex}`)) return null;
+      const content = formatNarrationSegmentForContext(segment, segmentEdits.get(`${message.id}:${sourceIndex}`));
+      if (!content) return null;
+      return {
+        index: sourceIndex,
+        kind: segment.type,
+        speaker: segment.speaker?.trim() || null,
+        content: content.slice(0, 6000),
+      };
+    })
+    .filter((section): section is GameStoryboardSourceSection => Boolean(section));
+}
+
+function findStoryboardKeyframeForSegment(
+  frames: GameTurnStoryboardKeyframe[],
+  segmentIndex: number | null,
+): GameTurnStoryboardKeyframe | null {
+  if (frames.length === 0) return null;
+  const sorted = [...frames].sort((a, b) => a.index - b.index);
+  if (segmentIndex == null || !Number.isFinite(segmentIndex)) return sorted[0] ?? null;
+
+  const exact = sorted.find((frame) => {
+    const start = frame.sectionStartIndex ?? frame.sectionEndIndex;
+    const end = frame.sectionEndIndex ?? frame.sectionStartIndex;
+    if (start == null || end == null) return false;
+    return segmentIndex >= Math.min(start, end) && segmentIndex <= Math.max(start, end);
+  });
+  if (exact) return exact;
+
+  const anchored = sorted.filter((frame) => frame.sectionStartIndex != null || frame.sectionEndIndex != null);
+  if (anchored.length === 0) return sorted[0] ?? null;
+  return anchored.reduce((best, frame) => {
+    const bestStart = best.sectionStartIndex ?? best.sectionEndIndex ?? 0;
+    const bestEnd = best.sectionEndIndex ?? best.sectionStartIndex ?? bestStart;
+    const frameStart = frame.sectionStartIndex ?? frame.sectionEndIndex ?? 0;
+    const frameEnd = frame.sectionEndIndex ?? frame.sectionStartIndex ?? frameStart;
+    const bestCenter = (bestStart + bestEnd) / 2;
+    const frameCenter = (frameStart + frameEnd) / 2;
+    return Math.abs(frameCenter - segmentIndex) < Math.abs(bestCenter - segmentIndex) ? frame : best;
+  });
+}
+
+function formatStoryboardSectionLabel(frame: GameTurnStoryboardKeyframe): string {
+  const start = frame.sectionStartIndex ?? frame.sectionEndIndex;
+  const end = frame.sectionEndIndex ?? frame.sectionStartIndex;
+  if (start == null || end == null) return `Keyframe ${frame.index + 1}`;
+  if (start === end) return `Section ${start + 1}`;
+  return `Sections ${Math.min(start, end) + 1}-${Math.max(start, end) + 1}`;
+}
+
 function buildSegmentEditMap(chatMeta: Record<string, unknown>): Map<string, GameSegmentEdit> {
   const map = new Map<string, GameSegmentEdit>();
   for (const [key, value] of Object.entries(chatMeta)) {
@@ -2544,6 +2608,7 @@ function GameSurfaceComponent({
   const [manualBackgroundGenerating, setManualBackgroundGenerating] = useState(false);
   const [sceneVideoGenerating, setSceneVideoGenerating] = useState(false);
   const [sceneVideoFailed, setSceneVideoFailed] = useState(false);
+  const [activeStoryboardSegmentIndex, setActiveStoryboardSegmentIndex] = useState<number | null>(null);
   const [failedNpcAvatarNames, setFailedNpcAvatarNames] = useState<Set<string>>(() => new Set());
   const [imagePromptReviewItems, setImagePromptReviewItems] = useState<GameImagePromptReviewItem[]>([]);
   const [imagePromptReviewSubmitting, setImagePromptReviewSubmitting] = useState(false);
@@ -2577,6 +2642,7 @@ function GameSurfaceComponent({
   const weatherMsgRef = useRef<string | null>(null);
   const sceneAnalysisTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoAssetGenerationKeyRef = useRef<string | null>(null);
+  const autoStoryboardGenerationKeyRef = useRef<string | null>(null);
 
   const closeGameFloatingPanels = useCallback(() => {
     setSessionPanelOpen(false);
@@ -2845,6 +2911,7 @@ function GameSurfaceComponent({
   // Apply segment-tied effects when the user progresses to a new segment
   const handleSegmentEnter = useCallback(
     (segmentIndex: number) => {
+      setActiveStoryboardSegmentIndex(Number.isFinite(segmentIndex) ? segmentIndex : null);
       useGameModeStore.getState().setDiceRollResult(null);
       const sceneEffectsApplied = appliedSegmentsRef.current.has(segmentIndex);
       const inventoryApplied = appliedInventorySegmentsRef.current.has(segmentIndex);
@@ -3221,7 +3288,10 @@ function GameSurfaceComponent({
     latestAssistantSwipeIndex,
     !!latestAssistantMsg,
   );
-  const latestTurnStoryboard = turnStoryboardsQuery.data?.[0] ?? null;
+  const turnStoryboardRows = turnStoryboardsQuery.data;
+  const turnStoryboardsLoading = turnStoryboardsQuery.isLoading;
+  const turnStoryboardsFetching = turnStoryboardsQuery.isFetching;
+  const latestTurnStoryboard = turnStoryboardRows?.[0] ?? null;
   const generateTurnStoryboard = useGenerateGameTurnStoryboard();
   const storyboardGenerating = generateTurnStoryboard.isPending;
 
@@ -3264,6 +3334,14 @@ function GameSurfaceComponent({
     }
     return visibleText.join("\n").trim();
   }, [latestAssistantMsg, segmentDeletes, segmentEdits]);
+  const latestAssistantStoryboardSections = useMemo(
+    () => buildStoryboardSectionsFromMessage(latestAssistantMsg, segmentEdits, segmentDeletes),
+    [latestAssistantMsg, segmentDeletes, segmentEdits],
+  );
+  const activeStoryboardKeyframe = useMemo(
+    () => findStoryboardKeyframeForSegment(latestTurnStoryboard?.keyframes ?? [], activeStoryboardSegmentIndex),
+    [activeStoryboardSegmentIndex, latestTurnStoryboard?.keyframes],
+  );
 
   const combatLogEntries = useMemo(
     () =>
@@ -3945,6 +4023,10 @@ function GameSurfaceComponent({
   }, [segmentStorageKey, latestAssistantMsg?.id, chatMeta.gameNarrationIndex, chatMeta.gameNarrationMessageId]);
 
   const restoredSegmentIndex = restoredNarrationState.index;
+  useEffect(() => {
+    setActiveStoryboardSegmentIndex(latestAssistantMsg?.id ? restoredSegmentIndex : null);
+    autoStoryboardGenerationKeyRef.current = null;
+  }, [latestAssistantMsg?.id, latestAssistantSwipeIndex, restoredSegmentIndex]);
 
   // Check if async scene preparation exists (sidecar or connection-based scene model)
   const hasAsyncScenePrep = useMemo(() => {
@@ -5071,6 +5153,7 @@ function GameSurfaceComponent({
         chatId: activeChatId,
         messageId: latestAssistantMsg.id,
         swipeIndex: latestAssistantSwipeIndex,
+        sections: latestAssistantStoryboardSections,
         generateVideos: gameVideoGenerationEnabled,
         debugMode: useUIStore.getState().debugMode,
       });
@@ -5098,11 +5181,82 @@ function GameSurfaceComponent({
     gameVideoGenerationEnabled,
     generateTurnStoryboard,
     latestAssistantMsg?.id,
+    latestAssistantStoryboardSections,
     latestAssistantSwipeIndex,
     queryClient,
     sceneVideosQuery,
     storyboardGenerating,
     turnStoryboardsQuery,
+  ]);
+
+  useEffect(() => {
+    if (!activeChatId || !latestAssistantMsg?.id || !latestAssistantMsg.content) return;
+    if (!gameImageGenerationEnabled) {
+      autoStoryboardGenerationKeyRef.current = null;
+      return;
+    }
+    if (isStreaming || scenePreparing || pendingAssetGeneration || storyboardGenerating) return;
+    if (turnStoryboardsLoading || turnStoryboardsFetching) return;
+    if (latestAssistantStoryboardSections.length === 0) return;
+    if ((turnStoryboardRows?.length ?? 0) > 0) return;
+
+    const lastSection = latestAssistantStoryboardSections[latestAssistantStoryboardSections.length - 1];
+    const payloadKey = [
+      activeChatId,
+      latestAssistantMsg.id,
+      latestAssistantSwipeIndex,
+      latestAssistantMsg.content.length,
+      latestAssistantStoryboardSections.length,
+      lastSection?.index ?? 0,
+      lastSection?.content.length ?? 0,
+    ].join(":");
+    if (autoStoryboardGenerationKeyRef.current === payloadKey) return;
+    autoStoryboardGenerationKeyRef.current = payloadKey;
+
+    void generateTurnStoryboard
+      .mutateAsync({
+        chatId: activeChatId,
+        messageId: latestAssistantMsg.id,
+        swipeIndex: latestAssistantSwipeIndex,
+        sections: latestAssistantStoryboardSections,
+        generateVideos: gameVideoGenerationEnabled,
+        debugMode: useUIStore.getState().debugMode,
+      })
+      .then((result) => {
+        queryClient.setQueryData(
+          gameStoryboardKeys.turn(activeChatId, latestAssistantMsg.id, latestAssistantSwipeIndex),
+          (existing: GameTurnStoryboard[] | undefined) => [
+            result.storyboard,
+            ...(existing ?? []).filter((storyboard) => storyboard.id !== result.storyboard.id),
+          ],
+        );
+        void queryClient.invalidateQueries({ queryKey: ["gallery", activeChatId] });
+        void queryClient.invalidateQueries({ queryKey: ["gallery", "assets", activeChatId] });
+        void queryClient.invalidateQueries({ queryKey: ["gallery", "scene-videos", activeChatId] });
+        void queryClient.invalidateQueries({ queryKey: ["game", "scene-videos", activeChatId] });
+        void sceneVideosQuery.refetch();
+      })
+      .catch((error) => {
+        console.warn("[game/storyboard] auto storyboard generation failed", error);
+      });
+  }, [
+    activeChatId,
+    gameImageGenerationEnabled,
+    gameVideoGenerationEnabled,
+    generateTurnStoryboard,
+    isStreaming,
+    latestAssistantMsg?.content,
+    latestAssistantMsg?.id,
+    latestAssistantStoryboardSections,
+    latestAssistantSwipeIndex,
+    pendingAssetGeneration,
+    queryClient,
+    scenePreparing,
+    sceneVideosQuery,
+    storyboardGenerating,
+    turnStoryboardRows,
+    turnStoryboardsFetching,
+    turnStoryboardsLoading,
   ]);
 
   useEffect(() => {
@@ -9038,6 +9192,83 @@ function GameSurfaceComponent({
     return mobile ? renderGameMobilePortal(panel) : panel;
   };
 
+  const renderStoryboardInlineViewer = () => {
+    if (!latestAssistantMsg?.id) return null;
+    if (!latestTurnStoryboard && !storyboardGenerating) return null;
+
+    const frame = activeStoryboardKeyframe;
+    const framePosition =
+      latestTurnStoryboard && frame
+        ? Math.max(0, latestTurnStoryboard.keyframes.findIndex((item) => item.id === frame.id))
+        : 0;
+
+    return (
+      <div className="pointer-events-auto absolute left-3 right-3 top-[4.75rem] z-30 mx-auto w-auto max-w-[24rem] overflow-hidden rounded-xl border border-white/15 bg-black/75 shadow-2xl backdrop-blur-md sm:left-auto sm:right-4 sm:top-[4.5rem] sm:w-[min(23rem,calc(100vw-2rem))]">
+        <div className="flex items-center justify-between gap-2 border-b border-white/10 px-3 py-2">
+          <div className="flex min-w-0 items-center gap-2 text-[0.6875rem] font-semibold uppercase tracking-wide text-white/75">
+            <PanelsTopLeft size={13} className="shrink-0 text-[var(--primary)]" />
+            <span className="truncate">Storyboard</span>
+          </div>
+          <span className="shrink-0 text-[0.625rem] text-white/45">
+            {frame ? formatStoryboardSectionLabel(frame) : "Rendering"}
+          </span>
+        </div>
+
+        {frame?.video ? (
+          <video
+            key={frame.video.id}
+            src={frame.video.url}
+            autoPlay
+            loop
+            muted
+            playsInline
+            className="aspect-video w-full bg-black object-cover"
+          />
+        ) : frame?.image ? (
+          <img
+            src={frame.image.url}
+            alt={frame.title || `Storyboard keyframe ${frame.index + 1}`}
+            className="aspect-video w-full bg-black object-cover"
+          />
+        ) : (
+          <div className="flex aspect-video w-full items-center justify-center gap-2 bg-black/45 text-xs text-white/55">
+            {storyboardGenerating ? <Loader2 size={14} className="animate-spin" /> : null}
+            {frame ? frame.status.replace("_", " ") : "Creating storyboard"}
+          </div>
+        )}
+
+        <div className="space-y-2 px-3 py-2.5">
+          <div className="flex items-start justify-between gap-2">
+            <p className="min-w-0 truncate text-xs font-semibold text-white/90">
+              {frame?.title || latestTurnStoryboard?.title || "Storyboard turn"}
+            </p>
+            {latestTurnStoryboard?.keyframes.length ? (
+              <span className="shrink-0 text-[0.625rem] text-white/45">
+                {framePosition + 1}/{latestTurnStoryboard.keyframes.length}
+              </span>
+            ) : null}
+          </div>
+          <p className="line-clamp-2 text-[0.6875rem] leading-4 text-white/58">
+            {frame?.anchorQuote || frame?.narrationBeat || latestTurnStoryboard?.error || "Generating keyframes..."}
+          </p>
+          {latestTurnStoryboard?.keyframes.length ? (
+            <div className="flex gap-1">
+              {latestTurnStoryboard.keyframes.map((item) => (
+                <span
+                  key={item.id}
+                  className={cn(
+                    "h-1 flex-1 rounded-full transition-colors",
+                    frame?.id === item.id ? "bg-[var(--primary)]" : "bg-white/15",
+                  )}
+                />
+              ))}
+            </div>
+          ) : null}
+        </div>
+      </div>
+    );
+  };
+
   const renderGameAssetsPanel = (mobile = false) => {
     const panel = (
       <div
@@ -10114,6 +10345,8 @@ function GameSurfaceComponent({
                     />
                   );
                 })()}
+
+                {renderStoryboardInlineViewer()}
 
                 {/* QTE overlay — absolute, centered */}
                 {activeQte && sessionInteractive && (

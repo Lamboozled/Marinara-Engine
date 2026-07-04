@@ -23,6 +23,10 @@ export interface CreateGameTurnStoryboardInput {
 export interface CreateGameTurnStoryboardKeyframeInput {
   index: number;
   title?: string;
+  sectionStartIndex?: number | null;
+  sectionEndIndex?: number | null;
+  anchorQuote?: string;
+  anchorKind?: string;
   narrationBeat?: string;
   mangaPanelPrompt?: string;
   imagePrompt?: string;
@@ -120,6 +124,10 @@ export function createGameStoryboardsStorage(db: DB) {
             storyboardId,
             index: frame.index,
             title: frame.title ?? "",
+            sectionStartIndex: frame.sectionStartIndex ?? null,
+            sectionEndIndex: frame.sectionEndIndex ?? null,
+            anchorQuote: frame.anchorQuote ?? "",
+            anchorKind: frame.anchorKind ?? "",
             narrationBeat: frame.narrationBeat ?? "",
             mangaPanelPrompt: frame.mangaPanelPrompt ?? "",
             imagePrompt: frame.imagePrompt ?? "",

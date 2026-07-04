@@ -634,6 +634,10 @@ export interface GameTurnStoryboardKeyframe {
   storyboardId: string;
   index: number;
   title: string;
+  sectionStartIndex: number | null;
+  sectionEndIndex: number | null;
+  anchorQuote: string;
+  anchorKind: "narration" | "dialogue" | "readable" | "system" | "";
   narrationBeat: string;
   mangaPanelPrompt: string;
   imagePrompt: string;

@@ -262,6 +262,7 @@ export const GAME_NARRATION_SUMMARIZER: PromptOverrideKeyDef<GameNarrationSummar
 
 export interface GameStoryboardDirectorCtx extends Record<string, string | number | undefined> {
   gameContextBlock: string;
+  sourceSectionsBlock: string;
   sourceNarration: string;
   keyframeCount: number;
   durationSeconds: number;
@@ -284,6 +285,13 @@ export const GAME_STORYBOARD_DIRECTOR: PromptOverrideKeyDef<GameStoryboardDirect
       description: "The stripped GM narration for one completed Game Mode turn.",
       example: "Korr drops to one knee in the rain while Lyra steadies herself over the fallen blade.",
     },
+    {
+      name: "sourceSectionsBlock",
+      description:
+        "Pre-formatted <turn_sections> block with stable narration section indices from the reader UI.",
+      example:
+        '<turn_sections>\n<section index="0" kind="narration">Korr drops to one knee.</section>\n<section index="1" kind="dialogue" speaker="Lyra">Stay down.</section>\n</turn_sections>',
+    },
     { name: "keyframeCount", description: "Target number of storyboard frames.", example: "4" },
     { name: "durationSeconds", description: "Default video duration per keyframe.", example: "6" },
     { name: "aspectRatio", description: "Default output aspect ratio.", example: "16:9" },
@@ -295,16 +303,20 @@ export const GAME_STORYBOARD_DIRECTOR: PromptOverrideKeyDef<GameStoryboardDirect
       `Create ${ctx.keyframeCount} ordered keyframes unless the narration is too short; never create fewer than 2 or more than 6.`,
       `Each keyframe should describe one manga illustration panel and one animation prompt that could be generated from that panel as a ${ctx.durationSeconds}-second ${ctx.aspectRatio} clip.`,
       "Use only the GM narration as the story source. Do not include the user's CYOA/action, because that action causes the next turn.",
+      "Use the supplied turn_sections indices to anchor every keyframe to the story text. Prefer contiguous section ranges that cover the whole turn in order.",
+      "For each keyframe, set sectionStartIndex and sectionEndIndex to the first and last covered section indices. Set anchorQuote to a short exact phrase from those sections, and anchorKind to the dominant section kind.",
       "Preserve continuity across frames: character identity, outfits, props, wounds, lighting, location, and emotional escalation.",
       "Manga panel prompts should be still-image prompts: composition, character staging, expression, camera angle, lighting, linework, screentone/inking, and background detail.",
       "Video prompts should animate only the current panel: camera drift, hair/cloth/atmosphere motion, eye movement, gesture, impact, or focus shift. Avoid cuts inside a single clip.",
       "Do not add captions, dialogue lettering, UI, subtitles, logos, watermarks, speech bubbles, or manga SFX text.",
       "Return strict JSON only with this shape:",
-      '{ "title": string, "summary": string, "keyframes": [ { "title": string, "narrationBeat": string, "mangaPanelPrompt": string, "imagePrompt": string, "videoPrompt": string, "characters": string[], "continuityNotes": string, "cameraMotion": string, "transitionHint": string, "durationSeconds": number, "aspectRatio": "16:9" | "9:16" } ] }',
+      '{ "title": string, "summary": string, "keyframes": [ { "title": string, "sectionStartIndex": number, "sectionEndIndex": number, "anchorQuote": string, "anchorKind": "narration" | "dialogue" | "readable" | "system", "narrationBeat": string, "mangaPanelPrompt": string, "imagePrompt": string, "videoPrompt": string, "characters": string[], "continuityNotes": string, "cameraMotion": string, "transitionHint": string, "durationSeconds": number, "aspectRatio": "16:9" | "9:16" } ] }',
     ].join("\n"),
   exampleContext: {
     gameContextBlock:
       "<game_context>\nMode: exploration\nLocation: moonlit graveyard\nWeather: cold rain\nArt style: manga ink and watercolor\n</game_context>",
+    sourceSectionsBlock:
+      '<turn_sections>\n<section index="0" kind="narration">Korr drops to one knee in the rain.</section>\n<section index="1" kind="dialogue" speaker="Lyra">Stay down.</section>\n</turn_sections>',
     sourceNarration: "Korr drops to one knee in the rain while Lyra steadies herself over the fallen blade.",
     keyframeCount: 4,
     durationSeconds: 6,

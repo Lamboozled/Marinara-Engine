@@ -13,6 +13,12 @@ export type GenerateGameTurnStoryboardInput = {
   chatId: string;
   messageId: string;
   swipeIndex?: number;
+  sections?: Array<{
+    index: number;
+    kind: "narration" | "dialogue" | "readable" | "system";
+    speaker?: string | null;
+    content: string;
+  }>;
   keyframeCount?: number;
   durationSeconds?: number;
   aspectRatio?: GameSceneVideoAspectRatio;

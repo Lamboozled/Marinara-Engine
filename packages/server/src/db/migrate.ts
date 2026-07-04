@@ -432,6 +432,10 @@ const CREATE_TABLES: string[] = [
     storyboard_id TEXT NOT NULL REFERENCES game_turn_storyboards(id) ON DELETE CASCADE,
     "index" INTEGER NOT NULL,
     title TEXT NOT NULL DEFAULT '',
+    section_start_index INTEGER,
+    section_end_index INTEGER,
+    anchor_quote TEXT NOT NULL DEFAULT '',
+    anchor_kind TEXT NOT NULL DEFAULT '',
     narration_beat TEXT NOT NULL DEFAULT '',
     manga_panel_prompt TEXT NOT NULL DEFAULT '',
     image_prompt TEXT NOT NULL DEFAULT '',
@@ -1056,6 +1060,26 @@ const COLUMN_MIGRATIONS: ColumnMigration[] = [
     table: "installed_extensions",
     column: "server_js",
     definition: "TEXT",
+  },
+  {
+    table: "game_turn_storyboard_keyframes",
+    column: "section_start_index",
+    definition: "INTEGER",
+  },
+  {
+    table: "game_turn_storyboard_keyframes",
+    column: "section_end_index",
+    definition: "INTEGER",
+  },
+  {
+    table: "game_turn_storyboard_keyframes",
+    column: "anchor_quote",
+    definition: "TEXT NOT NULL DEFAULT ''",
+  },
+  {
+    table: "game_turn_storyboard_keyframes",
+    column: "anchor_kind",
+    definition: "TEXT NOT NULL DEFAULT ''",
   },
 ];
 
