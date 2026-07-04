@@ -5306,6 +5306,7 @@ function GameSurfaceComponent({
         galleryStore.pinVideo(result.video);
         galleryStore.syncLatestViewer({ ...result.video, kind: "video" as const });
         void queryClient.invalidateQueries({ queryKey: ["gallery", "scene-videos", activeChatId] });
+        void queryClient.invalidateQueries({ queryKey: ["game", "scene-videos", activeChatId] });
         await sceneVideosQuery.refetch();
         toast.success("Scene video generated.", { duration: 1800 });
       } catch (error) {

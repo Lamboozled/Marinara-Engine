@@ -280,6 +280,9 @@ function withVideoGenerationDeadline<T>(
 ): Promise<T> {
   const controller = new AbortController();
   const onAbort = () => controller.abort(externalSignal?.reason);
+  if (externalSignal?.aborted) {
+    controller.abort(externalSignal.reason);
+  }
   const timeout = setTimeout(() => controller.abort(new VideoGenerationDeadlineError(timeoutMs)), timeoutMs);
   if (externalSignal?.aborted) {
     controller.abort(externalSignal.reason);
