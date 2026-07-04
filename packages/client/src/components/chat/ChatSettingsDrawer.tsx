@@ -1313,6 +1313,7 @@ export function ChatSettingsDrawer({
   const gameImageUseAvatarReferences = metadata.gameImageUseAvatarReferences !== false;
   const gameImageIncludeCharacterAppearance = metadata.gameImageIncludeCharacterAppearance !== false;
   const gameImageAutoGenerationEnabled = metadata.gameImageAutoGenerationEnabled !== false;
+  const gameStoryboardAutoGenerationEnabled = metadata.gameStoryboardAutoGenerationEnabled === true;
   const updateIllustratorPromptConnection = useCallback(
     (connectionId: string) => {
       updateMeta.mutate({
@@ -6722,7 +6723,7 @@ export function ChatSettingsDrawer({
                   <AgentSettingsCard
                     icon={<Film size="0.75rem" className="mt-0.5 text-[var(--primary)]" />}
                     title="Scene Videos"
-                    description="Generate manual MP4 scene videos from the latest game illustration."
+                    description="Generate MP4 scene videos and optional storyboard animations from game illustrations."
                   >
                     <label className="flex flex-col gap-1">
                       <span className="text-[0.625rem] font-medium text-[var(--foreground)]">Video Connection</span>
@@ -6747,8 +6748,19 @@ export function ChatSettingsDrawer({
                         No video generation connections found. Add one in Settings -&gt; Connections.
                       </p>
                     )}
+                    <AgentSettingsToggle
+                      label="Automatic Storyboard Animations"
+                      description="Automatically create storyboard keyframes after completed GM turns, with animation clips when a video connection is selected. Manual storyboard controls stay available when this is off."
+                      enabled={gameStoryboardAutoGenerationEnabled}
+                      onToggle={() =>
+                        updateMeta.mutate({
+                          id: chat.id,
+                          gameStoryboardAutoGenerationEnabled: !gameStoryboardAutoGenerationEnabled,
+                        })
+                      }
+                    />
                     <p className="text-[0.625rem] text-[var(--muted-foreground)]">
-                      Scene videos use the latest generated scene illustration as the first frame and the editable Omni
+                      Scene videos use the latest generated scene illustration as the first frame and the editable
                       scene-video prompt template.
                     </p>
                   </AgentSettingsCard>

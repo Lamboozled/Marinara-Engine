@@ -3593,6 +3593,7 @@ function GameSurfaceComponent({
     typeof chatMeta.gameVideoConnectionId === "string" && chatMeta.gameVideoConnectionId.trim().length > 0;
   const gameImageAutoGenerationEnabled =
     gameImageGenerationEnabled && chatMeta.gameImageAutoGenerationEnabled !== false;
+  const gameStoryboardAutoGenerationEnabled = chatMeta.gameStoryboardAutoGenerationEnabled === true;
   const gameImageUseAvatarReferences = chatMeta.gameImageUseAvatarReferences !== false;
   const gameImageIncludeCharacterAppearance = chatMeta.gameImageIncludeCharacterAppearance !== false;
 
@@ -5362,7 +5363,7 @@ function GameSurfaceComponent({
 
   useEffect(() => {
     if (!activeChatId || !latestAssistantMsg?.id || !latestAssistantMsg.content) return;
-    if (!gameImageGenerationEnabled) {
+    if (!gameStoryboardAutoGenerationEnabled || !gameImageGenerationEnabled) {
       autoStoryboardGenerationKeyRef.current = null;
       return;
     }
@@ -5413,6 +5414,7 @@ function GameSurfaceComponent({
   }, [
     activeChatId,
     gameImageGenerationEnabled,
+    gameStoryboardAutoGenerationEnabled,
     gameVideoGenerationEnabled,
     generateTurnStoryboard,
     isStreaming,
