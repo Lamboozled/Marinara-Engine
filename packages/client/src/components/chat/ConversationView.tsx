@@ -40,7 +40,12 @@ import { useThrottledStreamBuffer } from "../../hooks/use-throttled-stream-buffe
 import { useConversationCustomEmojis } from "../../hooks/use-conversation-custom-emojis";
 import { useConversationCustomStickers } from "../../hooks/use-conversation-custom-stickers";
 import type { CharacterMap, MessageSelectionToggle, PersonaInfo } from "./chat-area.types";
-import { normalizeTextForMatch, parseGroupedSpeakerSegments, type Message } from "@marinara-engine/shared";
+import {
+  normalizeTextForMatch,
+  parseGroupedSpeakerSegments,
+  stripLeadingMessageTimestamps,
+  type Message,
+} from "@marinara-engine/shared";
 
 const ConversationAutonomousEffects = lazy(async () => {
   const module = await import("./ConversationAutonomousEffects");
@@ -583,11 +588,9 @@ export function ConversationView({
   // Assistant multi-line reveal is presentation-only: a real message can carry
   // display parts, but actions/edit/delete/regenerate still target one message.
   // Strip leaked timestamps like [16:08] or [18.03.2026] from assistant content.
-  const stripTimestamps = (text: string) =>
-    text
-      .replace(/^(\s*\[\d{1,2}[:.]\d{2}\]\s*)+/gm, "")
-      .replace(/^(\s*\[\d{1,2}\.\d{1,2}\.\d{4}\]\s*)+/gm, "")
-      .trim();
+  // Shared with the server (reaction segment-index resolution segments the same
+  // stripped shape) — don't reintroduce a local variant.
+  const stripTimestamps = stripLeadingMessageTimestamps;
 
   const renderedItems = useMemo(() => {
     const visibleMessages = transcriptWindow.messages;

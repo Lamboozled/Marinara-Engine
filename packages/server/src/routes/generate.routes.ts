@@ -36,6 +36,7 @@ import {
   LOCAL_SIDECAR_CONNECTION_ID,
   normalizeTextForMatch,
   parseGroupedSpeakerSegments,
+  stripLeadingMessageTimestamps,
   type APIProvider,
   type GroupedSegment,
 } from "@marinara-engine/shared";
@@ -1381,28 +1382,42 @@ function annotateContentWithReactions(
       ? parseGroupedSpeakerSegments(promptContent, knownNames)
       : null;
 
-  // Map a resolved client-shape group onto the prompt-shape segmentation:
-  // the Nth attributable part by the same speaker on both sides.
+  // Map a resolved client-shape group onto the prompt-shape segmentation. The
+  // prompt side can carry extra attributable parts the client shape doesn't
+  // (command-only parts in conversationCommandContent, leaked-timestamp lines),
+  // so a plain per-speaker ordinal can drift — the mapped group must also
+  // CONTAIN the client part's identifying first line, or we scan the speaker's
+  // other prompt parts for it, or give up (end-note fallback). Position is the
+  // inline note's only targeting signal; never inject on an unverified match.
   const promptGroupFor = (clientIndex: number): GroupedSegment | null => {
     if (!clientGroups || !promptGroups) return null;
     const target = clientGroups[clientIndex]!;
     const norm = normalizeTextForMatch(target.speaker!);
+    const marker =
+      target.lines
+        .flatMap((chunk) => chunk.split("\n"))
+        .map((line) => line.trim())
+        .find((line) => line.length > 0) ?? "";
+    if (!marker) return null;
+    const sameSpeaker = promptGroups.filter(
+      (g) => isAttributableGroup(g) && normalizeTextForMatch(g.speaker!) === norm,
+    );
+    if (sameSpeaker.length === 0) return null;
     let ordinal = 0;
     for (let i = 0; i < clientIndex; i++) {
       const g = clientGroups[i]!;
       if (isAttributableGroup(g) && normalizeTextForMatch(g.speaker!) === norm) ordinal++;
     }
-    let seen = 0;
-    for (const g of promptGroups) {
-      if (!isAttributableGroup(g) || normalizeTextForMatch(g.speaker!) !== norm) continue;
-      if (seen === ordinal) return g;
-      seen++;
-    }
-    return null;
+    const containsMarker = (g: GroupedSegment) => g.lines.some((chunk) => chunk.includes(marker));
+    const ordinalPick = sameSpeaker[ordinal];
+    if (ordinalPick && containsMarker(ordinalPick)) return ordinalPick;
+    return sameSpeaker.find(containsMarker) ?? null;
   };
 
-  const inlineByGroup = new Map<GroupedSegment, string[]>();
-  const endParts: string[] = [];
+  type ResolvedNote =
+    | { kind: "inline"; phrase: string; speakerNorm: string; group: GroupedSegment }
+    | { kind: "end"; phrase: string; speakerNorm: string | null; text: string };
+  const notes: ResolvedNote[] = [];
   for (const entry of reactions as Array<{
     emoji?: unknown;
     by?: unknown;
@@ -1439,16 +1454,19 @@ function annotateContentWithReactions(
     if (segAligned) {
       const promptGroup = promptGroupFor(segIdx!);
       if (promptGroup) {
-        const lines = inlineByGroup.get(promptGroup) ?? [];
-        if (!lines.includes(phrase)) lines.push(phrase);
-        inlineByGroup.set(promptGroup, lines);
+        notes.push({ kind: "inline", phrase, speakerNorm: segSpeakerNorm!, group: promptGroup });
         continue;
       }
       // Part exists but isn't locatable in the prompt-shaped content — fall
       // back to the quoted end note so the target stays unambiguous.
       const canonical = knownSpeakersByNorm.get(segSpeakerNorm!);
       if (canonical) {
-        endParts.push(`${phrase} to ${canonical}'s part ("${excerptSegmentText(seg!.lines)}")`);
+        notes.push({
+          kind: "end",
+          phrase,
+          speakerNorm: segSpeakerNorm!,
+          text: `${phrase} to ${canonical}'s part ("${excerptSegmentText(seg!.lines)}")`,
+        });
         continue;
       }
     } else if (wanted !== null && clientGroups) {
@@ -1457,18 +1475,40 @@ function annotateContentWithReactions(
       );
       const canonical = speakerGroup ? knownSpeakersByNorm.get(wanted) : undefined;
       if (canonical) {
-        endParts.push(`${phrase} to ${canonical}'s part`);
+        notes.push({ kind: "end", phrase, speakerNorm: wanted, text: `${phrase} to ${canonical}'s part` });
         continue;
       }
     }
-    endParts.push(phrase);
+    notes.push({ kind: "end", phrase, speakerNorm: null, text: phrase });
   }
 
-  // Inject inline notes back-to-front so earlier offsets stay valid.
+  const inlineByGroup = new Map<GroupedSegment, string[]>();
+  const inlineKeys = new Set<string>();
+  for (const note of notes) {
+    if (note.kind !== "inline") continue;
+    const lines = inlineByGroup.get(note.group) ?? [];
+    if (!lines.includes(note.phrase)) lines.push(note.phrase);
+    inlineByGroup.set(note.group, lines);
+    inlineKeys.add(`${note.phrase}\u0000${note.speakerNorm}`);
+  }
+  const endParts: string[] = [];
+  for (const note of notes) {
+    if (note.kind !== "end") continue;
+    // A stale cross-swipe twin of an inlined reaction (same wording, same target
+    // speaker) would double-report it — the inline note already covers it.
+    if (note.speakerNorm !== null && inlineKeys.has(`${note.phrase}\u0000${note.speakerNorm}`)) continue;
+    endParts.push(note.text);
+  }
+
+  // Inject inline notes back-to-front so earlier offsets stay valid. When the
+  // injection point isn't a line end (tag segments can have same-line trailing
+  // narration), push the following text onto its own line.
   let annotated = promptContent;
   const injections = [...inlineByGroup.entries()].sort((a, b) => b[0].end - a[0].end);
   for (const [group, lines] of injections) {
-    annotated = `${annotated.slice(0, group.end)}\n[${lines.join(", ")}]${annotated.slice(group.end)}`;
+    const nextChar = annotated.charAt(group.end);
+    const trailingBreak = nextChar && nextChar !== "\n" && nextChar !== "\r" ? "\n" : "";
+    annotated = `${annotated.slice(0, group.end)}\n[${lines.join(", ")}]${trailingBreak}${annotated.slice(group.end)}`;
   }
   // Dedupe end notes: entries for the same emoji+speaker can exist at different
   // stale indices (targets synced across swipes) and collapse to one wording.
@@ -3029,17 +3069,23 @@ export async function generateRoutes(app: FastifyInstance) {
             for (let i = 0; i < finalMessages.length; i++) {
               const raw = chatMessages[i];
               if (!raw) continue;
-              // Segment indexes resolve against the stored message content
-              // (timestamp-stripped) — the closest server-side shape to what
-              // the client indexed against — then map into the prompt-shaped
-              // content for the inline injection.
-              finalMessages[i]!.content = annotateContentWithReactions(
-                finalMessages[i]!.content,
-                stripLeakedTimestamps(typeof raw.content === "string" ? raw.content : String(raw.content ?? "")),
-                parseExtra(raw.extra).reactions,
-                reactionSpeakersByNorm,
-                reactorDisplayName,
-              );
+              // Segment indexes resolve against the DISPLAY shape of the stored
+              // content (shared stripLeadingMessageTimestamps — exactly what the
+              // client renders and segments), then map into the prompt-shaped
+              // content for the inline injection. Replace the message object
+              // rather than mutating it: finalMessages shares objects with the
+              // follow-up/agent message arrays, and a mutated object would get
+              // annotated a second time on a follow-up generation pass.
+              finalMessages[i] = {
+                ...finalMessages[i]!,
+                content: annotateContentWithReactions(
+                  finalMessages[i]!.content,
+                  stripLeadingMessageTimestamps(typeof raw.content === "string" ? raw.content : String(raw.content ?? "")),
+                  parseExtra(raw.extra).reactions,
+                  reactionSpeakersByNorm,
+                  reactorDisplayName,
+                ),
+              };
             }
           }
 
@@ -10327,82 +10373,138 @@ export async function generateRoutes(app: FastifyInstance) {
                       | string
                       | undefined;
                     let segmentTarget: { segment: number; speaker: string | null } | null = null;
-                    const targetChar = reactCmd.targetCharacter
-                      ? charInfo.find(
-                          (c) => normalizeTextForMatch(c.name) === normalizeTextForMatch(reactCmd.targetCharacter!),
-                        )
-                      : undefined;
-                    if (reactCmd.targetCharacter && !targetChar) {
-                      logger.debug(
-                        '[react/conversation] Unknown react target "%s" — falling back to the user message',
-                        reactCmd.targetCharacter,
-                      );
-                    }
-                    if (targetChar) {
-                      const knownNames = new Set(charInfo.map((c) => normalizeTextForMatch(c.name)));
-                      const wanted = normalizeTextForMatch(targetChar.name);
-                      // Last part by the target speaker in a message's content, or null.
-                      const lastPartBy = (content: unknown): { segment: number; speaker: string | null } | null => {
-                        const text = stripConversationPromptTimestamps(
-                          typeof content === "string" ? content : String(content ?? ""),
-                        );
-                        if (!text || text.length > REACTION_ANNOTATION_CONTENT_CAP) return null;
-                        const groups = parseGroupedSpeakerSegments(text, knownNames);
-                        if (!groups) return null;
-                        for (let gi = groups.length - 1; gi >= 0; gi--) {
-                          const g = groups[gi]!;
-                          if (
-                            g.speaker != null &&
-                            normalizeTextForMatch(g.speaker) === wanted &&
-                            g.lines.some((line) => line.trim().length > 0)
-                          ) {
-                            return { segment: gi, speaker: g.speaker };
-                          }
-                        }
-                        return null;
-                      };
-                      let resolved: { id: string; target: { segment: number; speaker: string | null } | null } | null =
-                        null;
-                      // The reply this command came from (already saved) — same-turn
-                      // reactions like reacting to another speaker's part above yours.
-                      if (messageId) {
-                        const ownMsg = await chats.getMessage(messageId);
-                        if (ownMsg) {
-                          const part = lastPartBy(ownMsg.content);
-                          if (part) resolved = { id: messageId, target: part };
+                    if (reactCmd.targetCharacter) {
+                      // Resolve names against ALL chat members (disabled ones
+                      // included) — the client renders and segments with the full
+                      // member set, so a stored segment index derived from a
+                      // narrower set would point at the wrong part.
+                      const chatMembers: Array<{ id: string; name: string }> = charInfo.map((c) => ({
+                        id: c.id,
+                        name: c.name,
+                      }));
+                      for (const cid of allCharacterIds) {
+                        if (chatMembers.some((m) => m.id === cid)) continue;
+                        const row = await chars.getById(cid);
+                        if (!row) continue;
+                        try {
+                          const name = JSON.parse(row.data as string)?.name;
+                          if (typeof name === "string" && name.trim()) chatMembers.push({ id: cid, name });
+                        } catch {
+                          // Malformed character data — not addressable as a react target.
                         }
                       }
-                      if (!resolved) {
-                        // Recent history, newest first: a merged part by the target,
-                        // or a message they authored outright (whole-message react).
-                        const recent = [...chatMessages].slice(-30).reverse() as Array<{
-                          id?: unknown;
-                          role?: unknown;
-                          content?: unknown;
-                          characterId?: unknown;
-                        }>;
-                        for (const m of recent) {
-                          if (typeof m.id !== "string" || m.role === "user") continue;
-                          if (m.characterId === targetChar.id) {
-                            resolved = { id: m.id, target: lastPartBy(m.content) };
-                            break;
-                          }
-                          const part = lastPartBy(m.content);
-                          if (part) {
-                            resolved = { id: m.id, target: part };
-                            break;
-                          }
-                        }
-                      }
-                      if (resolved) {
-                        targetId = resolved.id;
-                        segmentTarget = resolved.target;
-                      } else {
+                      const wanted = normalizeTextForMatch(reactCmd.targetCharacter);
+                      const targetChar = chatMembers.find((m) => normalizeTextForMatch(m.name) === wanted);
+                      if (!targetChar) {
                         logger.debug(
-                          '[react/conversation] No recent part by "%s" to react to — skipping targeted react',
-                          targetChar.name,
+                          '[react/conversation] Unknown react target "%s" — falling back to the user message',
+                          reactCmd.targetCharacter,
                         );
-                        continue;
+                      } else {
+                        const baseNames = new Set(chatMembers.map((m) => normalizeTextForMatch(m.name)));
+                        // A walked message's author may have been removed from the
+                        // chat; the client still segments with their name (author
+                        // fallback), so include it. Cache store lookups by id.
+                        const authorNameCache = new Map<string, string | null>();
+                        const authorNameOf = async (cid: unknown): Promise<string | null> => {
+                          if (typeof cid !== "string" || !cid) return null;
+                          const member = chatMembers.find((m) => m.id === cid);
+                          if (member) return member.name;
+                          if (authorNameCache.has(cid)) return authorNameCache.get(cid)!;
+                          let name: string | null = null;
+                          const row = await chars.getById(cid);
+                          if (row) {
+                            try {
+                              const parsedName = JSON.parse(row.data as string)?.name;
+                              if (typeof parsedName === "string" && parsedName.trim()) name = parsedName;
+                            } catch {
+                              // Malformed character data — segment without the author name.
+                            }
+                          }
+                          authorNameCache.set(cid, name);
+                          return name;
+                        };
+                        // Last part by the target speaker in a message, or null.
+                        // Segments the DISPLAY shape (shared timestamp strip) with
+                        // the client's known-name set so the stored index lands on
+                        // the same part the client renders the chip under.
+                        const lastPartBy = async (
+                          content: unknown,
+                          authorId: unknown,
+                        ): Promise<{ segment: number; speaker: string | null } | null> => {
+                          const text = stripLeadingMessageTimestamps(
+                            typeof content === "string" ? content : String(content ?? ""),
+                          );
+                          if (!text || text.length > REACTION_ANNOTATION_CONTENT_CAP) return null;
+                          const names = new Set(baseNames);
+                          const author = await authorNameOf(authorId);
+                          if (author) names.add(normalizeTextForMatch(author));
+                          const groups = parseGroupedSpeakerSegments(text, names);
+                          if (!groups) return null;
+                          for (let gi = groups.length - 1; gi >= 0; gi--) {
+                            const g = groups[gi]!;
+                            if (
+                              g.speaker != null &&
+                              normalizeTextForMatch(g.speaker) === wanted &&
+                              g.lines.some((line) => line.trim().length > 0)
+                            ) {
+                              return { segment: gi, speaker: g.speaker };
+                            }
+                          }
+                          return null;
+                        };
+                        let resolved: {
+                          id: string;
+                          target: { segment: number; speaker: string | null } | null;
+                        } | null = null;
+                        // The reply this command came from (already saved) — same-turn
+                        // reactions like reacting to another speaker's part above yours.
+                        if (messageId) {
+                          const ownMsg = await chats.getMessage(messageId);
+                          if (ownMsg) {
+                            const part = await lastPartBy(ownMsg.content, (ownMsg as { characterId?: unknown }).characterId);
+                            if (part) resolved = { id: messageId, target: part };
+                          }
+                        }
+                        if (!resolved) {
+                          // Recent history, newest first: a merged part by the target,
+                          // or a message they authored outright (whole-message react).
+                          const recent = [...chatMessages].slice(-30).reverse() as Array<{
+                            id?: unknown;
+                            role?: unknown;
+                            content?: unknown;
+                            characterId?: unknown;
+                            extra?: unknown;
+                          }>;
+                          for (const m of recent) {
+                            if (typeof m.id !== "string" || m.role === "user") continue;
+                            // Hidden command-anchor rows never render — a reaction
+                            // written there would be invisible. Keep walking.
+                            const mExtra = parseExtra(m.extra) as Record<string, unknown>;
+                            if (mExtra.hiddenFromUser === true || mExtra.commandOnly === true) continue;
+                            const contentStr = typeof m.content === "string" ? m.content : String(m.content ?? "");
+                            if (!contentStr.trim()) continue;
+                            if (m.characterId === targetChar.id) {
+                              resolved = { id: m.id, target: await lastPartBy(m.content, m.characterId) };
+                              break;
+                            }
+                            const part = await lastPartBy(m.content, m.characterId);
+                            if (part) {
+                              resolved = { id: m.id, target: part };
+                              break;
+                            }
+                          }
+                        }
+                        if (resolved) {
+                          targetId = resolved.id;
+                          segmentTarget = resolved.target;
+                        } else {
+                          logger.debug(
+                            '[react/conversation] No recent part by "%s" to react to — skipping targeted react',
+                            targetChar.name,
+                          );
+                          continue;
+                        }
                       }
                     }
 
@@ -10418,6 +10520,13 @@ export async function generateRoutes(app: FastifyInstance) {
                           segmentTarget,
                         );
                         await chats.updateMessageExtra(targetId, { reactions });
+                        // Reactions are message-level: mirror them to every swipe row
+                        // (the client's PATCH route does the same) so swiping the
+                        // target message doesn't drop the character's reaction.
+                        const targetSwipes = await chats.getSwipes(targetId);
+                        for (const swipe of targetSwipes) {
+                          await chats.updateSwipeExtra(targetId, swipe.index, { reactions });
+                        }
                         logger.info(
                           "[react/conversation] %s reacted with %s on message %s%s",
                           characterId,

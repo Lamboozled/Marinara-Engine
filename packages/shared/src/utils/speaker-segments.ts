@@ -8,13 +8,32 @@
 // ──────────────────────────────────────────────
 import { normalizeTextForMatch } from "./text-matching.js";
 
+/**
+ * Strip leaked line-leading `[HH:MM]` / `[DD.MM.YYYY]` timestamp tokens — the
+ * display shape the conversation client renders and segments. The server strips
+ * the same way before resolving reaction segment indexes, so both sides parse
+ * identical content. Only line-leading tokens go; interior text is untouched
+ * and — unlike the prompt sanitizer — trailing whitespace is preserved, so an
+ * empty `Name: ` part keeps parsing as a (filtered) speaker line on both sides.
+ */
+export function stripLeadingMessageTimestamps(text: string): string {
+  return text
+    .replace(/^(\s*\[\d{1,2}[:.]\d{2}\]\s*)+/gm, "")
+    .replace(/^(\s*\[\d{1,2}\.\d{1,2}\.\d{4}\]\s*)+/gm, "")
+    .trim();
+}
+
 /** One parsed speaker turn: the speaker's name (null = narration) + its text. */
 export interface SpeakerSegment {
   speaker: string | null;
   text: string;
   /** Character offset in the source content where this segment's raw span starts. */
   start: number;
-  /** Character offset just past this segment's content (its last non-blank line / closing tag). */
+  /**
+   * Character offset just past this segment's content: the closing tag for a
+   * tagged segment, the end of the last non-blank line for a name-prefixed one
+   * (untagged narration chunks keep their raw span, trailing whitespace included).
+   */
   end: number;
 }
 
