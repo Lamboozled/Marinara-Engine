@@ -1212,8 +1212,12 @@ export function parseCharacterCommands(content: string): {
  *
  * The authoritative command list and cleaned content come from a single whole-response
  * parse, so no command is dropped or reordered even if one spans a name boundary;
- * only the attribution is layered on. Commands with no matching segment (and text
- * before the first recognised name prefix) fall back to `fallbackCharacterId`.
+ * only the attribution is layered on. Commands with no matching segment fall back
+ * to `fallbackCharacterId`. Text ABOVE the first recognised name prefix is credited
+ * to the first named section's speaker (models park reply-opening commands like a
+ * `[react:]` header there, and crediting the generation-primary character instead
+ * deterministically mis-attributed every such command to the chat's first
+ * character — #3220); with no named sections at all it falls back as before.
  */
 export function parseCharacterCommandsBySpeaker(
   content: string,
@@ -1230,11 +1234,18 @@ export function parseCharacterCommandsBySpeaker(
 
   // Segment the response by leading "Name: " line prefixes, mirroring the client's
   // parseNamePrefixFormat so server-side attribution matches the rendered split.
-  const segments: Array<{ characterId: string | null; text: string }> = [];
+  const segments: Array<{ characterId: string | null; text: string; leading?: boolean }> = [];
   let currentId: string | null = fallbackCharacterId;
+  let inLeadingRegion = true;
   let currentLines: string[] = [];
   const flush = () => {
-    if (currentLines.length > 0) segments.push({ characterId: currentId, text: currentLines.join("\n") });
+    if (currentLines.length > 0) {
+      segments.push({
+        characterId: currentId,
+        text: currentLines.join("\n"),
+        ...(inLeadingRegion ? { leading: true } : {}),
+      });
+    }
     currentLines = [];
   };
   for (const line of content.split("\n")) {
@@ -1243,6 +1254,7 @@ export function parseCharacterCommandsBySpeaker(
       const mappedId = nameToId.get(normalizeTextForMatch(line.slice(0, colonIdx)));
       if (mappedId) {
         flush();
+        inLeadingRegion = false;
         currentId = mappedId;
         currentLines = [line.slice(colonIdx + 2)];
         continue;
@@ -1251,6 +1263,15 @@ export function parseCharacterCommandsBySpeaker(
     currentLines.push(line);
   }
   flush();
+
+  // Credit the leading region (above the first name prefix) to the speaker whose
+  // section it opens, not the generation-primary character.
+  const firstNamed = segments.find((segment) => !segment.leading);
+  if (firstNamed) {
+    for (const segment of segments) {
+      if (segment.leading) segment.characterId = firstNamed.characterId;
+    }
+  }
 
   // Build a per-command attribution queue keyed by command shape, consumed in
   // segment order so duplicate commands attribute left-to-right.

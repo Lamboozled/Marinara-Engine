@@ -834,6 +834,8 @@ function getConversationCommandKey(command: CharacterCommand): ConversationComma
       return "influence";
     case "note":
       return "note";
+    case "react":
+      return "react";
     default:
       return null;
   }
@@ -3681,13 +3683,18 @@ export async function generateRoutes(app: FastifyInstance) {
           // conversation asset context below. Whether
           // to react — and how warmly or dryly — is emergent from personality, not
           // dictated here.
-          // Gated on `conversationCommandsEnabled`: the `[react: …]` tag is parsed,
-          // stripped, and applied inside the command pipeline, which only runs when
-          // Character Commands are enabled. Advertising the syntax while that pipeline
-          // is off leaves the raw tag in the visible message with no badge (#2877).
-          if (conversationCommandsEnabled) {
+          // Gated on `conversationCommandsEnabled` + the per-command "react"
+          // toggle (#3219): the `[react: …]` tag is parsed, stripped, and applied
+          // inside the command pipeline, which only runs when Character Commands
+          // are enabled. Advertising the syntax while that pipeline is off leaves
+          // the raw tag in the visible message with no badge (#2877).
+          if (conversationCommandsEnabled && isConversationCommandEnabled(chatMeta, "react")) {
             conversationSystemPrompt +=
               '\n\nYou can react to the user\'s most recent message with a single emoji by writing [react: emoji="😂"] on its own line — any standard emoji, or a custom one you have access to as [react: emoji=":name:"]. It posts as a small badge on their message, the way you\'d react in a chat app. You can also react to another character instead by adding their name: [react: emoji="🙄" to "Character Name"] puts the badge on that character\'s most recent message. Only the [react: …] tag posts a badge — an emoji typed in your message body is just text. Use it only when it genuinely fits how your character feels in the moment; it is optional, may stand alone or sit alongside your reply, and choosing a flat reaction or none at all is itself a valid choice.';
+            if (characterIds.length > 1) {
+              conversationSystemPrompt +=
+                " In this group chat, each character reacts for themselves: write the tag inside that character's own section of the reply, directly under their name line, so the reaction is credited to them — never above the first name line.";
+            }
           }
           // ── Home Professor Mari: inject assistant knowledge & commands ──
           if (isHomeProfessorMariAssistantChat) {
@@ -10529,7 +10536,14 @@ export async function generateRoutes(app: FastifyInstance) {
                       | string
                       | undefined;
                     let segmentTarget: { segment: number; speaker: string | null } | null = null;
-                    if (reactCmd.targetCharacter) {
+                    // Models name the human too ("to \"User\"" / the persona name) —
+                    // that IS the default target, so resolve it explicitly instead
+                    // of relying on the unknown-name fallback (#3220).
+                    const targetsPersona =
+                      !!reactCmd.targetCharacter &&
+                      (normalizeTextForMatch(reactCmd.targetCharacter) === normalizeTextForMatch(personaName) ||
+                        normalizeTextForMatch(reactCmd.targetCharacter) === "user");
+                    if (reactCmd.targetCharacter && !targetsPersona) {
                       // Resolve names against ALL chat members (disabled ones
                       // included) — the client renders and segments with the full
                       // member set, so a stored segment index derived from a

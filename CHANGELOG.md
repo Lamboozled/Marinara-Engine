@@ -8,6 +8,7 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 
 - Conversation mode: emoji reactions can now target an individual character's part of a merged multi-character reply. Each speaker segment gets its own add-reaction button (next to the name) and its own reaction row; in the prompt, characters see reactions as a `[User reacted with 😹]` line directly under the exact part they were aimed at. Reactions without a segment target keep applying to the whole message, so existing chats and 1:1 conversations are unaffected (#3210).
 - Conversation mode: characters can now react to each other, not just to the user. A character writing `[react: emoji="🙄" to "Character Name"]` puts the reaction on that character's most recent part (same reply or recent history), rendered as a chip under it and shown to everyone in the prompt (e.g. `[User reacted with 😹, Aurey reacted with 🙄]`).
+- Conversation mode: character emoji reactions now have their own **Reactions** card in the per-command Commands grid (Chat Settings and the chat setup wizard), so they can be toggled independently like Selfies or Music (#3219).
 
 - Added the Agent Suite to the Chat Settings drawer's Agents section: a window listing the agents active in the current chat where you can view and edit everything they have stored — agent memory, tracker state, and custom-agent outputs — manually or with AI-assisted rewrites (select text, give an instruction, optionally attach grounding context such as character cards or active-lorebook entries, and pick a connection) (#3160).
 - Added first-class scene video generation for Game Mode, Roleplay, and Visual Novel galleries, including Video Generation connections for Gemini Omni and xAI Imagine, editable `game.video` prompts, manual Gallery video actions, per-image Animate buttons, Gallery video previews with prompt copy, live View Latest media, and draggable/resizable pinned video overlays.
@@ -16,6 +17,7 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 
 ### Fixed
 
+- Fixed group-chat character reactions always being credited to the first character in the chat: commands placed above the first `Name:` line of a merged reply now attribute to the speaker whose section they open, group chats now instruct models to write the `[react:]` tag inside the reacting character's own section, and a react aimed at the user's persona name (or "User") explicitly targets the user's latest message (#3220).
 - Renamed the editable scene-video prompt template from `game.omniVideo` to `game.video`, with legacy override fallback, and shortened scene-video prompts for smaller video providers by summarizing narration into a compact story beat, excerpting source illustration prompts, and loosening default motion guidance.
 - Removed the hard-coded three-sprite limit from Roleplay sprite selection, setup, and display paths so chats can enable all uploaded sprite owners they need (#3169).
 - Let Image Captioning use any non-image-generation connection instead of hiding local or custom multimodal models behind model-name heuristics (#3170).
