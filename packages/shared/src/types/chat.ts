@@ -34,6 +34,7 @@ export const CONVERSATION_COMMAND_KEYS = [
   "selfie",
   "memory",
   "scene",
+  "call",
   "uno",
   "chess",
   "music",
@@ -237,6 +238,8 @@ export interface ChatMetadata {
   illustratorPromptConnectionId?: string | null;
   /** Whether Conversation selfie commands should send the matching character avatar as a reference image. */
   selfieUseAvatarReferences?: boolean;
+  /** Whether Conversation selfie commands should append matched character card appearance text to image prompts. */
+  selfieIncludeCharacterAppearance?: boolean;
   /** Whether Game Mode scene illustrations should send matching character/persona avatar references. */
   gameImageUseAvatarReferences?: boolean;
   /** Whether Game Mode scene illustrations should append matched character appearance descriptions. */
@@ -388,6 +391,10 @@ export interface ChatMetadata {
   characterCommands?: boolean;
   /** Per-command Conversation command enable overrides. Missing/true means enabled. */
   conversationCommandToggles?: ConversationCommandToggles;
+  /** Allow this conversation to start local AI audio/video calls. Default: false. */
+  conversationCallsEnabled?: boolean;
+  /** Allow characters to ring the user through the call command. Default: true when calls are enabled. */
+  conversationCharactersCanCall?: boolean;
   /** Chat-scoped generated schedules for conversation characters. */
   characterSchedules?: Record<string, unknown>;
   /** Chat-scoped manual status overrides for conversation characters. */

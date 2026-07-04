@@ -5,7 +5,7 @@
 // ──────────────────────────────────────────────
 import { useState, useCallback, useRef, useEffect, memo, useMemo, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
-import { Brain, Trash2, X } from "lucide-react";
+import { Brain, Phone, PhoneIncoming, PhoneOff, Trash2, X } from "lucide-react";
 import { useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import { formatTextQuotes, normalizeTextForMatch, type Message, type MessageReaction } from "@marinara-engine/shared";
 import { toast } from "sonner";
@@ -42,6 +42,23 @@ import {
 const EMPTY_CUSTOM_EMOJI_MAP = new Map<string, string>();
 const EMPTY_CUSTOM_STICKER_MAP = new Map<string, string>();
 const CONVERSATION_MESSAGE_CHROME_RING_CLASS = "ring-[var(--marinara-chat-chrome-focus-ring)]";
+
+function formatCallDuration(value: unknown): string | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  const seconds = Math.max(0, Math.round(value / 1000));
+  const minutes = Math.floor(seconds / 60);
+  const remaining = seconds % 60;
+  if (minutes <= 0) return `${remaining} seconds`;
+  if (minutes === 1) return remaining > 0 ? `1 minute ${remaining} seconds` : "1 minute";
+  return remaining > 0 ? `${minutes} minutes ${remaining} seconds` : `${minutes} minutes`;
+}
+
+function formatCallTimestamp(value: unknown): string {
+  if (typeof value !== "string") return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
 
 // ── Public props interface (unchanged external API) ──────────────
 
@@ -169,6 +186,10 @@ export const ConversationMessage = memo(function ConversationMessage({
   }, [message.extra]);
   const isConversationStart = extra.isConversationStart === true;
   const isHiddenFromAI = extra.hiddenFromAI === true;
+  const conversationCallEvent =
+    extra.conversationCallEvent && typeof extra.conversationCallEvent === "object" && !Array.isArray(extra.conversationCallEvent)
+      ? (extra.conversationCallEvent as Record<string, unknown>)
+      : null;
   const generationReplay = hasGenerationReplayDetails(extra.generationReplay) ? extra.generationReplay : null;
   const canRegenerate = !isUser || generationReplay !== null;
   const thinking = extra?.thinking as string | null | undefined;
@@ -752,6 +773,67 @@ export const ConversationMessage = memo(function ConversationMessage({
 
   // ── System message ──
   if (isSystem) {
+    if (conversationCallEvent) {
+      const status = typeof conversationCallEvent.status === "string" ? conversationCallEvent.status : "";
+      const duration = formatCallDuration(conversationCallEvent.durationMs);
+      const timestamp = formatCallTimestamp(message.createdAt);
+      const title =
+        status === "ended"
+          ? "Call Ended"
+          : status === "declined"
+            ? "Call Declined"
+            : status === "missed"
+              ? "Missed Call"
+              : status === "ringing"
+                ? "Incoming Call"
+                : "Call Started";
+      const subtitle =
+        status === "ended" && duration
+          ? `${duration}${timestamp ? ` - ${timestamp}` : ""}`
+          : timestamp || message.content;
+      const Icon = status === "ended" || status === "declined" || status === "missed" ? PhoneOff : status === "ringing" ? PhoneIncoming : Phone;
+      const iconClass =
+        status === "ended" || status === "declined" || status === "missed"
+          ? "text-[var(--muted-foreground)]"
+          : "text-emerald-400";
+
+      return (
+        <div
+          ref={msgRef}
+          className={cn(
+            "group flex justify-center px-4 py-2",
+            multiSelectMode && isSelected && "rounded-lg bg-[var(--destructive)]/10",
+          )}
+          onClick={handleMobileTap}
+        >
+          <div className="relative w-full max-w-xl">
+            {!multiSelectMode && onDelete && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDelete(message.id);
+                }}
+                className={cn(
+                  "absolute -right-1 -top-1 rounded-md p-1 text-[var(--muted-foreground)]/30 opacity-0 transition-all hover:bg-[var(--accent)] hover:text-[var(--foreground)] group-hover:opacity-100",
+                  showActions && "opacity-100",
+                )}
+                title="Delete"
+              >
+                <Trash2 size="0.75rem" />
+              </button>
+            )}
+            <div className="flex items-center gap-3 rounded-lg border border-[var(--border)] bg-[var(--secondary)]/90 px-4 py-3 text-left shadow-sm">
+              <Icon size="1.25rem" className={cn("shrink-0", iconClass)} />
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-sm font-semibold text-[var(--foreground)]">{title}</div>
+                <div className="truncate text-xs text-[var(--marinara-chat-chrome-panel-muted)]">{subtitle}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div
         ref={msgRef}

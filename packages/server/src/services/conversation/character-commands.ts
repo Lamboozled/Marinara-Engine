@@ -11,6 +11,7 @@
 // - [selfie], [selfie: context="description of the selfie"], [selfie: "description"], or [selfie: description]
 // - [memory: target="CharName", summary="description of the memory"]
 // - [scene: scenario="...", background="...", plan="..."] (initiate a mini-roleplay scene)
+// - [call] or [call: reason="..."] (ring the user for an audio call; Conversation mode)
 // - [uno] (start a game of UNO at the table; Conversation mode)
 // - [chess] (start a one-on-one chess game against the user; Conversation mode)
 // - [spotify: title="Song title", artist="Artist"] (play a song on the user's active Spotify player)
@@ -72,6 +73,12 @@ export interface SceneCommand {
   background?: string;
   /** Optional plot plan / outline for how the scene unfolds */
   plan?: string;
+}
+
+export interface CallCommand {
+  /** Ring the user for a Conversation-mode audio call. Param-less or optional reason. */
+  type: "call";
+  reason?: string;
 }
 
 export interface UnoCommand {
@@ -332,6 +339,7 @@ export type CharacterCommand =
   | SelfieCommand
   | MemoryCommand
   | SceneCommand
+  | CallCommand
   | UnoCommand
   | ChessCommand
   | InfluenceCommand
@@ -357,6 +365,7 @@ const CROSS_POST_RE = /\[cross_post:\s*target="([^"]+)"\]/gi;
 const SELFIE_RE = /\[selfie(?::\s*(?:context="([^"]*)"|"([^"]*)"|([^\]\r\n"]+)))?\]/gi;
 const MEMORY_RE = /\[memory:\s*target="([^"]+)"\s*,\s*summary="([^"]+)"\]/gi;
 const SCENE_RE = new RegExp(`\\[scene:\\s*(${QUOTED_PARAM_BLOCK})\\]`, "gi");
+const CALL_RE = new RegExp(`\\[call(?::\\s*(${QUOTED_PARAM_BLOCK}))?\\]`, "gi");
 // Param-less UNO trigger. Tolerates a stray `[uno: ...]` so a chatty model can't dodge the match.
 const UNO_RE = /\[uno(?::[^\]\r\n]*)?\]/gi;
 // Param-less chess trigger. Same tolerant shape as UNO_RE.
@@ -370,6 +379,8 @@ const REACT_RE = /\[react:\s*(?:emoji="([^"\]]+)"|"([^"\]]+)"|([^\]\r\n"]+))\]/g
 const DIRECT_MESSAGE_RE = new RegExp(`\\[dm:\\s*(${QUOTED_PARAM_BLOCK})\\]`, "gi");
 const INFLUENCE_RE = /<influence>([\s\S]*?)<\/influence>/gi;
 const NOTE_RE = /<note>([\s\S]*?)<\/note>/gi;
+const INFLUENCE_BRACKET_RE = new RegExp(`\\[influence:\\s*(${QUOTED_PARAM_BLOCK})\\]`, "gi");
+const NOTE_BRACKET_RE = new RegExp(`\\[note:\\s*(${QUOTED_PARAM_BLOCK})\\]`, "gi");
 
 // Assistant command regexes
 const CREATE_PERSONA_RE = new RegExp(`\\[create_persona:\\s*(${QUOTED_PARAM_BLOCK})\\]`, "gi");
@@ -443,6 +454,18 @@ function parseQuotedParam(params: string, key: string, allowEmpty = false): stri
   const value = decodeQuotedParamValue(rawValue);
   if (!allowEmpty && value.length === 0) return undefined;
   return value;
+}
+
+function parseCommandTextParam(params: string, keys: string[]): string {
+  for (const key of keys) {
+    const value = parseQuotedParam(params, key);
+    if (value !== undefined) return value;
+  }
+  return params
+    .trim()
+    .replace(/^["“”‘’]\s*/, "")
+    .replace(/\s*["“”‘’]$/, "")
+    .trim();
 }
 
 function parseStringList(value: string | undefined): string[] | undefined {
@@ -872,6 +895,14 @@ export function parseCharacterCommands(content: string): {
     if (cmd.scenario) commands.push(cmd);
   }
 
+  // Parse call command — ring the user for an audio call. Only one per message.
+  for (const match of content.matchAll(CALL_RE)) {
+    const params = match[1] ?? "";
+    const reason = parseQuotedParam(params, "reason") ?? params.replace(/^"|"$/g, "").trim();
+    commands.push({ type: "call", reason: reason || undefined });
+    break;
+  }
+
   // Parse uno command — start a game of UNO. Param-less; only one per message.
   for (const _unoMatch of content.matchAll(UNO_RE)) {
     commands.push({ type: "uno" });
@@ -890,9 +921,21 @@ export function parseCharacterCommands(content: string): {
     if (text) commands.push({ type: "influence", content: text });
   }
 
+  // Backward compatibility for older prompts that described this as [influence: summary="..."].
+  for (const match of content.matchAll(INFLUENCE_BRACKET_RE)) {
+    const text = stripConversationPromptTimestamps(parseCommandTextParam(match[1]!, ["summary", "text", "content"]));
+    if (text) commands.push({ type: "influence", content: text });
+  }
+
   // Parse note commands (<note>text</note>)
   for (const match of content.matchAll(NOTE_RE)) {
     const text = stripConversationPromptTimestamps(match[1]!.trim());
+    if (text) commands.push({ type: "note", content: text });
+  }
+
+  // Backward compatibility for older prompts that described this as [note: text="..."].
+  for (const match of content.matchAll(NOTE_BRACKET_RE)) {
+    const text = stripConversationPromptTimestamps(parseCommandTextParam(match[1]!, ["text", "summary", "content"]));
     if (text) commands.push({ type: "note", content: text });
   }
 
@@ -1072,6 +1115,7 @@ export function parseCharacterCommands(content: string): {
     .replace(SELFIE_RE, "")
     .replace(MEMORY_RE, "")
     .replace(SCENE_RE, "")
+    .replace(CALL_RE, "")
     .replace(UNO_RE, "")
     .replace(CHESS_RE, "")
     .replace(HAPTIC_RE, "")
@@ -1080,6 +1124,8 @@ export function parseCharacterCommands(content: string): {
     .replace(REACT_RE, "")
     .replace(INFLUENCE_RE, "")
     .replace(NOTE_RE, "")
+    .replace(INFLUENCE_BRACKET_RE, "")
+    .replace(NOTE_BRACKET_RE, "")
     .replace(CREATE_PERSONA_RE, "")
     .replace(CREATE_CHARACTER_RE, "")
     .replace(UPDATE_CHARACTER_RE, "")

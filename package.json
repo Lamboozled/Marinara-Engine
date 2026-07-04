@@ -13,6 +13,7 @@
   },
   "scripts": {
     "preinstall": "node ./scripts/clean-stale-client-artifacts.mjs",
+    "postinstall": "node ./scripts/ensure-native-deps.mjs",
     "dev": "node ./scripts/dev.mjs",
     "dev:server": "pnpm --filter @marinara-engine/server dev",
     "dev:client": "pnpm build:shared && pnpm --filter @marinara-engine/client dev",

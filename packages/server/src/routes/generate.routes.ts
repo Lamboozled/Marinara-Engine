@@ -65,6 +65,8 @@ import { createCustomEmojisStorage } from "../services/storage/custom-emojis.sto
 import { createCustomStickersStorage } from "../services/storage/custom-stickers.storage.js";
 import { createCharacterGalleryStorage } from "../services/storage/character-gallery.storage.js";
 import { createPersonaGalleryStorage } from "../services/storage/persona-gallery.storage.js";
+import { createConversationCallsStorage } from "../services/storage/conversation-calls.storage.js";
+import { createAppSettingsStorage } from "../services/storage/app-settings.storage.js";
 import { localEmbed, isLocalEmbedderAvailable } from "../services/local-embedder.js";
 import { buildLorebookSemanticEmbeddingsById, cosineSimilarity } from "../services/lorebook/embeddings.js";
 import { applyRegexScriptsToPromptMessages } from "../services/regex/regex-application.js";
@@ -99,7 +101,12 @@ import {
   type AssemblerInput,
 } from "../services/prompt/index.js";
 import { wrapContent } from "../services/prompt/format-engine.js";
-import { yieldToEventLoop, type BaseLLMProvider, type ChatMessage, type LLMUsage } from "../services/llm/base-provider.js";
+import {
+  yieldToEventLoop,
+  type BaseLLMProvider,
+  type ChatMessage,
+  type LLMUsage,
+} from "../services/llm/base-provider.js";
 import { executeToolCalls } from "../services/tools/tool-executor.js";
 import { createAgentPipeline, type ResolvedAgent, type AgentInjection } from "../services/agents/agent-pipeline.js";
 import { DATA_DIR } from "../utils/data-dir.js";
@@ -118,6 +125,7 @@ import {
   type CrossPostCommand,
   type SelfieCommand,
   type MemoryCommand,
+  type CallCommand,
   type InfluenceCommand,
   type NoteCommand,
   type DirectMessageCommand,
@@ -808,6 +816,8 @@ function getConversationCommandKey(command: CharacterCommand): ConversationComma
       return "memory";
     case "scene":
       return "scene";
+    case "call":
+      return "call";
     case "uno":
       return "uno";
     case "chess":
@@ -1085,10 +1095,7 @@ function normalizeImageCaptionText(value: unknown): string | null {
   return text.length > IMAGE_CAPTION_MAX_CHARS ? `${text.slice(0, IMAGE_CAPTION_MAX_CHARS).trim()}...` : text;
 }
 
-function readCachedImageCaption(
-  attachment: PromptAttachment,
-  imageCaptioning: ImageCaptioningRuntime,
-): string | null {
+function readCachedImageCaption(attachment: PromptAttachment, imageCaptioning: ImageCaptioningRuntime): string | null {
   const caption = normalizeImageCaptionText(attachment.imageCaption);
   if (!caption || !imageCaptioning.connection) return null;
   if (attachment.imageCaptionConnectionId !== imageCaptioning.connectionId) return null;
@@ -2088,15 +2095,15 @@ export async function generateRoutes(app: FastifyInstance) {
         }
       }
       const selectedPresetDiffersFromChat = !!resolvedPreset && !!presetId && presetId !== chatPromptPresetId;
-      const resolvedPresetDefaultChoices =
-        resolvedPreset ? (parsePromptPresetChoices((resolvedPreset as { defaultChoices?: unknown }).defaultChoices) ?? {}) : {};
-      const chatChoices: Record<string, string | string[]> =
-        resolveGenerationPromptPresetChoices({
-          presetSource,
-          selectedPresetDiffersFromChat,
-          presetDefaultChoices: resolvedPresetDefaultChoices,
-          chatPresetChoices: (chatMeta.presetChoices ?? {}) as Record<string, string | string[]>,
-        });
+      const resolvedPresetDefaultChoices = resolvedPreset
+        ? (parsePromptPresetChoices((resolvedPreset as { defaultChoices?: unknown }).defaultChoices) ?? {})
+        : {};
+      const chatChoices: Record<string, string | string[]> = resolveGenerationPromptPresetChoices({
+        presetSource,
+        selectedPresetDiffersFromChat,
+        presetDefaultChoices: resolvedPresetDefaultChoices,
+        chatPresetChoices: (chatMeta.presetChoices ?? {}) as Record<string, string | string[]>,
+      });
       let groupHistoryCharacterNamesByIdPromise: Promise<Map<string, string>> | null = null;
       const getGroupHistoryCharacterNamesById = () => {
         groupHistoryCharacterNamesByIdPromise ??= resolveCharacterNameMap(allCharacterIds, (id) => chars.getById(id));
@@ -3174,6 +3181,7 @@ export async function generateRoutes(app: FastifyInstance) {
             const selfieCommandEnabled = isConversationCommandEnabled(chatMeta, "selfie");
             const memoryCommandEnabled = isConversationCommandEnabled(chatMeta, "memory");
             const sceneCommandEnabled = isConversationCommandEnabled(chatMeta, "scene");
+            const callCommandEnabled = isConversationCommandEnabled(chatMeta, "call");
             const musicCommandEnabled = isConversationCommandEnabled(chatMeta, "music");
             const hapticCommandEnabled = isConversationCommandEnabled(chatMeta, "haptic");
             const activeMusicCommandSource =
@@ -3294,6 +3302,12 @@ export async function generateRoutes(app: FastifyInstance) {
                 `   - A plan is made (date, trip, hangout, confrontation) and the moment arrives → trigger a scene.`,
                 `   Do NOT wait for {{user}} to explicitly ask for a scene. If the conversation implies you and {{user}} are about to DO something together, initiate the scene yourself.`,
                 `   EXCEPTION: Do NOT start a scene for playing UNO, chess, cards, or other board/table games — those have their own commands. Use [uno] for UNO and [chess] for chess, not [scene].`,
+              );
+            }
+
+            if (callCommandEnabled && chatMode === "conversation") {
+              addCommandLines(
+                `- [call] or [call: reason="brief reason"] - ring ${personaName} for an audio call. Use this only when a live call naturally fits, such as when you urgently want to talk, when typing is awkward, or when ${personaName} asks you to call. The system will show an incoming call request; do not assume it was answered unless the call starts.`,
               );
             }
 
@@ -6982,6 +6996,7 @@ export async function generateRoutes(app: FastifyInstance) {
           // Parallel to parsedCommands: per-command character attribution for merged
           // group conversations (null elsewhere — caller falls back to the message char).
           let parsedCommandCharacterIds: (string | null)[] | null = null;
+          let parsedRawCommandCount = 0;
           let conversationCommandContent: string | null = null;
           let contentReplaced = false;
           if (tailMessages.assistantPrefillInjected && assistantPrefill && fullResponse.startsWith(assistantPrefill)) {
@@ -7039,6 +7054,7 @@ export async function generateRoutes(app: FastifyInstance) {
                 )
               : null;
             if (parsed.commands.length > 0) {
+              parsedRawCommandCount += parsed.commands.length;
               parsedCommands = filterEnabledConversationCommands(parsed.commands, chatMeta);
               if (parsedCommands.length > 0) {
                 conversationCommandContent = responseBeforeCommandParsing.trim();
@@ -7215,10 +7231,11 @@ export async function generateRoutes(app: FastifyInstance) {
           // no surrounding prose, treat the commands as the useful output. Skip saving
           // a blank assistant bubble but still return the commands so they execute.
           if (!fullResponse.trim()) {
-            if (!input.impersonate && parsedCommands.length > 0) {
+            if (!input.impersonate && (parsedCommands.length > 0 || parsedRawCommandCount > 0)) {
               logger.info(
-                "[generate] Model emitted %d command(s) with no visible prose for chat %s; saving hidden command anchor",
+                "[generate] Model emitted %d enabled command(s) (%d parsed) with no visible prose for chat %s; saving hidden command anchor",
                 parsedCommands.length,
+                parsedRawCommandCount,
                 input.chatId,
               );
               const savedMsg = await chats.createMessage({
@@ -9781,7 +9798,9 @@ export async function generateRoutes(app: FastifyInstance) {
                           ? `${imagePrompt}, ${selfiePositivePrompt}`
                           : imagePrompt;
                         let selfieReferenceImages: string[] | undefined;
-                        if (chatMeta.selfieUseAvatarReferences === true) {
+                        const selfieUseAvatarReferences = chatMeta.selfieUseAvatarReferences === true;
+                        const selfieIncludeCharacterAppearance = chatMeta.selfieIncludeCharacterAppearance === true;
+                        if (selfieUseAvatarReferences || selfieIncludeCharacterAppearance) {
                           const referenceResolution = await resolveIllustratorCharacterReferences({
                             charactersStore: chars,
                             chatCharacters: charInfo.map((character) => ({
@@ -9803,7 +9822,14 @@ export async function generateRoutes(app: FastifyInstance) {
                             fallbackToChatCharacters: false,
                             maxReferences: 1,
                           });
-                          if (referenceResolution.referenceImages.length > 0) {
+                          if (selfieIncludeCharacterAppearance && referenceResolution.appearanceBlock) {
+                            finalSelfiePrompt += `\n\n${referenceResolution.appearanceBlock}`;
+                            logger.debug(
+                              "[selfie] Added character appearance notes for: %s",
+                              referenceResolution.appearanceNames.join(", "),
+                            );
+                          }
+                          if (selfieUseAvatarReferences && referenceResolution.referenceImages.length > 0) {
                             selfieReferenceImages = referenceResolution.referenceImages;
                             if (referenceResolution.referenceLine && !suppressReferencePromptLine) {
                               finalSelfiePrompt += `\n\n${referenceResolution.referenceLine}`;
@@ -9938,6 +9964,87 @@ export async function generateRoutes(app: FastifyInstance) {
                         },
                       })}\n\n`,
                     );
+                  }
+                } else if (command.type === "call") {
+                  // ── Call: create a ringing Conversation call request ──
+                  const callCmd = command as CallCommand;
+                  if (chatMode !== "conversation") continue;
+                  const freshChat = await chats.getById(input.chatId);
+                  const freshMeta =
+                    typeof freshChat?.metadata === "string"
+                      ? JSON.parse(freshChat.metadata)
+                      : (freshChat?.metadata ?? {});
+                  if (freshMeta.characterCommands === false || !isConversationCommandEnabled(freshMeta, "call")) {
+                    logger.debug(
+                      "[commands] Ignored call command because calls are disabled for chat %s",
+                      input.chatId,
+                    );
+                    continue;
+                  }
+                  const ttsSettingsRaw = await createAppSettingsStorage(app.db).get("tts");
+                  let ttsSettings: Record<string, unknown> = {};
+                  if (ttsSettingsRaw && typeof ttsSettingsRaw === "string") {
+                    try {
+                      const parsed = JSON.parse(ttsSettingsRaw);
+                      ttsSettings =
+                        parsed && typeof parsed === "object" && !Array.isArray(parsed)
+                          ? (parsed as Record<string, unknown>)
+                          : {};
+                    } catch {
+                      ttsSettings = {};
+                    }
+                  }
+                  if (ttsSettings.callAudioEnabled !== true) {
+                    logger.debug(
+                      "[commands] Ignored call command because Conversation call audio is globally disabled",
+                    );
+                    continue;
+                  }
+                  const callStore = createConversationCallsStorage(app.db);
+                  const existingActive = await callStore.getActiveForChat(input.chatId);
+                  const existingRinging = await callStore.getRingingForChat(input.chatId);
+                  const session =
+                    existingActive ??
+                    existingRinging ??
+                    (await callStore.createSession({
+                      chatId: input.chatId,
+                      mode: "audio",
+                      initiator: "character",
+                      initiatorCharacterId: characterId,
+                      metadata: {
+                        reason: callCmd.reason ?? null,
+                        sourceMessageId: messageId ?? null,
+                      },
+                    }));
+                  if (session && !existingActive && !existingRinging) {
+                    await chats.createMessagesBatch(input.chatId, [
+                      {
+                        role: "system",
+                        characterId,
+                        content: callCmd.reason ? `Incoming call: ${callCmd.reason}` : "Incoming call",
+                        extra: {
+                          displayText: null,
+                          isGenerated: true,
+                          tokenCount: null,
+                          generationInfo: null,
+                          conversationCallEvent: {
+                            callId: session.id,
+                            status: session.status,
+                            mode: session.mode,
+                            initiator: session.initiator,
+                            reason: callCmd.reason ?? null,
+                            sourceMessageId: messageId ?? null,
+                          },
+                        },
+                      },
+                    ]);
+                  }
+                  if (session) {
+                    trySendSseEvent(reply, {
+                      type: "conversation_call_ringing",
+                      data: { session, reason: callCmd.reason ?? null, characterId },
+                    });
+                    logger.info("[commands] Conversation call ringing for chat %s", input.chatId);
                   }
                 } else if (command.type === "memory") {
                   // ── Memory: store a fake memory on the target character ──
