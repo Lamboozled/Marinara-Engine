@@ -56,6 +56,7 @@ import {
   GAME_STORYBOARD_DIRECTOR,
   GAME_STORYBOARD_ILLUSTRATION_DIRECTOR,
 } from "../../packages/server/src/services/prompt-overrides/index.js";
+import { buildElevenLabsTextInput } from "../../packages/server/src/routes/tts.routes.js";
 import type { LLMToolCall } from "../../packages/server/src/services/llm/base-provider.js";
 import { cleanTTSInputText, resolveTTSVoiceForSpeaker } from "../../packages/client/src/lib/tts-dialogue.js";
 
@@ -306,6 +307,14 @@ const cases: RegressionCase[] = [
       assert.match(cleaned, /Reserved\. Tomorrow afternoon\./);
       assert.match(cleaned, /Your ribs require rest\./);
       assert.match(cleaned, /A bold strategy\./);
+    },
+  },
+  {
+    name: "ElevenLabs TTS input does not prepend sprite tone tags",
+    run() {
+      assert.equal(buildElevenLabsTextInput("Reserved. Tomorrow afternoon.", "neutral"), "Reserved. Tomorrow afternoon.");
+      assert.equal(buildElevenLabsTextInput("Your ribs require rest.", "thinking"), "Your ribs require rest.");
+      assert.equal(buildElevenLabsTextInput("A bold strategy.", "smirk"), "A bold strategy.");
     },
   },
   {

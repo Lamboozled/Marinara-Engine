@@ -404,30 +404,8 @@ function buildSpeechInstructions(input: { speaker?: string; tone?: string; inclu
   return parts.join(" ");
 }
 
-function toElevenLabsCueTag(value: string): string | null {
-  const tag = value
-    .trim()
-    .replace(/^[\[\]"']+|[\]\]"']+$/g, "")
-    .replace(/\s+/g, " ");
-  if (!tag || /[\r\n<>]/.test(tag)) return null;
-
-  const normalized = tag.toLowerCase();
-  if (/^(main|side|extra|action|thought|whisper(?::.+)?)$/.test(normalized)) return null;
-
-  return `[${tag}]`;
-}
-
-export function buildElevenLabsTextInput(text: string, tone?: string): string {
-  const tags = (tone ?? "")
-    .split(",")
-    .map(toElevenLabsCueTag)
-    .filter((tag): tag is string => Boolean(tag));
-  if (tags.length === 0) return text;
-
-  const prefix = tags.join(" ");
-  const trimmedText = text.trimStart();
-  if (trimmedText.toLowerCase().startsWith(prefix.toLowerCase())) return text;
-  return `${prefix} ${text}`;
+export function buildElevenLabsTextInput(text: string, _tone?: string): string {
+  return text;
 }
 
 export function resolveTTSRequestVoice(configuredVoice: string, requestedVoice?: string | null): string {
