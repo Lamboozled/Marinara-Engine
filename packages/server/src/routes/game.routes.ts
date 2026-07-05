@@ -1103,6 +1103,7 @@ const gameStartSchema = z.object({
 
 const startSessionSchema = z.object({
   gameId: z.string().min(1),
+  sourceChatId: z.string().min(1).optional(),
   connectionId: z.string().optional(),
 });
 
@@ -5572,9 +5573,49 @@ export async function gameRoutes(app: FastifyInstance) {
     return findSessionSummaryForNumber(summaries, sessionNumber) ?? summaries.at(-1) ?? null;
   };
 
+  const isGameSessionBranch = (meta: Record<string, unknown>): boolean => readTrimmedString(meta.branchName) !== null;
+
+  const gameSessionNumberFromMeta = (meta: Record<string, unknown>): number =>
+    typeof meta.gameSessionNumber === "number" && Number.isFinite(meta.gameSessionNumber) ? meta.gameSessionNumber : 0;
+
+  const compareGameSessions = (a: NonNullable<StoredChatRecord>, b: NonNullable<StoredChatRecord>): number => {
+    const ma = parseMeta(a.metadata);
+    const mb = parseMeta(b.metadata);
+    const sessionDiff = gameSessionNumberFromMeta(ma) - gameSessionNumberFromMeta(mb);
+    if (sessionDiff !== 0) return sessionDiff;
+    const updatedA = Date.parse(String(a.updatedAt ?? "")) || 0;
+    const updatedB = Date.parse(String(b.updatedAt ?? "")) || 0;
+    return updatedA - updatedB;
+  };
+
+  const selectSessionForNextStart = (
+    sessions: NonNullable<StoredChatRecord>[],
+    sourceChatId?: string,
+  ): NonNullable<StoredChatRecord> | null => {
+    const gameSessions = sessions.filter((c) => (c.mode as string) === "game");
+    const sourceSession = sourceChatId ? gameSessions.find((session) => session.id === sourceChatId) : null;
+    if (sourceChatId && !sourceSession) {
+      throw new Error("Requested source session was not found in this game");
+    }
+
+    const canonicalSessions = gameSessions.filter((session) => !isGameSessionBranch(parseMeta(session.metadata)));
+    const orderedSessions = (canonicalSessions.length > 0 ? canonicalSessions : gameSessions).sort(compareGameSessions);
+    let selected = orderedSessions.at(-1) ?? sourceSession ?? null;
+
+    if (sourceSession) {
+      const sourceNumber = gameSessionNumberFromMeta(parseMeta(sourceSession.metadata));
+      const selectedNumber = selected ? gameSessionNumberFromMeta(parseMeta(selected.metadata)) : 0;
+      if (!selected || sourceNumber >= selectedNumber) {
+        selected = sourceSession;
+      }
+    }
+
+    return selected;
+  };
+
   // ── POST /game/session/start ──
   app.post("/session/start", async (req, reply) => {
-    const { gameId, connectionId } = startSessionSchema.parse(req.body);
+    const { gameId, sourceChatId, connectionId } = startSessionSchema.parse(req.body);
     const existingStart = pendingSessionStarts.get(gameId);
     if (existingStart) {
       return existingStart;
@@ -5585,15 +5626,7 @@ export async function gameRoutes(app: FastifyInstance) {
       const connections = createConnectionsStorage(app.db);
 
       const sessions = await chats.listByGroup(gameId);
-      const gameSessions = sessions
-        .filter((c) => (c.mode as string) === "game")
-        .sort((a, b) => {
-          const ma = parseMeta(a.metadata);
-          const mb = parseMeta(b.metadata);
-          return ((ma.gameSessionNumber as number) || 0) - ((mb.gameSessionNumber as number) || 0);
-        });
-
-      const latestSession = gameSessions[gameSessions.length - 1];
+      const latestSession = selectSessionForNextStart(sessions, sourceChatId);
       if (!latestSession) throw new Error("No previous session found for this game");
 
       const prevMeta = parseMeta(latestSession.metadata);
@@ -5689,6 +5722,7 @@ export async function gameRoutes(app: FastifyInstance) {
         gameLastIllustrationTurn: _previousIllustrationTurn,
         gameLastIllustrationSessionNumber: _previousIllustrationSessionNumber,
         gameLastIllustrationTag: _previousIllustrationTag,
+        branchName: _previousBranchName,
         gameSceneBackground: _previousSceneBackground,
         gameSceneMusic: _previousSceneMusic,
         gameSceneAmbient: _previousSceneAmbient,
