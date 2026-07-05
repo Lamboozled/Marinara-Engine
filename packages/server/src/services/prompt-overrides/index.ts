@@ -6,6 +6,7 @@ export { renderTemplate, validateTemplate } from "./template.js";
 export type { TemplateValidationResult } from "./template.js";
 export {
   PROMPT_OVERRIDE_REGISTRY,
+  SPRITES_ANIMATED_PORTRAIT,
   SPRITES_EXPRESSION_SHEET,
   SPRITES_SINGLE_PORTRAIT,
   SPRITES_SINGLE_FULL_BODY,
@@ -32,6 +33,7 @@ export type {
   PromptVariable,
   SpritesExpressionSheetCtx,
   SpritesSinglePortraitCtx,
+  SpritesAnimatedPortraitCtx,
   SpritesSingleFullBodyCtx,
   SpritesFullBodySheetCtx,
   GameNpcPortraitCtx,

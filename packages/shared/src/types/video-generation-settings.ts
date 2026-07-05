@@ -9,4 +9,6 @@ export interface VideoGenerationUserSettings {
   callClipDurations: ConversationCallVideoClipDurations;
   /** One-off custom Conversation Call clip duration, in seconds. */
   callCustomClipDurationSeconds: number;
+  /** Animated Expression Engine portrait clip duration, in seconds. */
+  animatedExpressionClipDurationSeconds: number;
 }

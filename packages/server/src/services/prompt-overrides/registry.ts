@@ -7,6 +7,7 @@
 import type { PromptOverrideKeyDef } from "./types.js";
 
 import {
+  SPRITES_ANIMATED_PORTRAIT,
   SPRITES_EXPRESSION_SHEET,
   SPRITES_SINGLE_PORTRAIT,
   SPRITES_SINGLE_FULL_BODY,
@@ -34,6 +35,7 @@ import {
 export const PROMPT_OVERRIDE_REGISTRY = [
   SPRITES_EXPRESSION_SHEET,
   SPRITES_SINGLE_PORTRAIT,
+  SPRITES_ANIMATED_PORTRAIT,
   SPRITES_SINGLE_FULL_BODY,
   SPRITES_FULL_BODY_SHEET,
   GAME_NPC_PORTRAIT,
@@ -75,6 +77,7 @@ export function listPromptOverrideKeys(): string[] {
 export {
   SPRITES_EXPRESSION_SHEET,
   SPRITES_SINGLE_PORTRAIT,
+  SPRITES_ANIMATED_PORTRAIT,
   SPRITES_SINGLE_FULL_BODY,
   SPRITES_FULL_BODY_SHEET,
   GAME_NPC_PORTRAIT,
@@ -95,6 +98,7 @@ export {
 export type {
   SpritesExpressionSheetCtx,
   SpritesSinglePortraitCtx,
+  SpritesAnimatedPortraitCtx,
   SpritesSingleFullBodyCtx,
   SpritesFullBodySheetCtx,
 } from "./registry/sprites.js";

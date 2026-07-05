@@ -40,6 +40,8 @@ import {
   APP_VERSION,
   CONVERSATION_CALL_CHARACTER_VIDEO_CLIP_KINDS,
   DEFAULT_IMAGE_STYLE_PROFILES,
+  VIDEO_ANIMATED_EXPRESSION_CLIP_DURATION_MAX,
+  VIDEO_ANIMATED_EXPRESSION_CLIP_DURATION_MIN,
   VIDEO_CALL_CLIP_DURATION_MAX,
   VIDEO_CALL_CLIP_DURATION_MIN,
   VIDEO_GENERATION_SETTINGS_KEY,
@@ -445,6 +447,7 @@ const VIDEO_PROMPT_TEMPLATE_KEYS = [
   "conversation.callVideo.crying",
   "conversation.callVideo.sighing",
   "conversation.callVideo.custom",
+  "sprites.animatedPortrait",
 ] as const;
 
 const CONVERSATION_CALL_VIDEO_CLIP_LABELS: Record<ConversationCallCharacterVideoClipKind, string> = {
@@ -1728,6 +1731,10 @@ function VideoGenerationSettings() {
     commitSettings({ ...draft, callCustomClipDurationSeconds: duration });
   };
 
+  const handleAnimatedExpressionDurationChange = (duration: number) => {
+    commitSettings({ ...draft, animatedExpressionClipDurationSeconds: duration });
+  };
+
   return (
     <SettingsSection
       title="Video Generation"
@@ -1819,6 +1826,30 @@ function VideoGenerationSettings() {
             <div className="mt-2 text-[0.625rem] text-[var(--muted-foreground)]">
               Call clips are clamped from {VIDEO_CALL_CLIP_DURATION_MIN} to {VIDEO_CALL_CLIP_DURATION_MAX} seconds.
               {saveVideoSettings.isPending ? " Saving…" : ""}
+            </div>
+          </div>
+
+          <div className="grid gap-2 rounded-lg bg-[var(--background)]/55 p-3 ring-1 ring-[var(--border)] sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+            <div className="min-w-0">
+              <div className="inline-flex items-center gap-1 text-xs font-medium text-[var(--foreground)]">
+                Animated expression length
+                <HelpTooltip text="Used by Expression Engine animated portrait generation before the clip is converted to a looping GIF sprite." />
+              </div>
+              <div className="mt-1 text-[0.625rem] text-[var(--muted-foreground)]">
+                Seconds, clamped from {VIDEO_ANIMATED_EXPRESSION_CLIP_DURATION_MIN} to{" "}
+                {VIDEO_ANIMATED_EXPRESSION_CLIP_DURATION_MAX}.
+              </div>
+            </div>
+            <div className="grid grid-cols-[minmax(0,4rem)_auto] items-center gap-1.5 sm:w-28">
+              <DraftNumberInput
+                value={draft.animatedExpressionClipDurationSeconds}
+                min={VIDEO_ANIMATED_EXPRESSION_CLIP_DURATION_MIN}
+                max={VIDEO_ANIMATED_EXPRESSION_CLIP_DURATION_MAX}
+                onCommit={handleAnimatedExpressionDurationChange}
+                className="min-w-0 rounded-md border border-[var(--border)] bg-[var(--secondary)] px-2 py-1 text-xs"
+                ariaLabel="Animated expression clip length in seconds"
+              />
+              <span className="text-[0.625rem] text-[var(--muted-foreground)]">s</span>
             </div>
           </div>
         </div>
@@ -6081,8 +6112,8 @@ function AdvancedSettings() {
       <VideoGenerationSettings />
       <PromptOverridesEditor
         title="Video Generation Prompt Templates"
-        description="Edit reusable templates for Game/Gallery scene videos and Conversation Call character clips."
-        help="Game scene videos use this before sending a reference-image video request. Conversation Call clips use the selected character avatar as the identity reference and return to idle at the end of each clip."
+        description="Edit reusable templates for Game/Gallery scene videos, Conversation Call character clips, and animated Expression portraits."
+        help="Game scene videos use this before sending a reference-image video request. Conversation Call clips use the selected character avatar as the identity reference and return to idle at the end of each clip. Animated Expression portraits become looping GIF sprites."
         keys={VIDEO_PROMPT_TEMPLATE_KEYS}
         preferredKey="game.video"
       />
