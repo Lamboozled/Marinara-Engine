@@ -283,25 +283,35 @@ function getClipInstruction(kind: ConversationCallCharacterVideoClipKind) {
   );
 }
 
+function sanitizeCharacterDescription(value: string | null | undefined) {
+  return (value ?? "").replace(/\s+/g, " ").trim().slice(0, 2400);
+}
+
 async function buildClipPrompt(input: {
   promptOverridesStorage: PromptOverridesStorage;
   characterName: string;
+  characterDescription?: string | null;
   kind: ConversationCallCharacterVideoClipKind;
   durationSeconds: number;
 }) {
+  const characterDescription = sanitizeCharacterDescription(input.characterDescription);
   const def = CONVERSATION_CALL_VIDEO_PROMPT_BY_KIND.get(input.kind);
   if (!def) {
     return [
       `Create a ${input.durationSeconds}-second 16:9 ${getClipLabel(input.kind)} for an AI character in a private video call.`,
       `Character name: ${input.characterName}.`,
+      characterDescription ? `Character visual/personality notes:\n${characterDescription}` : "",
       getClipInstruction(input.kind),
       "Use the supplied avatar as the exact identity and art style reference.",
       "Keep camera framing stable like a video-call participant tile. Preserve the avatar's face, hair, outfit cues, and art style.",
       "Single character only. No extra people. No UI, captions, subtitles, speech bubbles, text, logos, or watermarks.",
-    ].join("\n");
+    ]
+      .filter(Boolean)
+      .join("\n");
   }
   return loadPrompt(input.promptOverridesStorage, def, {
     characterName: input.characterName,
+    characterDescription,
     clipLabel: getClipLabel(input.kind),
     clipInstruction: getClipInstruction(input.kind),
     durationSeconds: input.durationSeconds,
@@ -317,12 +327,15 @@ function sanitizeCustomClipText(value: string, fallback: string, maxLength: numb
 async function buildCustomClipPrompt(input: {
   promptOverridesStorage: PromptOverridesStorage;
   characterName: string;
+  characterDescription?: string | null;
   label: string;
   prompt: string;
   durationSeconds: number;
 }) {
+  const characterDescription = sanitizeCharacterDescription(input.characterDescription);
   return loadPrompt(input.promptOverridesStorage, CONVERSATION_CALL_CUSTOM_VIDEO_PROMPT, {
     characterName: input.characterName,
+    characterDescription,
     clipLabel: input.label,
     customPrompt: input.prompt,
     durationSeconds: input.durationSeconds,
@@ -372,6 +385,7 @@ async function pruneCustomClips(manifest: DiskManifest): Promise<DiskManifest> {
 async function runGenerationJob(input: {
   characterId: string;
   characterName: string;
+  characterDescription?: string | null;
   avatarPath: string | null;
   connection: VideoGenerationConnection;
   promptOverridesStorage: PromptOverridesStorage;
@@ -399,6 +413,7 @@ async function runGenerationJob(input: {
     const prompt = await buildClipPrompt({
       promptOverridesStorage: input.promptOverridesStorage,
       characterName: input.characterName,
+      characterDescription: input.characterDescription,
       kind,
       durationSeconds,
     });
@@ -461,6 +476,7 @@ async function runGenerationJob(input: {
 async function runCustomClipGenerationJob(input: {
   characterId: string;
   characterName: string;
+  characterDescription?: string | null;
   avatarPath: string | null;
   connection: VideoGenerationConnection;
   promptOverridesStorage: PromptOverridesStorage;
@@ -479,6 +495,7 @@ async function runCustomClipGenerationJob(input: {
     const prompt = await buildCustomClipPrompt({
       promptOverridesStorage: input.promptOverridesStorage,
       characterName: input.characterName,
+      characterDescription: input.characterDescription,
       label: input.label,
       prompt: input.prompt,
       durationSeconds,
@@ -576,6 +593,7 @@ export async function getConversationCallCharacterVideoManifest(input: {
 export async function startConversationCallCharacterVideoGeneration(input: {
   characterId: string;
   characterName: string;
+  characterDescription?: string | null;
   avatarPath: string | null;
   connection: VideoGenerationConnection;
   promptOverridesStorage: PromptOverridesStorage;
@@ -615,6 +633,7 @@ export async function startConversationCallCharacterVideoGeneration(input: {
 export async function startConversationCallCustomVideoClipGeneration(input: {
   characterId: string;
   characterName: string;
+  characterDescription?: string | null;
   avatarPath: string | null;
   connection: VideoGenerationConnection;
   promptOverridesStorage: PromptOverridesStorage;

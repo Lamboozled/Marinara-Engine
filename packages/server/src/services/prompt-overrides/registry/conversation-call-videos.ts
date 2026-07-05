@@ -3,6 +3,7 @@ import type { PromptOverrideKeyDef } from "../types.js";
 
 export interface ConversationCallVideoClipCtx extends Record<string, string | number | undefined> {
   characterName: string;
+  characterDescription?: string;
   clipLabel: string;
   clipInstruction: string;
   durationSeconds: number;
@@ -11,6 +12,7 @@ export interface ConversationCallVideoClipCtx extends Record<string, string | nu
 
 export interface ConversationCallCustomVideoClipCtx extends Record<string, string | number | undefined> {
   characterName: string;
+  characterDescription?: string;
   clipLabel: string;
   customPrompt: string;
   durationSeconds: number;
@@ -66,24 +68,30 @@ function buildDefaultPrompt(ctx: ConversationCallVideoClipCtx) {
   return [
     `Create a ${ctx.durationSeconds}-second ${ctx.aspectRatio} ${ctx.clipLabel} for an AI character in a private video call.`,
     `Character name: ${ctx.characterName}.`,
+    ctx.characterDescription ? `Character visual/personality notes:\n${ctx.characterDescription}` : "",
     ctx.clipInstruction,
     "Use the supplied avatar as the exact identity and art style reference.",
     "Keep camera framing stable like a video-call participant tile. Preserve the avatar's face, hair, outfit cues, and art style.",
     "Single character only. No extra people. No UI, captions, subtitles, speech bubbles, text, logos, or watermarks.",
-  ].join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function buildDefaultCustomClipPrompt(ctx: ConversationCallCustomVideoClipCtx) {
   return [
     `Create a ${ctx.durationSeconds}-second ${ctx.aspectRatio} custom video-call clip for an AI character.`,
     `Character name: ${ctx.characterName}.`,
+    ctx.characterDescription ? `Character visual/personality notes:\n${ctx.characterDescription}` : "",
     `Clip label: ${ctx.clipLabel}.`,
     `Requested custom action or look: ${ctx.customPrompt}.`,
     "Use the supplied avatar as the exact identity and art style reference.",
     "Begin from the character's neutral video-call idle pose, perform the requested visual action or reveal clearly, then settle into a stable natural pose by the final frame.",
     "Keep camera framing stable like a private video-call participant tile. Preserve the avatar's face, hair, outfit cues, and art style.",
     "Single character only. No extra people. No UI, captions, subtitles, speech bubbles, text, logos, or watermarks.",
-  ].join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function makeConversationCallVideoPrompt(seed: ClipPromptSeed): PromptOverrideKeyDef<ConversationCallVideoClipCtx> {
@@ -92,6 +100,11 @@ function makeConversationCallVideoPrompt(seed: ClipPromptSeed): PromptOverrideKe
     description: `Conversation Call character video prompt for the ${seed.label} clip.`,
     variables: [
       { name: "characterName", description: "Character display name.", example: "Dottore" },
+      {
+        name: "characterDescription",
+        description: "Character card visual/personality notes to preserve identity constraints.",
+        example: "Description: A masked doctor. Appearance: Wears a mask that covers his eyes.",
+      },
       { name: "clipLabel", description: "Human-readable clip type.", example: seed.label },
       {
         name: "clipInstruction",
@@ -104,6 +117,7 @@ function makeConversationCallVideoPrompt(seed: ClipPromptSeed): PromptOverrideKe
     defaultBuilder: buildDefaultPrompt,
     exampleContext: {
       characterName: "Dottore",
+      characterDescription: "Description: A masked doctor. Appearance: Wears a mask that covers his eyes.",
       clipLabel: seed.label,
       clipInstruction: seed.instruction,
       durationSeconds: seed.kind === "idle" || seed.kind === "talking" ? 5 : 4,
@@ -119,6 +133,11 @@ export const CONVERSATION_CALL_CUSTOM_VIDEO_PROMPT: PromptOverrideKeyDef<Convers
   description: "Conversation Call custom character video prompt for sparse user-requested clips.",
   variables: [
     { name: "characterName", description: "Character display name.", example: "Dottore" },
+    {
+      name: "characterDescription",
+      description: "Character card visual/personality notes to preserve identity constraints.",
+      example: "Description: A masked doctor. Appearance: Wears a mask that covers his eyes.",
+    },
     { name: "clipLabel", description: "Short saved clip label.", example: "Mask off" },
     {
       name: "customPrompt",
@@ -131,6 +150,7 @@ export const CONVERSATION_CALL_CUSTOM_VIDEO_PROMPT: PromptOverrideKeyDef<Convers
   defaultBuilder: buildDefaultCustomClipPrompt,
   exampleContext: {
     characterName: "Dottore",
+    characterDescription: "Description: A masked doctor. Appearance: Wears a mask that covers his eyes.",
     clipLabel: "Mask off",
     customPrompt: "Dottore takes off his mask and reveals red eyes while looking into the phone camera.",
     durationSeconds: 5,
