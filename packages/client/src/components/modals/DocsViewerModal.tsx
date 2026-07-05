@@ -1,12 +1,12 @@
 // ──────────────────────────────────────────────
 // DocsViewerModal: Browse the guides shipped in docs/
 // ──────────────────────────────────────────────
-import { useMemo, useState } from "react";
-import { ArrowLeft, BookOpen, FileText } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ArrowLeft, BookOpen, FileText, Search, X } from "lucide-react";
 import { Modal } from "../ui/Modal";
 import { cn } from "../../lib/utils";
 import { renderMarkdownBlocks, applyInlineMarkdown } from "../../lib/markdown";
-import { useDocContent, useDocsIndex, type DocSummary } from "../../hooks/use-docs";
+import { useDocContent, useDocsIndex, useDocsSearch, type DocSummary } from "../../hooks/use-docs";
 
 const DIR_LABELS: Record<string, string> = {
   "": "Guides",
@@ -16,6 +16,12 @@ const DIR_LABELS: Record<string, string> = {
 
 function dirLabel(dir: string) {
   return DIR_LABELS[dir] ?? dir.charAt(0).toUpperCase() + dir.slice(1);
+}
+
+function formatUpdatedAt(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }
 
 /** Resolve a link target relative to the doc it appears in (e.g. "../FAQ.md" from "installation/windows.md"). */
@@ -72,6 +78,39 @@ function prepareDocMarkdown(raw: string, docPath: string): string {
     );
 }
 
+// Session memory so reopening the viewer resumes where the user left off
+// (people bounce in and out while referencing macros, CSS, etc.).
+const PLACE_KEY = "marinara-docs-viewer-place";
+
+interface SavedPlace {
+  doc: string | null;
+  scrollTop: number;
+}
+
+function readSavedPlace(): SavedPlace {
+  try {
+    const raw = sessionStorage.getItem(PLACE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<SavedPlace>;
+      return {
+        doc: typeof parsed.doc === "string" ? parsed.doc : null,
+        scrollTop: typeof parsed.scrollTop === "number" ? parsed.scrollTop : 0,
+      };
+    }
+  } catch {
+    // Ignore unavailable/corrupt sessionStorage; start fresh.
+  }
+  return { doc: null, scrollTop: 0 };
+}
+
+function writeSavedPlace(place: SavedPlace) {
+  try {
+    sessionStorage.setItem(PLACE_KEY, JSON.stringify(place));
+  } catch {
+    // Ignore unavailable sessionStorage.
+  }
+}
+
 export function DocsViewerModal({
   open,
   onClose,
@@ -81,9 +120,24 @@ export function DocsViewerModal({
   onClose: () => void;
   initialDoc?: string | null;
 }) {
-  const [selected, setSelected] = useState<string | null>(initialDoc);
+  const savedPlaceRef = useRef(readSavedPlace());
+  const [selected, setSelectedState] = useState<string | null>(initialDoc ?? savedPlaceRef.current.doc);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
+  const [pendingScrollTerm, setPendingScrollTerm] = useState<string | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const restoreScrollRef = useRef(initialDoc === null && savedPlaceRef.current.doc !== null);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedQuery(searchQuery), 250);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
   const { data: index, isLoading: indexLoading, isError: indexError } = useDocsIndex(open);
   const { data: doc, isLoading: docLoading, isError: docError } = useDocContent(selected);
+  const trimmedQuery = debouncedQuery.trim();
+  const searching = trimmedQuery.length >= 2;
+  const { data: search, isFetching: searchFetching } = useDocsSearch(trimmedQuery);
 
   const groups: { dir: string; docs: DocSummary[] }[] = [];
   for (const entry of index?.docs ?? []) {
@@ -97,6 +151,36 @@ export function DocsViewerModal({
       doc ? renderMarkdownBlocks(prepareDocMarkdown(doc.content, doc.path), applyInlineMarkdown, "docs-viewer") : null,
     [doc],
   );
+
+  const selectDoc = (path: string, scrollTerm: string | null = null) => {
+    writeSavedPlace({ doc: path, scrollTop: 0 });
+    restoreScrollRef.current = false;
+    setPendingScrollTerm(scrollTerm);
+    setSelectedState(path);
+  };
+
+  // Restore the saved reading position on reopen, or jump to the first
+  // occurrence of the search term after opening a doc from search results.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || !rendered) return;
+    if (restoreScrollRef.current && selected === savedPlaceRef.current.doc) {
+      el.scrollTop = savedPlaceRef.current.scrollTop;
+      restoreScrollRef.current = false;
+      return;
+    }
+    if (!pendingScrollTerm) return;
+    const term = pendingScrollTerm.toLowerCase();
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    let node: Node | null;
+    while ((node = walker.nextNode())) {
+      if (node.textContent?.toLowerCase().includes(term)) {
+        (node.parentElement ?? el).scrollIntoView({ block: "center" });
+        break;
+      }
+    }
+    setPendingScrollTerm(null);
+  }, [rendered, selected, pendingScrollTerm]);
 
   /** Follow rewritten cross-doc links inside the modal instead of opening a new tab. */
   const handleContentClick = (event: React.MouseEvent<HTMLDivElement>) => {
@@ -112,19 +196,40 @@ export function DocsViewerModal({
     const target = url.searchParams.get("path");
     if (!target) return;
     event.preventDefault();
-    setSelected(target);
+    selectDoc(target);
   };
+
+  const searchResults = search?.results ?? [];
 
   return (
     <Modal open={open} onClose={onClose} title="Documentation" width="max-w-4xl">
-      <div className="flex h-[min(65dvh,42rem)] min-h-0 gap-3">
-        {/* Guide list */}
+      <div className="flex h-[calc(100dvh-7rem)] min-h-0 gap-3 sm:h-[min(46rem,calc(90dvh-6.5rem))]">
+        {/* Guide list / search */}
         <aside
-          className={cn(
-            "flex w-full min-w-0 flex-col sm:w-60 sm:shrink-0",
-            selected !== null && "hidden sm:flex",
-          )}
+          className={cn("flex w-full min-w-0 flex-col sm:w-64 sm:shrink-0", selected !== null && "hidden sm:flex")}
         >
+          <div className="mb-2 flex shrink-0 items-center gap-2 rounded-xl border border-[var(--border)]/60 bg-[var(--background)]/70 px-3 py-2">
+            <Search size="0.875rem" className="shrink-0 text-[var(--muted-foreground)]" />
+            <input
+              type="search"
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder="Search all guides"
+              aria-label="Search documentation"
+              className="min-w-0 flex-1 bg-transparent text-xs text-[var(--foreground)] outline-none placeholder:text-[var(--muted-foreground)]/65"
+            />
+            {searchQuery ? (
+              <button
+                type="button"
+                onClick={() => setSearchQuery("")}
+                className="flex h-5 w-5 items-center justify-center rounded-md text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
+                aria-label="Clear documentation search"
+              >
+                <X size="0.6875rem" />
+              </button>
+            ) : null}
+          </div>
+
           <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
             {indexLoading ? (
               <p className="px-1 py-2 text-xs text-[var(--muted-foreground)]">Loading guides…</p>
@@ -132,6 +237,46 @@ export function DocsViewerModal({
               <p className="px-1 py-2 text-xs text-[var(--muted-foreground)]">
                 Could not load the documentation list. The docs folder may be missing from this install.
               </p>
+            ) : searching ? (
+              searchResults.length === 0 ? (
+                <p className="px-1 py-2 text-xs text-[var(--muted-foreground)]">
+                  {searchFetching ? "Searching…" : `No matches for "${trimmedQuery}".`}
+                </p>
+              ) : (
+                <div className="space-y-1.5">
+                  {searchResults.map((result) => (
+                    <button
+                      key={result.path}
+                      type="button"
+                      onClick={() => selectDoc(result.path, trimmedQuery)}
+                      className={cn(
+                        "flex w-full flex-col gap-1 rounded-lg border px-2.5 py-2 text-left transition-colors",
+                        selected === result.path
+                          ? "border-[var(--primary)]/40 bg-[var(--accent)]"
+                          : "border-transparent hover:border-[var(--border)] hover:bg-[var(--accent)]/60",
+                      )}
+                    >
+                      <span className="flex items-center gap-2">
+                        <FileText size="0.875rem" className="shrink-0 text-[var(--muted-foreground)]" />
+                        <span className="min-w-0 flex-1 truncate text-xs font-medium text-[var(--foreground)]">
+                          {result.title}
+                        </span>
+                        <span className="shrink-0 rounded-full border border-[var(--border)]/60 bg-black/5 px-1.5 py-0.5 text-[0.5625rem] text-[var(--muted-foreground)]/80 dark:bg-white/6">
+                          {result.matches}
+                        </span>
+                      </span>
+                      {result.snippets.map((snippet) => (
+                        <span
+                          key={`${result.path}-${snippet.line}`}
+                          className="block truncate pl-6 text-[0.625rem] leading-snug text-[var(--muted-foreground)]/80"
+                        >
+                          {snippet.text}
+                        </span>
+                      ))}
+                    </button>
+                  ))}
+                </div>
+              )
             ) : groups.length === 0 ? (
               <p className="px-1 py-2 text-xs text-[var(--muted-foreground)]">No guides found in the docs folder.</p>
             ) : (
@@ -145,7 +290,8 @@ export function DocsViewerModal({
                       <button
                         key={entry.path}
                         type="button"
-                        onClick={() => setSelected(entry.path)}
+                        onClick={() => selectDoc(entry.path)}
+                        title={entry.updatedAt ? `Last updated ${formatUpdatedAt(entry.updatedAt)}` : undefined}
                         className={cn(
                           "flex w-full items-start gap-2 rounded-lg border px-2.5 py-2 text-left transition-colors",
                           selected === entry.path
@@ -194,15 +340,25 @@ export function DocsViewerModal({
               <div className="mb-2 flex shrink-0 items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => setSelected(null)}
+                  onClick={() => setSelectedState(null)}
                   className="flex h-7 w-7 items-center justify-center rounded-lg text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)] sm:hidden"
                   aria-label="Back to guide list"
                 >
                   <ArrowLeft size="0.875rem" />
                 </button>
-                <p className="min-w-0 truncate text-[0.625rem] text-[var(--muted-foreground)]/70">docs/{selected}</p>
+                <p className="min-w-0 truncate text-[0.625rem] text-[var(--muted-foreground)]/70">
+                  docs/{selected}
+                  {doc?.updatedAt ? ` · Last updated ${formatUpdatedAt(doc.updatedAt)}` : ""}
+                </p>
               </div>
-              <div key={selected} className="min-h-0 flex-1 overflow-y-auto pr-1">
+              <div
+                key={selected}
+                ref={scrollRef}
+                onScroll={(event) => {
+                  if (selected) writeSavedPlace({ doc: selected, scrollTop: event.currentTarget.scrollTop });
+                }}
+                className="min-h-0 flex-1 overflow-y-auto pr-1"
+              >
                 {docLoading ? (
                   <p className="py-2 text-xs text-[var(--muted-foreground)]">Loading…</p>
                 ) : docError || !doc ? (

@@ -75,7 +75,7 @@ const HOME_FAQ_ITEMS: HomeFaqItem[] = [
     category: "Setup",
     question: "Where can I find documentation?",
     answer:
-      "Marinara ships full guides with every install — installation, configuration, troubleshooting, macros, extensions, Game Mode, and more — and you can read them without leaving the app.",
+      "Marinara ships full guides with every install: installation, configuration, troubleshooting, macros, extensions, Game Mode, and more. You can read them without leaving the app.",
     bullets: [
       "Use the Open Documentation button below, or the Documentation button at the bottom of the home page, to browse every guide in-app.",
       "The same guides live on disk as regular markdown files, at the folder path shown below.",

@@ -272,7 +272,7 @@ For story direction, choose the tool by how persistent you want the guidance to 
 <summary><strong>How do I read the documentation inside the app?</strong></summary>
 <br>
 
-Every Marinara install ships with the full set of guides you are reading right now — installation, configuration, troubleshooting, macros, extensions, Game Mode, and more. You can read them without leaving the app:
+Every Marinara install ships with the full set of guides you are reading right now: installation, configuration, troubleshooting, macros, extensions, Game Mode, and more. You can read them without leaving the app:
 
 - **From the home page footer:** click the **Documentation** button next to **Replay Tutorial**.
 - **From the FAQ:** open the "Where can I find documentation?" entry and click **Open Documentation**.

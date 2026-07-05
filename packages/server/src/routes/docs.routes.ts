@@ -27,6 +27,30 @@ interface DocSummary {
   title: string;
   /** Subfolder relative to docs ("" for root-level guides) */
   dir: string;
+  /** File modification time (ISO). Reflects install/update time on fresh clones. */
+  updatedAt: string;
+}
+
+interface DocSearchSnippet {
+  line: number;
+  text: string;
+}
+
+interface DocSearchResult extends DocSummary {
+  matches: number;
+  snippets: DocSearchSnippet[];
+}
+
+/** Max snippet lines returned per document */
+const MAX_SNIPPETS_PER_DOC = 3;
+
+/** Trim a matched line to a readable snippet centered on the first match */
+function toSnippet(line: string, matchIndex: number): string {
+  const trimmed = line.trim();
+  if (trimmed.length <= 160) return trimmed;
+  const offset = Math.max(0, matchIndex - 60);
+  const slice = line.slice(offset, offset + 160).trim();
+  return `${offset > 0 ? "…" : ""}${slice}…`;
 }
 
 function isSafeSegment(value: string): boolean {
@@ -62,10 +86,12 @@ async function collectDocs(dir: string, relativeDir: string): Promise<DocSummary
     }
     if (!entry.isFile() || !entry.name.toLowerCase().endsWith(".md")) continue;
     const relativePath = relativeDir ? `${relativeDir}/${entry.name}` : entry.name;
+    const filePath = join(dir, entry.name);
     docs.push({
       path: relativePath,
-      title: await extractTitle(join(dir, entry.name), entry.name.replace(/\.md$/i, "")),
+      title: await extractTitle(filePath, entry.name.replace(/\.md$/i, "")),
       dir: relativeDir,
+      updatedAt: (await stat(filePath)).mtime.toISOString(),
     });
   }
 
@@ -95,6 +121,49 @@ export async function docsRoutes(app: FastifyInstance) {
     } catch (err) {
       logger.error(err, "Failed to list documentation files");
       return reply.status(500).send({ error: "Failed to list documentation files" });
+    }
+  });
+
+  /** Full-text search across all documentation files (case-insensitive substring) */
+  app.get("/search", async (req, reply) => {
+    const { q } = req.query as { q?: string };
+    const query = typeof q === "string" ? q.trim().slice(0, 200) : "";
+    if (query.length < 2) {
+      return reply.status(400).send({ error: "Query must be at least 2 characters" });
+    }
+    if (!existsSync(DOCS_DIR)) {
+      return reply.status(404).send({ error: "Documentation folder not found" });
+    }
+
+    try {
+      const needle = query.toLowerCase();
+      const results: DocSearchResult[] = [];
+
+      for (const doc of await collectDocs(DOCS_DIR, "")) {
+        const content = await readFile(join(DOCS_DIR, ...doc.path.split("/")), "utf8");
+        const snippets: DocSearchSnippet[] = [];
+        let matches = 0;
+
+        const titleMatch = doc.title.toLowerCase().includes(needle);
+        if (titleMatch) matches++;
+
+        content.split(/\r?\n/).forEach((line, index) => {
+          const matchIndex = line.toLowerCase().indexOf(needle);
+          if (matchIndex === -1) return;
+          matches++;
+          if (snippets.length < MAX_SNIPPETS_PER_DOC) {
+            snippets.push({ line: index + 1, text: toSnippet(line, matchIndex) });
+          }
+        });
+
+        if (matches > 0) results.push({ ...doc, matches, snippets });
+      }
+
+      results.sort((a, b) => b.matches - a.matches || a.path.localeCompare(b.path));
+      return { query, results };
+    } catch (err) {
+      logger.error(err, "Failed to search documentation files");
+      return reply.status(500).send({ error: "Failed to search documentation files" });
     }
   });
 
@@ -133,7 +202,7 @@ export async function docsRoutes(app: FastifyInstance) {
       }
       const content = await readFile(filePath, "utf8");
       const title = content.slice(0, 4096).match(/^#\s+(.+?)\s*$/m)?.[1] ?? filename;
-      return { path: docPath, title, content };
+      return { path: docPath, title, content, updatedAt: info.mtime.toISOString() };
     } catch (err) {
       logger.error(err, "Failed to read documentation file");
       return reply.status(500).send({ error: "Failed to read documentation file" });
