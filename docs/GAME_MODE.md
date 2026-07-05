@@ -52,7 +52,7 @@ Once the world is generated, each turn assembles a fresh prompt that includes:
 - HUD widget state
 - Content rating (SFW / NSFW)
 
-The model returns narration, dialogue, scene description, and any state changes (combat results, map updates, NPC reactions). If you have **Enable Agents** or **Game Illustrator** enabled, those run afterward to add backgrounds, music, sprite expressions, and HUD widget updates — see [Optional toggles](#optional-toggles).
+The model returns narration, dialogue, scene description, and any state changes (combat results, map updates, NPC reactions). If you have **Enable Agents** enabled, it runs afterward to add music, sprite expressions, HUD widget updates, and other agent-driven effects. If you have **Game Illustrator** enabled, it adds visual outputs such as NPC portraits, location backgrounds, and inventory imagery — see [Optional toggles](#optional-toggles).
 
 Because the prompt assembled per turn is rich, Game Mode handles long-term coherence reasonably well. It also means you're paying for a lot of context per call, so a model that handles long context cleanly is a better fit than one that doesn't.
 

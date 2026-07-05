@@ -20,9 +20,9 @@ Pick **Conversation** instead if you just want chat without scene chrome. Pick *
 
 ## Setting up a roleplay
 
-Roleplay uses a five-step setup wizard. Only the connection is required:
+Roleplay uses a five-step setup wizard. The connection is required; the roleplay name is optional and can be left blank if you want Marinara to use the default:
 
-1. **Name & Connection** — name the roleplay and choose the AI connection.
+1. **Name & Connection** — optionally name the roleplay and choose the required AI connection.
 2. **Pick a Preset** — saved prompt-stack template. Default works for most cases.
 3. **Persona & Characters** — choose the character you play and who joins the scene.
 4. **Attach Lorebooks** — optional world facts and lore-specific context.

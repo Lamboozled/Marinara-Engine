@@ -67,6 +67,12 @@ function mergeCharacterData(
   };
 }
 
+type CharacterRow = typeof characters.$inferSelect;
+type CharacterListRow = {
+  row: CharacterRow;
+  name: string;
+  favorite: boolean;
+};
 type PersonaRow = typeof personas.$inferSelect;
 type CharacterListPageOptions = {
   includeBuiltIn?: boolean;
@@ -99,39 +105,30 @@ function characterOrder(sort: string | undefined) {
   }
 }
 
-function readCharacterName(row: typeof characters.$inferSelect) {
+function readCharacterListRow(row: CharacterRow): CharacterListRow {
   try {
     const parsed = parseCharacterData(row.data);
-    return typeof parsed.name === "string" && parsed.name.trim() ? parsed.name.trim() : "Unknown";
+    return {
+      row,
+      name: typeof parsed.name === "string" && parsed.name.trim() ? parsed.name.trim() : "Unknown",
+      favorite: !!parsed.extensions?.fav,
+    };
   } catch {
-    return "Unknown";
+    return { row, name: "Unknown", favorite: false };
   }
 }
 
-function readCharacterFavorite(row: typeof characters.$inferSelect) {
-  try {
-    const parsed = parseCharacterData(row.data);
-    return parsed.extensions?.fav === true;
-  } catch {
-    return false;
-  }
-}
-
-function sortCharacterRows(rows: Array<typeof characters.$inferSelect>, sort: string | undefined) {
+function sortCharacterRows(rows: CharacterListRow[], sort: string | undefined) {
   switch (sort) {
     case "name-desc":
-      return [...rows].sort(
-        (a, b) => readCharacterName(b).localeCompare(readCharacterName(a)) || a.id.localeCompare(b.id),
-      );
+      return [...rows].sort((a, b) => b.name.localeCompare(a.name) || a.row.id.localeCompare(b.row.id));
     case "name-asc":
-      return [...rows].sort(
-        (a, b) => readCharacterName(a).localeCompare(readCharacterName(b)) || a.id.localeCompare(b.id),
-      );
+      return [...rows].sort((a, b) => a.name.localeCompare(b.name) || a.row.id.localeCompare(b.row.id));
     case "favorites":
       return [...rows].sort((a, b) => {
-        const favDiff = Number(readCharacterFavorite(b)) - Number(readCharacterFavorite(a));
+        const favDiff = Number(b.favorite) - Number(a.favorite);
         if (favDiff !== 0) return favDiff;
-        return readCharacterName(a).localeCompare(readCharacterName(b)) || a.id.localeCompare(b.id);
+        return a.name.localeCompare(b.name) || a.row.id.localeCompare(b.row.id);
       });
     default:
       return rows;
@@ -257,14 +254,18 @@ export function createCharactersStorage(db: DB) {
         const rows = await (whereClause
           ? db.select().from(characters).where(whereClause).orderBy(...characterOrder(options.sort))
           : db.select().from(characters).orderBy(...characterOrder(options.sort)));
+        const annotatedRows = rows.map(readCharacterListRow);
         const filtered =
           favoriteFilter === "favorites"
-            ? rows.filter(readCharacterFavorite)
+            ? annotatedRows.filter((row) => row.favorite)
             : favoriteFilter === "non-favorites"
-              ? rows.filter((row) => !readCharacterFavorite(row))
-              : rows;
+              ? annotatedRows.filter((row) => !row.favorite)
+              : annotatedRows;
+        const pagedRows = sortCharacterRows(filtered, options.sort)
+          .slice(options.offset, options.offset + options.limit + 1)
+          .map(({ row }) => row);
         return toPaginatedList(
-          sortCharacterRows(filtered, options.sort).slice(options.offset),
+          pagedRows,
           options.limit,
           options.offset,
         );

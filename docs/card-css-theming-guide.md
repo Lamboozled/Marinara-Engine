@@ -125,7 +125,7 @@ The chat DOM is the same skeleton in roleplay and conversation. These are the el
 | ----------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
 | `[data-card-css]`                         | The whole message **row** (the scope element) — left/edge accents, or the chat area in Chat mode               |
 | `[data-card-css] .mari-message-bubble`    | The **visible bubble** — background, border, corners, shadow. _(Bubbles layout + roleplay.)_                   |
-| `[data-card-css] .mari-message-content`   | The **message text**. In the Bubbles layout this is the bubble element itself, so it also takes background/border |
+| `[data-card-css] .mari-message-content`   | In **Bubbles** layout, the bubble element itself, including background, border, and corners. In **Linear** layout, only the message text/content. |
 | `[data-card-css] .mari-message-name`      | The character's display **name**                                                                               |
 | `[data-card-css] .mari-message-meta`      | The header row holding the name + timestamp                                                                    |
 | `[data-card-css] .mari-message-timestamp` | The timestamp                                                                                                  |

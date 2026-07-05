@@ -31,7 +31,7 @@ The UI follows a Discord-inspired three-column design managed by `AppShell.tsx`:
 └─────────────┴─────────────────────────────┴──────────────┘
 ```
 
-- **Left Sidebar** (`ChatSidebar.tsx`): Chat list organized by folders, filterable by mode (Conversation / Roleplay / Game).
+- **Left Sidebar** (`ChatSidebar.tsx`): Chat list organized by folders, filterable by mode (Conversation / Roleplay / Visual Novel / Game).
 - **Center Pane**: Either the active chat surface or a full editor (character, lorebook, preset, etc.). Only one is visible at a time; editors replace the chat area.
 - **Right Panel** (`RightPanel.tsx`): Resource browser and settings, toggled from the top bar. Once a panel is mounted, it stays in the DOM (hidden with CSS) to preserve scroll position and local state.
 - **Top Bar** (`TopBar.tsx`): Quick-switch buttons for each right panel.

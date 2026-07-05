@@ -260,7 +260,7 @@ if errorlevel 1 echo  [ERROR] Failed to install dependencies. & pause & exit /b 
 :: Load .env if present (respects user overrides)
 if not exist .env goto :skip_env
 for /f "usebackq eol=# tokens=1,* delims==" %%A in (".env") do (
-    if not "%%A"=="" if not "%%B"=="" set "%%A=%%B"
+    if not "%%A"=="" if not "%%B"=="" set "%%A=%%~B"
 )
 
 :skip_env

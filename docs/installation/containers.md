@@ -16,11 +16,11 @@ That Compose file tracks `ghcr.io/pasta-devs/marinara-engine:latest`. Every tagg
 
 Compose binds to `127.0.0.1` by default. To expose the container to your LAN, change the port mapping to `${PORT:-7860}:7860`, set `BASIC_AUTH_USER`, `BASIC_AUTH_PASS`, and `ADMIN_SECRET`, then restart. See [Access Control](../CONFIGURATION.md#access-control).
 
-Data (file-backed storage, uploads, fonts, default backgrounds) is stored in the Compose-managed `marinara-data` volume. Compose prefixes volume names with the project name, so a standard clone usually creates `marinara-engine_marinara-data`. To find or inspect it:
+Data (file-backed storage, uploads, fonts, default backgrounds) is stored in the Compose-managed `marinara-data` volume. Compose prefixes volume names with the project name, so the actual Docker volume name follows a `<compose-project>_marinara-data` pattern. Discover the exact name before inspecting it:
 
 ```bash
 docker volume ls --filter name=marinara-data
-docker volume inspect marinara-engine_marinara-data
+docker volume inspect <volume-name-from-the-list>
 ```
 
 The bare `marinara-data` name applies to the `docker run -v marinara-data:/app/data` examples below.
