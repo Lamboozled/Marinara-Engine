@@ -74,6 +74,8 @@ if not defined CURRENT_PNPM_VERSION (
 
 if not defined CURRENT_PNPM_VERSION (
     echo  [ERROR] Failed to make pnpm %PNPM_VERSION% available.
+    echo          Marinara can run without a global pnpm install, but Node.js must provide Corepack or npx/npm.
+    echo          Reinstall Node.js 24 LTS with npm enabled, or run: npm install -g pnpm
     pause
     exit /b 1
 )
