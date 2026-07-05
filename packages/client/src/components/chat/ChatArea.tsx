@@ -52,6 +52,7 @@ import { parseCharacterDisplayData } from "../../lib/character-display";
 import { showConfirmDialog } from "../../lib/app-dialogs";
 import { chatBackgroundMetadataToUrl, chatBackgroundUrlToMetadata } from "../../lib/backgrounds";
 import { useGameStateStore } from "../../stores/game-state.store";
+import { useGalleryStore } from "../../stores/gallery.store";
 import { toast } from "sonner";
 import { Check, HelpCircle, List, X } from "lucide-react";
 import {
@@ -60,6 +61,7 @@ import {
   PROFESSOR_MARI_ID,
   buildGuidedGenerationInstructionMessage,
   type AchievementEvent,
+  type GeneratedSceneVideo,
   type SpritePlacement,
   type SpriteSide,
   type WeekSchedule,
@@ -107,6 +109,7 @@ import { HomeAchievements } from "./HomeAchievements";
 import { NewChatConnectionGate } from "./NewChatConnectionGate";
 import { ChatCommonOverlays, preloadChatSettingsDrawer, type ChatSettingsInitialSection } from "./ChatCommonOverlays";
 import { CharacterScheduleEditorModal } from "./CharacterScheduleEditorModal";
+import { PendingTypingDots } from "./PendingTypingDots";
 import { CreatorNotesCssInjector, type CardCssMode } from "./CreatorNotesCssInjector";
 import type { ChatModeFilter } from "../../lib/card-css";
 import { ImagePromptReviewModal, type ImagePromptOverride, type ImagePromptReviewItem } from "../ui/ImagePromptReviewModal";
@@ -273,6 +276,7 @@ function suppressBuiltInProfessorMariForMode(mode: string | undefined): boolean 
 
 const INTUITIVE_SWIPE_MIN_DISTANCE = 56;
 const INTUITIVE_SWIPE_MAX_VERTICAL_DRIFT = 44;
+const SCENE_VIDEO_GENERATION_TIMEOUT_MS = 1_800_000;
 
 const shouldIgnoreIntuitiveSwipeTarget = (target: EventTarget | null): boolean => {
   if (!(target instanceof Element)) return false;
@@ -354,6 +358,42 @@ function toCharacterMapValue(char: CharacterRow): CharacterMapValue {
   } catch {
     return { name: "Unknown", avatarUrl: char.avatarPath ?? null };
   }
+}
+
+// [#3164] Value comparators so the characterMap memo can keep its previous
+// identity when a rebuild produced equal contents. A new map identity re-runs
+// the regex+macro display pipeline for every mounted message, so renders
+// triggered by the presence clock or unrelated metadata writes must not renew
+// it. The field list must cover every field of the CharacterMap value type —
+// a missed field would make a real change invisible to consumers.
+function areCharacterMapValuesEqual(a: CharacterMapValue, b: CharacterMapValue): boolean {
+  return (
+    a.name === b.name &&
+    a.description === b.description &&
+    a.personality === b.personality &&
+    a.backstory === b.backstory &&
+    a.appearance === b.appearance &&
+    a.scenario === b.scenario &&
+    a.example === b.example &&
+    a.avatarUrl === b.avatarUrl &&
+    a.nameColor === b.nameColor &&
+    a.dialogueColor === b.dialogueColor &&
+    a.boxColor === b.boxColor &&
+    a.conversationStatus === b.conversationStatus &&
+    a.conversationActivity === b.conversationActivity &&
+    // avatarCrop is a small plain object — compare by value, not reference.
+    (a.avatarCrop === b.avatarCrop ||
+      JSON.stringify(a.avatarCrop ?? null) === JSON.stringify(b.avatarCrop ?? null))
+  );
+}
+
+function areCharacterMapsEqual(a: CharacterMap, b: CharacterMap): boolean {
+  if (a.size !== b.size) return false;
+  for (const [id, value] of b) {
+    const previous = a.get(id);
+    if (!previous || !areCharacterMapValuesEqual(previous, value)) return false;
+  }
+  return true;
 }
 
 const ChatConversationSurface = lazy(async () => {
@@ -549,7 +589,9 @@ export function ChatArea() {
   }, []);
 
   useEffect(() => {
-    if (activeChatId) setHomeProfessorChatOpen(false);
+    if (!activeChatId) return;
+    setHomeProfessorChatOpen(false);
+    setHomeProfessorChatActive(false);
   }, [activeChatId]);
   const closeFloatingChatDrawers = useCallback(() => {
     setSettingsOpen(false);
@@ -685,8 +727,11 @@ export function ChatArea() {
     setAgentInjectionDrafts({});
   }, []);
 
-  // Character IDs in the active chat
-  const chatCharIds = useMemo(() => getChatCharacterIds(chat), [chat]);
+  // Character IDs in the active chat. Keyed on the raw characterIds field
+  // (all getChatCharacterIds reads) so chat-detail refetches that only bump
+  // other fields don't renew the array identity. [#3164]
+  const chatCharacterIdsRaw = chat?.characterIds;
+  const chatCharIds = useMemo(() => getChatCharacterIds({ characterIds: chatCharacterIdsRaw }), [chatCharacterIdsRaw]);
   const chatPersonaId = useMemo(() => resolveChatPersonaId(chat), [chat]);
   const { data: chatPersona } = usePersona(chatPersonaId);
   const { data: activePersonaFallback } = useActivePersona(!!chat?.id && !chatPersonaId && !isGameChat);
@@ -700,10 +745,20 @@ export function ChatArea() {
       staleTime: 5 * 60_000,
     })),
   });
-  const chatCharacterRows = useMemo(
-    () => activeCharacterQueries.map((query) => query.data).filter(isCharacterRow),
-    [activeCharacterQueries],
-  );
+  // [#3164] useQueries returns a fresh result array every render while the
+  // underlying row objects are cache-stable — reuse the previous array when
+  // every element is unchanged so the characterMap memo below (and everything
+  // downstream of it) keeps its identity across unrelated re-renders.
+  const chatCharacterRowsRef = useRef<CharacterRow[]>([]);
+  const chatCharacterRows = useMemo(() => {
+    const next = activeCharacterQueries.map((query) => query.data).filter(isCharacterRow);
+    const previous = chatCharacterRowsRef.current;
+    if (previous.length === next.length && next.every((row, index) => row === previous[index])) {
+      return previous;
+    }
+    chatCharacterRowsRef.current = next;
+    return next;
+  }, [activeCharacterQueries]);
 
   // A 60s-cadence clock so schedule/override-derived presence refreshes when time
   // alone changes the effective status (mirrors the presence pill's refetch).
@@ -711,6 +766,7 @@ export function ChatArea() {
 
   // Build character lookup map from the active chat's characters only. Library
   // panels can load the whole catalog; the chat surface should not.
+  const characterMapRef = useRef<CharacterMap>(new Map());
   const characterMap: CharacterMap = useMemo(() => {
     const map: CharacterMap = new Map();
     for (const char of chatCharacterRows) {
@@ -768,6 +824,12 @@ export function ChatArea() {
         });
       }
     }
+    // [#3164] Presence-clock ticks and metadata writes that didn't change any
+    // displayed character field must not renew the map identity — a new
+    // identity re-runs the regex+macro display pipeline for every mounted
+    // message across all three chat surfaces.
+    if (areCharacterMapsEqual(characterMapRef.current, map)) return characterMapRef.current;
+    characterMapRef.current = map;
     return map;
   }, [chatCharacterRows, chat?.metadata, presenceNow]);
 
@@ -982,6 +1044,7 @@ export function ChatArea() {
   const summaryContextSize: number = (chatMeta.summaryContextSize as number) ?? 50;
   const [roleplayBackgroundReviewItems, setRoleplayBackgroundReviewItems] = useState<ImagePromptReviewItem[]>([]);
   const [roleplayBackgroundReviewSubmitting, setRoleplayBackgroundReviewSubmitting] = useState(false);
+  const roleplaySceneVideoGeneratingRef = useRef(false);
   const roleplayBackgroundReviewResolveRef = useRef<((overrides: ImagePromptOverride[] | null) => void) | null>(null);
 
   const openRoleplayBackgroundPromptReview = useCallback((items: ImagePromptReviewItem[]) => {
@@ -1063,6 +1126,43 @@ export function ChatArea() {
     queryClient,
     updateMeta,
   ]);
+
+  const handleGenerateRoleplaySceneVideo = useCallback(
+    async (source?: { galleryImageId?: string }) => {
+      if (!activeChatId || !chat || (chatMode !== "roleplay" && chatMode !== "visual_novel")) return;
+      if (roleplaySceneVideoGeneratingRef.current) return;
+      const sceneVideoConnectionId =
+        typeof chatMeta.sceneVideoConnectionId === "string" ? chatMeta.sceneVideoConnectionId.trim() : "";
+      if (!sceneVideoConnectionId) {
+        toast.error("Choose a Scene Video connection in Chat Settings first.");
+        return;
+      }
+
+      const galleryImageId = source?.galleryImageId?.trim();
+      roleplaySceneVideoGeneratingRef.current = true;
+      try {
+        const result = await api.post<{ video: GeneratedSceneVideo }>(
+          "/gallery/generate-scene-video",
+          {
+            chatId: activeChatId,
+            ...(galleryImageId ? { galleryImageId } : {}),
+            debugMode: useUIStore.getState().debugMode,
+          },
+          { signal: AbortSignal.timeout(SCENE_VIDEO_GENERATION_TIMEOUT_MS) },
+        );
+        const galleryStore = useGalleryStore.getState();
+        galleryStore.pinVideo(result.video);
+        galleryStore.syncLatestViewer({ ...result.video, kind: "video" as const });
+        void queryClient.invalidateQueries({ queryKey: ["gallery", "scene-videos", activeChatId] });
+        toast.success("Scene video generated.", { duration: 1800 });
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "Scene video generation failed.");
+      } finally {
+        roleplaySceneVideoGeneratingRef.current = false;
+      }
+    },
+    [activeChatId, chat, chatMeta.sceneVideoConnectionId, chatMode, queryClient],
+  );
 
   // Creator-notes card CSS: resolve the per-chat mode (default "chat") and map
   // the chat mode onto the @chat-mode filter surface (visual novel shares the
@@ -2807,6 +2907,8 @@ export function ChatArea() {
           onOpenScheduleEditor={handleOpenScheduleEditor}
           onIllustrate={() => retryAgents(activeChatId, ["illustrator"])}
           onGenerateBackground={handleGenerateRoleplayBackground}
+          onGenerateVideo={() => handleGenerateRoleplaySceneVideo()}
+          onAnimateImage={(image) => handleGenerateRoleplaySceneVideo({ galleryImageId: image.id })}
           onWizardFinish={() => {
             setWizardOpen(false);
             handleOpenSettingsPanel();
@@ -2864,9 +2966,7 @@ function TypingIndicator() {
   return (
     <div className="flex items-center gap-1 px-4 py-3">
       <div className="flex items-center gap-1 rounded-xl bg-[var(--secondary)] px-4 py-2.5">
-        <span className="h-2 w-2 animate-bounce rounded-full bg-[var(--muted-foreground)]/60 [animation-delay:0ms]" />
-        <span className="h-2 w-2 animate-bounce rounded-full bg-[var(--muted-foreground)]/60 [animation-delay:150ms]" />
-        <span className="h-2 w-2 animate-bounce rounded-full bg-[var(--muted-foreground)]/60 [animation-delay:300ms]" />
+        <PendingTypingDots dotClassName="bg-[var(--muted-foreground)]/60" />
       </div>
     </div>
   );

@@ -188,7 +188,10 @@ export function ConversationPresenceCard({
   const setAbortController = useChatStore((s) => s.setAbortController);
   const setDelayedCharacterInfo = useChatStore((s) => s.setDelayedCharacterInfo);
   const setPerChatDelayed = useChatStore((s) => s.setPerChatDelayed);
-  const overrides = useMemo(() => parseOverrides(chatMeta.conversationStatusOverrides), [chatMeta.conversationStatusOverrides]);
+  const overrides = useMemo(
+    () => parseOverrides(chatMeta.conversationStatusOverrides),
+    [chatMeta.conversationStatusOverrides],
+  );
   const schedules = useMemo(() => parseSchedules(chatMeta.characterSchedules), [chatMeta.characterSchedules]);
   const schedulesEnabled =
     chatMeta.conversationSchedulesEnabled === true ||
@@ -232,7 +235,7 @@ export function ConversationPresenceCard({
     const maxLeft = Math.max(viewportPadding, window.innerWidth - width - viewportPadding);
     setPosition({
       top: rect.bottom + (isMobile ? 0 : 8),
-      left: Math.max(viewportPadding, Math.min(rect.right - width, maxLeft)),
+      left: Math.max(viewportPadding, Math.min(rect.left, maxLeft)),
       width,
     });
   }, [open]);
@@ -313,7 +316,8 @@ export function ConversationPresenceCard({
 
     const handlePointerDown = (event: PointerEvent) => {
       const target = event.target as Node;
-      if (statusButtonRefs.current[statusMenuCharacterId]?.contains(target) || statusMenuRef.current?.contains(target)) return;
+      if (statusButtonRefs.current[statusMenuCharacterId]?.contains(target) || statusMenuRef.current?.contains(target))
+        return;
       setStatusMenuCharacterId(null);
     };
 
@@ -334,7 +338,14 @@ export function ConversationPresenceCard({
           const statusEntry = statusesQuery.data?.statuses[id];
           const status = pendingStatuses[id] ?? statusEntry?.status ?? character.conversationStatus ?? "online";
           const activity = statusEntry?.activity ?? character.conversationActivity ?? "";
-          return { id, ...character, status, activity, schedule: statusEntry?.schedule ?? schedules[id], override: overrides[id] };
+          return {
+            id,
+            ...character,
+            status,
+            activity,
+            schedule: statusEntry?.schedule ?? schedules[id],
+            override: overrides[id],
+          };
         })
         .filter((value): value is NonNullable<typeof value> => value !== null),
     [characterMap, chatCharIds, overrides, pendingStatuses, schedules, statusesQuery.data?.statuses],
@@ -383,7 +394,11 @@ export function ConversationPresenceCard({
     "flex h-5 w-5 items-center justify-center rounded-full bg-[var(--foreground)]/10 text-[0.5rem] font-bold text-[var(--foreground)]/70 ring-1 ring-[var(--border)]/80 max-md:h-6 max-md:w-6 max-md:text-[0.5625rem]";
   const title = characters.map((c) => `${c.name}: ${c.activity || statusLabel(c.status)}`).join(", ");
 
-  const saveOverride = async (characterId: string, status: ConversationPresenceStatus, activity?: string | null): Promise<boolean> => {
+  const saveOverride = async (
+    characterId: string,
+    status: ConversationPresenceStatus,
+    activity?: string | null,
+  ): Promise<boolean> => {
     setPendingStatuses((current) => ({ ...current, [characterId]: status }));
     try {
       await updateMeta.mutateAsync({
@@ -420,7 +435,10 @@ export function ConversationPresenceCard({
       return next;
     });
     try {
-      await updateMeta.mutateAsync({ id: chatId, conversationStatusOverrides: buildOverrides(overrides, characterId, null) });
+      await updateMeta.mutateAsync({
+        id: chatId,
+        conversationStatusOverrides: buildOverrides(overrides, characterId, null),
+      });
       void statusesQuery.refetch();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to clear presence override");
@@ -436,7 +454,12 @@ export function ConversationPresenceCard({
       setPerChatDelayed(chatId, null);
       setDelayedCharacterInfo(null);
       await api.post("/generate/abort", { chatId }).catch(() => undefined);
-      const produced = await generate({ chatId, connectionId: null, forCharacterId: characterId, skipPresenceDelay: true });
+      const produced = await generate({
+        chatId,
+        connectionId: null,
+        forCharacterId: characterId,
+        skipPresenceDelay: true,
+      });
       if (!produced) toast.info("No reply was generated.");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to reply now");
@@ -472,7 +495,10 @@ export function ConversationPresenceCard({
   };
 
   const selectStatus = async (character: (typeof characters)[number], status: ConversationPresenceStatus) => {
-    const nextActivity = editingCharacterId === character.id ? draftActivity.trim() || null : character.override?.activity ?? character.activity ?? null;
+    const nextActivity =
+      editingCharacterId === character.id
+        ? draftActivity.trim() || null
+        : (character.override?.activity ?? character.activity ?? null);
     const currentActivity = character.override?.activity?.trim() || character.activity?.trim() || null;
 
     if (status === character.status && nextActivity === currentActivity) {
@@ -526,7 +552,9 @@ export function ConversationPresenceCard({
               />
             </div>
             <div className="flex min-w-0 flex-1 flex-col items-start text-left leading-tight">
-              <span className="truncate text-[0.75rem] font-semibold text-[var(--foreground)]/90">{characters[0].name}</span>
+              <span className="truncate text-[0.75rem] font-semibold text-[var(--foreground)]/90">
+                {characters[0].name}
+              </span>
               <span className="block w-full truncate text-[0.5625rem] text-[var(--foreground)]/50">
                 {characters[0].activity || statusLabel(characters[0].status)}
               </span>
@@ -534,7 +562,10 @@ export function ConversationPresenceCard({
           </>
         ) : (
           <>
-            <div className="relative flex-shrink-0" style={{ width: `${Math.min(characters.length, 3) * 12 + 8}px`, height: 20 }}>
+            <div
+              className="relative flex-shrink-0"
+              style={{ width: `${Math.min(characters.length, 3) * 12 + 8}px`, height: 20 }}
+            >
               {characters.slice(0, 3).map((character, index) => (
                 <div key={character.id} className="absolute top-0" style={{ left: index * 12 }}>
                   {character.avatarUrl ? (
@@ -567,7 +598,7 @@ export function ConversationPresenceCard({
         )}
       </button>
 
-      {open && (
+      {open &&
         createPortal(
           <div
             ref={popoverRef}
@@ -586,15 +617,15 @@ export function ConversationPresenceCard({
                   </div>
                 </div>
                 <div className="flex shrink-0 items-center gap-1">
-                    <button
-                      type="button"
-                      className="rounded-lg p-1.5 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
-                      title="Open autonomous settings"
-                      onClick={() => {
-                        setOpen(false);
-                        onOpenSettings(undefined, { initialSection: "autonomous" });
-                      }}
-                    >
+                  <button
+                    type="button"
+                    className="rounded-lg p-1.5 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
+                    title="Open autonomous settings"
+                    onClick={() => {
+                      setOpen(false);
+                      onOpenSettings(undefined, { initialSection: "autonomous" });
+                    }}
+                  >
                     <Settings2 size="0.8125rem" />
                   </button>
                   <button
@@ -603,20 +634,29 @@ export function ConversationPresenceCard({
                     title="Refresh status"
                     onClick={() => void refreshStatuses()}
                   >
-                    <RefreshCw size="0.8125rem" className={cn((statusesQuery.isFetching || isRefreshing) && "animate-spin")} />
+                    <RefreshCw
+                      size="0.8125rem"
+                      className={cn((statusesQuery.isFetching || isRefreshing) && "animate-spin")}
+                    />
                   </button>
                 </div>
               </div>
             </div>
 
-            <div className={cn(ROLEPLAY_POPOVER_SCROLL_AREA, "max-h-[min(28rem,calc(100vh-12rem))] space-y-2 overflow-y-auto p-2")}>
+            <div
+              className={cn(
+                ROLEPLAY_POPOVER_SCROLL_AREA,
+                "max-h-[min(28rem,calc(100vh-12rem))] space-y-2 overflow-y-auto p-2",
+              )}
+            >
               {characters.map((character) => {
                 const activity = character.override?.activity ?? character.activity;
                 const isManual = !!character.override;
                 const isEditing = editingCharacterId === character.id;
                 const primaryText = activity || statusLabel(character.status);
                 const isStatusMenuOpen = statusMenuCharacterId === character.id;
-                const lastContact = statusesQuery.data?.statuses[character.id]?.lastContact ?? lastContactByCharacterId[character.id];
+                const lastContact =
+                  statusesQuery.data?.statuses[character.id]?.lastContact ?? lastContactByCharacterId[character.id];
                 const lastContactLabel = lastContact ? formatRelativeContact(lastContact) : null;
                 const canReplyNow = !!activeAbortController && !!delayedInfo?.characterIds?.includes(character.id);
                 const isReplyNowPending = replyNowCharacterId === character.id;
@@ -690,7 +730,9 @@ export function ConversationPresenceCard({
                                 "inline-flex min-h-[2rem] items-center justify-center gap-1 px-2 text-[0.6875rem] font-medium transition-colors hover:bg-[var(--accent)] focus:outline-none focus:ring-2 focus:ring-[var(--ring)]",
                                 isStatusMenuOpen && "bg-[var(--accent)]",
                               )}
-                              onClick={() => setStatusMenuCharacterId((current) => (current === character.id ? null : character.id))}
+                              onClick={() =>
+                                setStatusMenuCharacterId((current) => (current === character.id ? null : character.id))
+                              }
                             >
                               <span className={cn("h-2 w-2 rounded-full", statusDotClass(character.status))} />
                               <ChevronDown size="0.625rem" className="shrink-0 opacity-60" />
@@ -728,18 +770,17 @@ export function ConversationPresenceCard({
                             }}
                           />
 
-                          {isManual && (
-                            <button
-                              type="button"
-                              disabled={updateMeta.isPending}
-                              className="shrink-0 border-l border-[var(--border)] px-2.5 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)]/20 hover:text-[var(--foreground)] disabled:opacity-60"
-                              title="Clear manual override"
-                              onClick={() => void restoreSchedule(character.id)}
-                            >
-                              <Trash2 size="0.75rem" />
-                            </button>
-                          )}
-                        </div>
+                        {isManual && (
+                          <button
+                            type="button"
+                            disabled={updateMeta.isPending}
+                            className="shrink-0 border-l border-[var(--border)] px-2.5 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)]/20 hover:text-[var(--foreground)] disabled:opacity-60"
+                            title="Clear manual override"
+                            onClick={() => void restoreSchedule(character.id)}
+                          >
+                            <Trash2 size="0.75rem" />
+                          </button>
+                        )}
                       </div>
 
                       <ConversationPresenceScheduleSection
@@ -808,8 +849,7 @@ export function ConversationPresenceCard({
             </div>
           </div>,
           document.body,
-        )
-      )}
+        )}
     </>
   );
 }
