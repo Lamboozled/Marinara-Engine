@@ -1,7 +1,7 @@
 // ──────────────────────────────────────────────
 // DocsViewerModal: Browse the guides shipped in docs/
 // ──────────────────────────────────────────────
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { ArrowLeft, BookOpen, FileText } from "lucide-react";
 import { Modal } from "../ui/Modal";
 import { cn } from "../../lib/utils";
@@ -16,6 +16,60 @@ const DIR_LABELS: Record<string, string> = {
 
 function dirLabel(dir: string) {
   return DIR_LABELS[dir] ?? dir.charAt(0).toUpperCase() + dir.slice(1);
+}
+
+/** Resolve a link target relative to the doc it appears in (e.g. "../FAQ.md" from "installation/windows.md"). */
+function resolveDocPath(currentPath: string, target: string): string {
+  const clean = target.replace(/\\/g, "/").replace(/^\.\//, "");
+  const segments = currentPath.split("/").slice(0, -1);
+  for (const part of clean.split("/")) {
+    if (part === "" || part === ".") continue;
+    if (part === "..") {
+      segments.pop();
+      continue;
+    }
+    segments.push(part);
+  }
+  return segments.join("/");
+}
+
+/**
+ * The shipped docs use a little structural HTML (FAQ.md's <details> blocks,
+ * anchor targets) and relative cross-doc links, neither of which the chat
+ * markdown renderer understands. Rewrite both into forms it can render:
+ * summaries become headings, structural tags are dropped, and relative .md
+ * links point at the content endpoint so the click handler below can follow
+ * them inside the modal.
+ */
+function prepareDocMarkdown(raw: string, docPath: string): string {
+  const out: string[] = [];
+  for (const line of raw.replace(/\r\n/g, "\n").split("\n")) {
+    const trimmed = line.trim();
+    if (/^<\/?details>$/i.test(trimmed) || /^<br\s*\/?>$/i.test(trimmed) || /^<\/?p(\s[^>]*)?>$/i.test(trimmed)) {
+      continue;
+    }
+    if (/^(<a id="[^"]*"><\/a>\s*)+$/i.test(trimmed)) continue;
+    const summary = trimmed.match(/^<summary>(?:<strong>)?(.+?)(?:<\/strong>)?<\/summary>$/i);
+    if (summary) {
+      out.push(`## ${summary[1]}`);
+      continue;
+    }
+    const img = trimmed.match(/^<img\b[^>]*\bsrc="(https?:\/\/[^"]+)"[^>]*>$/i);
+    if (img) {
+      out.push(`![](${img[1]})`);
+      continue;
+    }
+    if (/^<img\b[^>]*>$/i.test(trimmed)) continue;
+    out.push(line);
+  }
+  return out
+    .join("\n")
+    .replace(/\[([^\]]+)\]\(#[^)]*\)/g, "$1")
+    .replace(
+      /\[([^\]]+)\]\((?!(?:https?|card):\/\/|\/api\/|#|mailto:)([^()\s#]+\.md)(?:#[^)]*)?\)/gi,
+      (_match, text: string, target: string) =>
+        `[${text}](/api/docs/content?path=${encodeURIComponent(resolveDocPath(docPath, target))})`,
+    );
 }
 
 export function DocsViewerModal({
@@ -38,6 +92,29 @@ export function DocsViewerModal({
     else groups.push({ dir: entry.dir, docs: [entry] });
   }
 
+  const rendered = useMemo(
+    () =>
+      doc ? renderMarkdownBlocks(prepareDocMarkdown(doc.content, doc.path), applyInlineMarkdown, "docs-viewer") : null,
+    [doc],
+  );
+
+  /** Follow rewritten cross-doc links inside the modal instead of opening a new tab. */
+  const handleContentClick = (event: React.MouseEvent<HTMLDivElement>) => {
+    const anchor = (event.target as HTMLElement).closest?.("a");
+    if (!anchor) return;
+    let url: URL;
+    try {
+      url = new URL(anchor.href, window.location.origin);
+    } catch {
+      return;
+    }
+    if (url.origin !== window.location.origin || !url.pathname.endsWith("/api/docs/content")) return;
+    const target = url.searchParams.get("path");
+    if (!target) return;
+    event.preventDefault();
+    setSelected(target);
+  };
+
   return (
     <Modal open={open} onClose={onClose} title="Documentation" width="max-w-4xl">
       <div className="flex h-[min(65dvh,42rem)] min-h-0 gap-3">
@@ -55,6 +132,8 @@ export function DocsViewerModal({
               <p className="px-1 py-2 text-xs text-[var(--muted-foreground)]">
                 Could not load the documentation list. The docs folder may be missing from this install.
               </p>
+            ) : groups.length === 0 ? (
+              <p className="px-1 py-2 text-xs text-[var(--muted-foreground)]">No guides found in the docs folder.</p>
             ) : (
               groups.map((group) => (
                 <div key={group.dir || "root"}>
@@ -123,14 +202,17 @@ export function DocsViewerModal({
                 </button>
                 <p className="min-w-0 truncate text-[0.625rem] text-[var(--muted-foreground)]/70">docs/{selected}</p>
               </div>
-              <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+              <div key={selected} className="min-h-0 flex-1 overflow-y-auto pr-1">
                 {docLoading ? (
                   <p className="py-2 text-xs text-[var(--muted-foreground)]">Loading…</p>
                 ) : docError || !doc ? (
                   <p className="py-2 text-xs text-[var(--muted-foreground)]">Could not load this guide.</p>
                 ) : (
-                  <div className="prose prose-sm max-w-none text-[var(--foreground)]">
-                    {renderMarkdownBlocks(doc.content, applyInlineMarkdown, "docs-viewer")}
+                  <div
+                    className="mari-message-content whitespace-pre-wrap break-words text-sm text-[var(--foreground)]"
+                    onClick={handleContentClick}
+                  >
+                    {rendered}
                   </div>
                 )}
               </div>

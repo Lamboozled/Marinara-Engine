@@ -110,7 +110,8 @@ export async function docsRoutes(app: FastifyInstance) {
     if (!segments.every(isSafeSegment) || !filename || !filename.toLowerCase().endsWith(".md")) {
       return reply.status(400).send({ error: "Invalid path" });
     }
-    if (segments[0] && EXCLUDED_DIRS.has(segments[0])) {
+    // Lowercase so the exclusion can't be bypassed on case-insensitive filesystems
+    if (segments[0] && EXCLUDED_DIRS.has(segments[0].toLowerCase())) {
       return reply.status(400).send({ error: "Invalid path" });
     }
 

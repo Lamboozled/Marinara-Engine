@@ -2540,6 +2540,7 @@ export function ChatArea() {
                   <div className="flex flex-wrap justify-center gap-2">
                     {/* In-app documentation */}
                     <button
+                      type="button"
                       onClick={() => useUIStore.getState().openModal("docs-viewer")}
                       className="mari-chrome-control mari-chrome-control--small text-xs"
                       title="Browse the documentation"
@@ -2550,6 +2551,7 @@ export function ChatArea() {
 
                     {/* Restart tutorial */}
                     <button
+                      type="button"
                       onClick={() => useUIStore.getState().setHasCompletedOnboarding(false)}
                       className="mari-chrome-control mari-chrome-control--small text-xs"
                       title="Replay tutorial"
