@@ -2152,6 +2152,9 @@ function CharacterClipCard({ clip, characterName }: { clip: CharacterGalleryClip
   const sourceLabel = characterGalleryClipSourceLabel(clip.source);
   const dateLabel = formatClipDate(clip.updatedAt ?? clip.createdAt);
   const isReady = clip.status === "ready" && Boolean(clip.url);
+  const clipDetails = [clip.durationSeconds ? `${clip.durationSeconds}s` : null, clip.aspectRatio]
+    .filter(Boolean)
+    .join(" · ");
 
   return (
     <div className="group overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--card)] transition-all hover:border-[var(--primary)]/30 hover:shadow-md">
@@ -2196,10 +2199,8 @@ function CharacterClipCard({ clip, characterName }: { clip: CharacterGalleryClip
         {clip.prompt ? (
           <p className="line-clamp-2 text-xs leading-relaxed text-[var(--muted-foreground)]">{clip.prompt}</p>
         ) : null}
-        {clip.durationSeconds ? (
-          <p className="text-[0.65rem] text-[var(--muted-foreground)]/70">
-            {clip.durationSeconds}s · {clip.aspectRatio}
-          </p>
+        {clipDetails ? (
+          <p className="text-[0.65rem] text-[var(--muted-foreground)]/70">{clipDetails}</p>
         ) : null}
       </div>
     </div>

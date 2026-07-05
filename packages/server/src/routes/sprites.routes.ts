@@ -84,11 +84,14 @@ import {
   SPRITES_FULL_BODY_SHEET,
 } from "../services/prompt-overrides/index.js";
 import {
+  clampVideoDuration,
   createDefaultVideoGenerationProfile,
   inferVideoSource,
   normalizeVideoGenerationProfile,
   normalizeVideoGenerationUserSettings,
   normalizeSpriteExpressionLabel,
+  VIDEO_ANIMATED_EXPRESSION_CLIP_DURATION_MAX,
+  VIDEO_ANIMATED_EXPRESSION_CLIP_DURATION_MIN,
   VIDEO_DEFAULTS_STORAGE_KEY,
   VIDEO_GENERATION_SETTINGS_KEY,
   type ImageGenerationDefaultsProfile,
@@ -1952,6 +1955,12 @@ export async function spritesRoutes(app: FastifyInstance) {
     const videoSettings = normalizeVideoGenerationUserSettings(
       await createAppSettingsStorage(app.db).get(VIDEO_GENERATION_SETTINGS_KEY),
     );
+    const durationSeconds = clampVideoDuration(
+      body.durationSeconds,
+      videoSettings.animatedExpressionClipDurationSeconds,
+      VIDEO_ANIMATED_EXPRESSION_CLIP_DURATION_MIN,
+      VIDEO_ANIMATED_EXPRESSION_CLIP_DURATION_MAX,
+    );
     const promptOverridesStorage = createPromptOverridesStorage(app.db);
     const promptOverrides = readSpritePromptOverrides(body.promptOverrides);
     const appearance = body.appearance.trim();
@@ -1962,7 +1971,7 @@ export async function spritesRoutes(app: FastifyInstance) {
           promptOverrides,
           appearance,
           expression,
-          durationSeconds: videoSettings.animatedExpressionClipDurationSeconds,
+          durationSeconds,
           noBackground: body.noBackground === true || body.nativeTransparentPng === true,
         });
         return {
@@ -2014,6 +2023,12 @@ export async function spritesRoutes(app: FastifyInstance) {
     const videoSettings = normalizeVideoGenerationUserSettings(
       await createAppSettingsStorage(app.db).get(VIDEO_GENERATION_SETTINGS_KEY),
     );
+    const durationSeconds = clampVideoDuration(
+      body.durationSeconds,
+      videoSettings.animatedExpressionClipDurationSeconds,
+      VIDEO_ANIMATED_EXPRESSION_CLIP_DURATION_MIN,
+      VIDEO_ANIMATED_EXPRESSION_CLIP_DURATION_MAX,
+    );
     const promptOverridesStorage = createPromptOverridesStorage(app.db);
     const promptOverrides = readSpritePromptOverrides(body.promptOverrides);
     const appearance = body.appearance.trim();
@@ -2042,7 +2057,7 @@ export async function spritesRoutes(app: FastifyInstance) {
                 promptOverrides,
                 appearance,
                 expression,
-                durationSeconds: videoSettings.animatedExpressionClipDurationSeconds,
+                durationSeconds,
                 noBackground: body.noBackground === true || body.nativeTransparentPng === true,
               });
               const video = await generateVideo(
@@ -2053,7 +2068,7 @@ export async function spritesRoutes(app: FastifyInstance) {
                 {
                   prompt: withVideoNegativePrompt(prompt),
                   model: resolved.model,
-                  durationSeconds: videoSettings.animatedExpressionClipDurationSeconds,
+                  durationSeconds,
                   aspectRatio: ANIMATED_EXPRESSION_ASPECT_RATIO,
                   resolution: resolved.resolution,
                   referenceImage,

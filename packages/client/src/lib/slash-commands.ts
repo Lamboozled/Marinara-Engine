@@ -168,6 +168,17 @@ function buildMacroHelpText(): string {
 }
 
 const MACRO_HELP_TEXT = buildMacroHelpText();
+const ILLUSTRATE_SLASH_TIMEOUT_MS = 1_800_000;
+
+function withSlashCommandTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | null = null;
+  const deadline = new Promise<never>((_, reject) => {
+    timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
+  });
+  return Promise.race([promise, deadline]).finally(() => {
+    if (timeout) clearTimeout(timeout);
+  });
+}
 
 function buildSlashHelpText(): string {
   return ["Available Commands:", "", ...COMMANDS.map((command) => `${command.usage} - ${command.description}`)].join(
@@ -915,7 +926,11 @@ const COMMANDS: SlashCommand[] = [
 
       useGalleryStore.getState().setChatIllustrating(ctx.chatId, true);
       try {
-        await ctx.illustrate();
+        await withSlashCommandTimeout(
+          Promise.resolve(ctx.illustrate()),
+          ILLUSTRATE_SLASH_TIMEOUT_MS,
+          "Illustration generation timed out.",
+        );
       } catch (error) {
         toast.error(error instanceof Error ? error.message : "Image generation failed.");
       } finally {

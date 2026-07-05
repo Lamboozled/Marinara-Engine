@@ -1700,6 +1700,7 @@ function VideoGenerationSettings() {
       qc.setQueryData(VIDEO_GENERATION_SETTINGS_QUERY_KEY, data);
     },
     onError: (err) => {
+      setDraft(savedSettings);
       toast.error(err.message || "Failed to save video generation settings.");
     },
   });

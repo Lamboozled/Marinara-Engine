@@ -127,11 +127,13 @@ export function useSendConversationCallMessage(callId: string | null) {
 export function useUpdateConversationCallMessageExtra(callId: string | null) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (input: { messageId: string; extra: Record<string, unknown> }) =>
-      api.patch<ConversationCallMessage>(
+    mutationFn: (input: { messageId: string; extra: Record<string, unknown> }) => {
+      if (!callId) throw new Error("No active call is available for this message update.");
+      return api.patch<ConversationCallMessage>(
         `/conversation-calls/${callId}/messages/${input.messageId}/extra`,
         input.extra,
-      ),
+      );
+    },
     onSuccess: (message) => {
       appendCallMessages(queryClient, message.callId, [message]);
       queryClient.invalidateQueries({ queryKey: conversationCallKeys.messages(message.callId) });

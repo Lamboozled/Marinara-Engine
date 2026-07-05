@@ -75,6 +75,7 @@ const DEFAULT_XAI_VIDEO_BASE_URL = "https://api.x.ai/v1";
 const CALL_CHARACTER_VIDEO_VERSION = 1;
 const GENERATION_LOCKS = new Map<string, Promise<void>>();
 const CUSTOM_GENERATION_LOCKS = new Map<string, Promise<void>>();
+const MANIFEST_LOCKS = new Map<string, Promise<void>>();
 const CUSTOM_CLIP_LIMIT = 24;
 
 type SharpFn = (input: Buffer, options?: Record<string, unknown>) => {
@@ -176,6 +177,40 @@ async function writeDiskManifest(manifest: DiskManifest) {
   const tmp = assertInsideDir(CALL_CHARACTER_VIDEO_ROOT, `${file}.${process.pid}.${Date.now()}.tmp`);
   await writeFile(tmp, JSON.stringify(manifest, null, 2), "utf8");
   await rename(tmp, file);
+}
+
+async function withManifestLock<T>(characterId: string, task: () => Promise<T>): Promise<T> {
+  const safeCharacterId = assertSafeCharacterId(characterId);
+  const previous = MANIFEST_LOCKS.get(safeCharacterId) ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const queued = previous.catch(() => {}).then(() => current);
+  MANIFEST_LOCKS.set(safeCharacterId, queued);
+  await previous.catch(() => {});
+  try {
+    return await task();
+  } finally {
+    release();
+    if (MANIFEST_LOCKS.get(safeCharacterId) === queued) {
+      MANIFEST_LOCKS.delete(safeCharacterId);
+    }
+  }
+}
+
+async function updateDiskManifest(input: {
+  characterId: string;
+  characterName: string;
+  avatarPath: string | null;
+  update: (manifest: DiskManifest) => DiskManifest | Promise<DiskManifest>;
+}) {
+  return withManifestLock(input.characterId, async () => {
+    const current = await readDiskManifest(input.characterId, input.characterName, input.avatarPath);
+    const next = await input.update(current);
+    await writeDiskManifest(next);
+    return next;
+  });
 }
 
 function toPublicManifest(manifest: DiskManifest): ConversationCallCharacterVideoManifest {
@@ -396,7 +431,6 @@ async function runGenerationJob(input: {
   debugMode?: boolean;
 }) {
   const startedAt = nowIso();
-  let manifest = await readDiskManifest(input.characterId, input.characterName, input.avatarPath);
   const referenceImage = await readAvatarReferenceImage(input.avatarPath);
   const resolved = resolveVideoConnection(input.connection);
   logger.info(
@@ -408,6 +442,7 @@ async function runGenerationJob(input: {
   );
 
   for (const kind of CONVERSATION_CALL_CHARACTER_VIDEO_CLIP_KINDS) {
+    const manifest = await readDiskManifest(input.characterId, input.characterName, input.avatarPath);
     const diskClip = manifest.clips[kind] ?? {};
     if (diskClip.status === "ready" && manifest.sourceAvatarPath === input.avatarPath && existsSync(clipPath(input.characterId, kind))) {
       continue;
@@ -442,29 +477,41 @@ async function runGenerationJob(input: {
       const tmp = assertInsideDir(CALL_CHARACTER_VIDEO_ROOT, `${file}.${process.pid}.${Date.now()}.tmp`);
       await writeFile(tmp, Buffer.from(generated.base64, "base64"));
       await rename(tmp, file);
-      manifest = {
-        ...manifest,
-        sourceAvatarPath: input.avatarPath,
-        updatedAt: nowIso(),
-        clips: {
-          ...manifest.clips,
-          [kind]: { status: "ready", error: null, updatedAt: nowIso() },
-        },
-      };
-      await writeDiskManifest(manifest);
+      const updatedAt = nowIso();
+      await updateDiskManifest({
+        characterId: input.characterId,
+        characterName: input.characterName,
+        avatarPath: input.avatarPath,
+        update: (latest) => ({
+          ...latest,
+          characterName: input.characterName,
+          sourceAvatarPath: input.avatarPath,
+          updatedAt,
+          clips: {
+            ...latest.clips,
+            [kind]: { status: "ready", error: null, updatedAt },
+          },
+        }),
+      });
       logger.info("[conversation-call/videos] Generated %s for %s", getClipLabel(kind), input.characterId);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Video generation failed";
-      manifest = {
-        ...manifest,
-        sourceAvatarPath: input.avatarPath,
-        updatedAt: nowIso(),
-        clips: {
-          ...manifest.clips,
-          [kind]: { status: "error", error: message, updatedAt: nowIso() },
-        },
-      };
-      await writeDiskManifest(manifest);
+      const updatedAt = nowIso();
+      await updateDiskManifest({
+        characterId: input.characterId,
+        characterName: input.characterName,
+        avatarPath: input.avatarPath,
+        update: (latest) => ({
+          ...latest,
+          characterName: input.characterName,
+          sourceAvatarPath: input.avatarPath,
+          updatedAt,
+          clips: {
+            ...latest.clips,
+            [kind]: { status: "error", error: message, updatedAt },
+          },
+        }),
+      });
       logger.warn(error, "[conversation-call/videos] Failed to generate %s for %s", kind, input.characterId);
     }
   }
@@ -490,7 +537,6 @@ async function runCustomClipGenerationJob(input: {
   debugMode?: boolean;
 }) {
   const startedAt = nowIso();
-  let manifest = await readDiskManifest(input.characterId, input.characterName, input.avatarPath);
   try {
     const referenceImage = await readAvatarReferenceImage(input.avatarPath);
     const resolved = resolveVideoConnection(input.connection);
@@ -530,55 +576,64 @@ async function runCustomClipGenerationJob(input: {
     const tmp = assertInsideDir(CALL_CHARACTER_VIDEO_ROOT, `${file}.${process.pid}.${Date.now()}.tmp`);
     await writeFile(tmp, Buffer.from(generated.base64, "base64"));
     await rename(tmp, file);
-    manifest = await readDiskManifest(input.characterId, input.characterName, input.avatarPath);
-    manifest = await pruneCustomClips({
-      ...manifest,
+    const updatedAt = nowIso();
+    await updateDiskManifest({
+      characterId: input.characterId,
       characterName: input.characterName,
-      sourceAvatarPath: input.avatarPath,
-      updatedAt: nowIso(),
-      customClips: {
-        ...manifest.customClips,
-        [input.clipId]: {
-          ...(manifest.customClips[input.clipId] ?? {
-            id: input.clipId,
-            label: input.label,
-            prompt: input.prompt,
-            createdAt: startedAt,
-          }),
-          status: "ready",
-          error: null,
-          updatedAt: nowIso(),
+      avatarPath: input.avatarPath,
+      update: async (latest) =>
+        pruneCustomClips({
+          ...latest,
+          characterName: input.characterName,
           sourceAvatarPath: input.avatarPath,
-        },
-      },
+          updatedAt,
+          customClips: {
+            ...latest.customClips,
+            [input.clipId]: {
+              ...(latest.customClips[input.clipId] ?? {
+                id: input.clipId,
+                label: input.label,
+                prompt: input.prompt,
+                createdAt: startedAt,
+              }),
+              status: "ready",
+              error: null,
+              updatedAt,
+              sourceAvatarPath: input.avatarPath,
+            },
+          },
+        }),
     });
-    await writeDiskManifest(manifest);
     logger.info("[conversation-call/videos] Generated custom clip %s for %s", input.clipId, input.characterId);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Video generation failed";
-    manifest = await readDiskManifest(input.characterId, input.characterName, input.avatarPath);
-    manifest = {
-      ...manifest,
+    const updatedAt = nowIso();
+    await updateDiskManifest({
+      characterId: input.characterId,
       characterName: input.characterName,
-      sourceAvatarPath: input.avatarPath,
-      updatedAt: nowIso(),
-      customClips: {
-        ...manifest.customClips,
-        [input.clipId]: {
-          ...(manifest.customClips[input.clipId] ?? {
-            id: input.clipId,
-            label: input.label,
-            prompt: input.prompt,
-            createdAt: startedAt,
-          }),
-          status: "error",
-          error: message,
-          updatedAt: nowIso(),
-          sourceAvatarPath: input.avatarPath,
+      avatarPath: input.avatarPath,
+      update: (latest) => ({
+        ...latest,
+        characterName: input.characterName,
+        sourceAvatarPath: input.avatarPath,
+        updatedAt,
+        customClips: {
+          ...latest.customClips,
+          [input.clipId]: {
+            ...(latest.customClips[input.clipId] ?? {
+              id: input.clipId,
+              label: input.label,
+              prompt: input.prompt,
+              createdAt: startedAt,
+            }),
+            status: "error",
+            error: message,
+            updatedAt,
+            sourceAvatarPath: input.avatarPath,
+          },
         },
-      },
-    };
-    await writeDiskManifest(manifest);
+      }),
+    });
     logger.warn(error, "[conversation-call/videos] Failed to generate custom clip %s for %s", input.clipId, input.characterId);
   }
 }
@@ -606,22 +661,27 @@ export async function startConversationCallCharacterVideoGeneration(input: {
   assertSafeCharacterId(input.characterId);
   const videoSettings = normalizeVideoGenerationUserSettings(input.videoSettings);
   if (!GENERATION_LOCKS.has(input.characterId)) {
-    const current = await readDiskManifest(input.characterId, input.characterName, input.avatarPath);
-    const avatarChanged = current.sourceAvatarPath !== input.avatarPath;
     const timestamp = nowIso();
-    const clips = { ...current.clips };
-    for (const kind of CONVERSATION_CALL_CHARACTER_VIDEO_CLIP_KINDS) {
-      const ready = !avatarChanged && existsSync(clipPath(input.characterId, kind)) && clips[kind]?.status === "ready";
-      if (!ready) clips[kind] = { status: "generating", error: null, updatedAt: timestamp };
-    }
-    const pendingManifest: DiskManifest = {
-      ...current,
+    await updateDiskManifest({
+      characterId: input.characterId,
       characterName: input.characterName,
-      sourceAvatarPath: input.avatarPath,
-      updatedAt: timestamp,
-      clips,
-    };
-    await writeDiskManifest(pendingManifest);
+      avatarPath: input.avatarPath,
+      update: (current) => {
+        const avatarChanged = current.sourceAvatarPath !== input.avatarPath;
+        const clips = { ...current.clips };
+        for (const kind of CONVERSATION_CALL_CHARACTER_VIDEO_CLIP_KINDS) {
+          const ready = !avatarChanged && existsSync(clipPath(input.characterId, kind)) && clips[kind]?.status === "ready";
+          if (!ready) clips[kind] = { status: "generating", error: null, updatedAt: timestamp };
+        }
+        return {
+          ...current,
+          characterName: input.characterName,
+          sourceAvatarPath: input.avatarPath,
+          updatedAt: timestamp,
+          clips,
+        };
+      },
+    });
     const job = runGenerationJob({ ...input, videoSettings }).finally(() => {
       GENERATION_LOCKS.delete(input.characterId);
     });
@@ -651,27 +711,31 @@ export async function startConversationCallCustomVideoClipGeneration(input: {
   const timestamp = nowIso();
   const label = sanitizeCustomClipText(input.label ?? "", "Custom clip", 80);
   const prompt = sanitizeCustomClipText(input.prompt, "A short custom video-call clip requested by the user.", 800);
-  const current = await readDiskManifest(input.characterId, input.characterName, input.avatarPath);
-  const pendingManifest = await pruneCustomClips({
-    ...current,
+  await updateDiskManifest({
+    characterId: input.characterId,
     characterName: input.characterName,
-    sourceAvatarPath: input.avatarPath,
-    updatedAt: timestamp,
-    customClips: {
-      ...current.customClips,
-      [clipId]: {
-        id: clipId,
-        label,
-        prompt,
-        status: "generating",
-        error: null,
-        createdAt: timestamp,
-        updatedAt: timestamp,
+    avatarPath: input.avatarPath,
+    update: async (current) =>
+      pruneCustomClips({
+        ...current,
+        characterName: input.characterName,
         sourceAvatarPath: input.avatarPath,
-      },
-    },
+        updatedAt: timestamp,
+        customClips: {
+          ...current.customClips,
+          [clipId]: {
+            id: clipId,
+            label,
+            prompt,
+            status: "generating",
+            error: null,
+            createdAt: timestamp,
+            updatedAt: timestamp,
+            sourceAvatarPath: input.avatarPath,
+          },
+        },
+      }),
   });
-  await writeDiskManifest(pendingManifest);
   const lockKey = `${input.characterId}:${clipId}`;
   const job = runCustomClipGenerationJob({ ...input, clipId, label, prompt, videoSettings }).finally(() => {
     CUSTOM_GENERATION_LOCKS.delete(lockKey);

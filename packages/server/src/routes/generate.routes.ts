@@ -7692,9 +7692,7 @@ export async function generateRoutes(app: FastifyInstance) {
             extraUpdate.conversationCommandContent =
               chatMode === "conversation" && !input.impersonate ? conversationCommandContent : null;
             extraUpdate.generationReplay = buildGenerationReplay(input);
-            if (startsNewAssistantBubble) {
-              extraUpdate.startsNewAssistantBubble = true;
-            }
+            extraUpdate.startsNewAssistantBubble = startsNewAssistantBubble;
             // Cache the final prompt (what was actually sent to the model) for Peek Prompt
             extraUpdate.cachedPrompt = finalPromptSent.map((m) => ({ role: m.role, content: m.content }));
             // Cache the lorebook scan that produced the prompt so Active Context

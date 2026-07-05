@@ -1077,6 +1077,7 @@ export function ConversationCallSurface({
   useEffect(() => {
     setDepartedParticipantIds(new Set());
     setOptimisticCallMessages([]);
+    setCharacterVideoPlayback({});
   }, [session.id]);
 
   useEffect(() => {
@@ -1574,6 +1575,8 @@ export function ConversationCallSurface({
           } catch (error) {
             if (optimisticMessageId) {
               setOptimisticCallMessages((current) => current.filter((message) => message.id !== optimisticMessageId));
+              setDraft((current) => (current.trim() ? current : text));
+              window.requestAnimationFrame(resizeDraftTextarea);
             }
             throw error;
           }
@@ -2070,9 +2073,14 @@ export function ConversationCallSurface({
   );
 
   const applyCallMessageReactions = useCallback(
-    async (message: ConversationCallMessage, next: MessageReaction[]) => {
+    async (
+      message: ConversationCallMessage,
+      buildNext: (current: MessageReaction[]) => MessageReaction[],
+    ) => {
       const key = conversationCallKeys.messages(session.id);
       const previous = queryClient.getQueryData<ConversationCallMessage[]>(key);
+      const cachedMessage = previous?.find((item) => item.id === message.id) ?? message;
+      const next = buildNext(readCallMessageReactions(cachedMessage));
       queryClient.setQueryData<ConversationCallMessage[]>(key, (existing = []) =>
         existing.map((item) =>
           item.id === message.id ? { ...item, extra: { ...item.extra, reactions: next } } : item,
@@ -2092,21 +2100,16 @@ export function ConversationCallSurface({
 
   const handlePickCallReaction = useCallback(
     (message: ConversationCallMessage, emoji: string, imageUrl: string | null) => {
-      const next = toggleReaction(readCallMessageReactions(message), emoji, USER_REACTOR, imageUrl);
-      void applyCallMessageReactions(message, next);
+      void applyCallMessageReactions(message, (current) => toggleReaction(current, emoji, USER_REACTOR, imageUrl));
     },
     [applyCallMessageReactions],
   );
 
   const handleToggleCallReactionEntry = useCallback(
     (message: ConversationCallMessage, reaction: MessageReaction) => {
-      const next = toggleReaction(
-        readCallMessageReactions(message),
-        reaction.emoji,
-        USER_REACTOR,
-        reaction.imageUrl ?? null,
+      void applyCallMessageReactions(message, (current) =>
+        toggleReaction(current, reaction.emoji, USER_REACTOR, reaction.imageUrl ?? null),
       );
-      void applyCallMessageReactions(message, next);
     },
     [applyCallMessageReactions],
   );

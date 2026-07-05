@@ -214,13 +214,13 @@ export function GameInput({
     const hasTurnContent = trimmed.length > 0 || attachments.length > 0 || commitPendingMove || !!queuedDice;
     if (!hasTurnContent || disabled || rollingQueuedDice) return;
 
-    if (isIllustrateSlashCommand(trimmed)) {
+    if (isIllustrateSlashCommand(trimmed) && onIllustrate) {
       setText("");
       clearDraft();
       setAttachments([]);
       if (inputRef.current) inputRef.current.style.height = "auto";
       inputRef.current?.focus();
-      await onIllustrate?.();
+      await onIllustrate();
       return;
     }
 

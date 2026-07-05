@@ -470,6 +470,46 @@ function addCallMessageReactor(
   return next;
 }
 
+function sanitizeCallMessageReactions(value: unknown): MessageReaction[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((reaction): reaction is Record<string, unknown> => {
+      return !!reaction && typeof reaction === "object" && !Array.isArray(reaction);
+    })
+    .map((reaction): MessageReaction | null => {
+      const emoji = typeof reaction.emoji === "string" ? reaction.emoji.trim() : "";
+      if (!emoji) return null;
+      const by = Array.isArray(reaction.by)
+        ? reaction.by.filter((reactor): reactor is string => typeof reactor === "string" && reactor.trim().length > 0)
+        : [];
+      if (by.length === 0) return null;
+      const sanitized: MessageReaction = { emoji, by: Array.from(new Set(by.map((reactor) => reactor.trim()))) };
+      if (typeof reaction.imageUrl === "string" && reaction.imageUrl.trim()) {
+        sanitized.imageUrl = reaction.imageUrl.trim();
+      }
+      if (typeof reaction.segment === "number" && Number.isInteger(reaction.segment) && reaction.segment >= 0) {
+        sanitized.segment = reaction.segment;
+      } else if (reaction.segment === null) {
+        sanitized.segment = null;
+      }
+      return sanitized;
+    })
+    .filter((reaction): reaction is MessageReaction => reaction !== null);
+}
+
+function sanitizeCallMessageExtraPatch(value: unknown): Record<string, unknown> {
+  const source = parseJsonRecord(value);
+  const patch: Record<string, unknown> = {};
+  if ("reactions" in source) patch.reactions = sanitizeCallMessageReactions(source.reactions);
+  if (typeof source.conversationCallInitialGreetingPlayed === "boolean") {
+    patch.conversationCallInitialGreetingPlayed = source.conversationCallInitialGreetingPlayed;
+  }
+  if (typeof source.conversationCallAutoplay === "boolean") {
+    patch.conversationCallAutoplay = source.conversationCallAutoplay;
+  }
+  return patch;
+}
+
 function buildGlobalCustomEmojiUrl(filePath: string): string {
   return `/api/custom-emojis/file/${encodeURIComponent(filePath)}`;
 }
@@ -2110,6 +2150,10 @@ export async function conversationCallsRoutes(app: FastifyInstance) {
   app.post<{ Params: { characterId: string } }>("/character-videos/:characterId/generate", async (req, reply) => {
     const character = await characters.getById(req.params.characterId);
     if (!character) return reply.status(404).send({ error: "Character not found" });
+    const ttsSettings = await readTTSSettings(app);
+    if (ttsSettings.callCharacterVideoEnabled !== true) {
+      return reply.status(403).send({ error: "Character video presence is not enabled for Conversation Calls." });
+    }
     const data = parseCharacterData(character);
     const videoConnection = await connections.getDefaultForVideoGeneration();
     if (!videoConnection) {
@@ -2289,7 +2333,7 @@ export async function conversationCallsRoutes(app: FastifyInstance) {
     if (!message || message.callId !== session.id) {
       return reply.status(404).send({ error: "Call message not found" });
     }
-    const updated = await calls.updateMessageExtra(message.id, parseJsonRecord(req.body));
+    const updated = await calls.updateMessageExtra(message.id, sanitizeCallMessageExtraPatch(req.body));
     if (!updated) return reply.status(404).send({ error: "Call message not found" });
     return updated;
   });
