@@ -3696,7 +3696,7 @@ export async function generateRoutes(app: FastifyInstance) {
             // instructions gated on earlyGroupMode !== "individual").
             if (characterIds.length > 1 && earlyGroupMode !== "individual") {
               conversationSystemPrompt +=
-                " In this group chat, each character reacts for themselves: write the tag inside that character's own section of the reply, directly under their name line, so the reaction is credited to them — never above the first name line.";
+                " In this group chat, each character reacts for themselves: write the tag inside that character's own section of the reply, directly under their name line, so the reaction is credited to them — never above the first name line. One reaction per reply is not a limit — every character who would plausibly react may include their own tag in their own section, the way several people tap a reaction on the same message in a real chat.";
             }
           }
           // ── Home Professor Mari: inject assistant knowledge & commands ──
