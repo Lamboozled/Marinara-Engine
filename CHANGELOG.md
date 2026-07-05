@@ -41,11 +41,15 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 
 - Bumped release metadata to v2.1.0 across packages, the PWA manifest, README release pointer, Windows installer sources, Android APK metadata, and the home-page-visible app version.
 - Documented Conversation audio-call setup, Local Whisper download, audio input modes, character-initiated call behavior, and Professor Mari's built-in guidance for the feature.
+- Refreshed the v2.1.0 documentation set with current setup flows, provider lists, Bot Browser sources, Agent Suite behavior, knowledge sources, custom tools, emoji/sticker uploads, regex scripts, prompt presets, macros, Conversation/Roleplay/Game Mode workflows, Home Assistant setup, remote access, extension safety, container/iOS/Android update notes, storyboard/video guidance, and the current architecture map.
 - Made Android/Termux update builds use low-memory build wrappers: server builds transpile runtime JS with esbuild, client builds skip memory-heavy typechecking/PWA generation on Android, and the updater builds shared, server, and client sequentially on Android devices (#3156).
 - Removed the Gallery **View latest** button because galleries already show newest images and videos first.
 
 ### Fixed
 
+- Fixed character library favorites and non-favorites filtering so server-side pagination searches the full library before returning each 100-item page, and separated the **Load more** control from character cards for large libraries (#3286).
+- Fixed launcher startup ordering so `.env` values such as `BACKGROUNDREMOVER_AUTO_INSTALL=true` are loaded before optional background-remover setup begins (#3269).
+- Fixed Home Assistant documentation and defaults to point at Marinara's current port, note `WEBHOOK_LOCAL_URLS_ENABLED=true` for local webhooks, and explain that re-syncing updates existing generated tools.
 - Added delete controls to Character and Persona Gallery Clips, including call-video resets plus custom call clip and scene/game clip cleanup from the originating stored media.
 - Forced generated Conversation Call character video clips to play silently in calls and Character Gallery previews so provider-generated audio tracks cannot overlap Marinara's TTS playback.
 - Added a dismissible 10-second muted-microphone reminder when a Conversation Call starts, made Character Gallery call-clip pre-generation queue provider requests one clip at a time, removed character-card description dumps from call-video generation prompts, strengthened locked-camera/reference-image loop instructions, and made standard call-video clips regenerate when the character avatar changes.

@@ -366,7 +366,16 @@ export async function charactersRoutes(app: FastifyInstance) {
 
   // ── Characters ──
 
-  app.get<{ Querystring: { includeBuiltIn?: string; limit?: string; offset?: string; search?: string; sort?: string } }>(
+  app.get<{
+    Querystring: {
+      includeBuiltIn?: string;
+      limit?: string;
+      offset?: string;
+      search?: string;
+      sort?: string;
+      favoriteFilter?: string;
+    };
+  }>(
     "/",
     async (req) => {
       const includeBuiltIn = req.query.includeBuiltIn === "true";
@@ -378,6 +387,7 @@ export async function charactersRoutes(app: FastifyInstance) {
           offset: page.offset,
           search: page.search,
           sort: page.sort,
+          favoriteFilter: page.favoriteFilter,
         });
       }
       const characters = await storage.list();

@@ -172,7 +172,8 @@ export function CharactersPanel() {
   const setFavFilter = useUIStore((s) => s.setCharacterPanelFavoriteFilter);
   const setCharacterPanelScrollTop = useUIStore((s) => s.setCharacterPanelScrollTop);
   const serverSearch = useMemo(() => parseCharacterSearchQuery(search).text, [search]);
-  const characterPages = useCharacterPages({ search: serverSearch, sort });
+  const serverFavoriteFilter = favFilter === "favorites" || favFilter === "non-favorites" ? favFilter : "";
+  const characterPages = useCharacterPages({ search: serverSearch, sort, favoriteFilter: serverFavoriteFilter });
   const characters = useMemo(() => flattenCharacterPages(characterPages.data), [characterPages.data]);
   const isLoading = characterPages.isLoading;
 
@@ -1394,14 +1395,16 @@ export function CharactersPanel() {
       </div>
 
       {characterPages.hasNextPage && (
-        <button
-          type="button"
-          onClick={() => void characterPages.fetchNextPage()}
-          disabled={characterPages.isFetchingNextPage}
-          className="mari-chrome-control mari-chrome-control--primary justify-center text-xs"
-        >
-          {characterPages.isFetchingNextPage ? "Loading..." : `Load more (${parsedCharacters.length} loaded)`}
-        </button>
+        <div className="relative z-10 mt-2 border-t border-[var(--marinara-chat-chrome-panel-divider)] pt-2 pb-3">
+          <button
+            type="button"
+            onClick={() => void characterPages.fetchNextPage()}
+            disabled={characterPages.isFetchingNextPage}
+            className="mari-chrome-control mari-chrome-control--primary w-full justify-center text-xs"
+          >
+            {characterPages.isFetchingNextPage ? "Loading..." : `Load more (${parsedCharacters.length} loaded)`}
+          </button>
+        </div>
       )}
 
       {selectionMode && (
