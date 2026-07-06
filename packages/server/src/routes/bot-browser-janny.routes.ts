@@ -24,10 +24,10 @@ async function fetchAvatarImage(url: string, signal: AbortSignal) {
   const buf = Buffer.from(await res.arrayBuffer());
   const contentType = res.headers.get("content-type")?.toLowerCase() ?? "";
   const imageInfo = isAllowedImageBuffer(buf);
-  if (!contentType.startsWith("image/") || !imageInfo) {
+  if (!contentType.startsWith("image/") && !imageInfo) {
     throw new Error("Unsupported avatar image content");
   }
-  return { buf, mimeType: imageInfo.mimeType };
+  return { buf, mimeType: imageInfo?.mimeType ?? contentType };
 }
 
 function jannySearchHeaders(token: string): Record<string, string> {

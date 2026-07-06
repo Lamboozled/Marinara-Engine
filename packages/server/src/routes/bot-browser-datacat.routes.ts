@@ -80,15 +80,19 @@ async function fetchAvatarImage(url: string, signal: AbortSignal) {
     signal,
     policy: { allowedProtocols: ["https:"] },
     maxResponseBytes: AVATAR_PROXY_MAX_BYTES,
+    headers: {
+      "User-Agent": DC_USER_AGENT,
+      Referer: `${DATACAT_API_BASE}/`,
+    },
   });
   if (!res.ok) return null;
   const buf = Buffer.from(await res.arrayBuffer());
   const contentType = res.headers.get("content-type")?.toLowerCase() ?? "";
   const imageInfo = isAllowedImageBuffer(buf);
-  if (!contentType.startsWith("image/") || !imageInfo) {
+  if (!contentType.startsWith("image/") && !imageInfo) {
     throw new Error("Unsupported avatar image content");
   }
-  return { buf, mimeType: imageInfo.mimeType };
+  return { buf, mimeType: imageInfo?.mimeType ?? contentType };
 }
 
 async function dcFetch(path: string): Promise<unknown> {
@@ -234,7 +238,8 @@ export async function botBrowserDatacatRoutes(app: FastifyInstance) {
       } catch {
         return reply.status(400).send({ error: "Invalid avatar URL" });
       }
-      if (parsed.protocol !== "https:" || parsed.hostname !== "ella.janitorai.com") {
+      const ALLOWED_DC_HOSTS = ["ella.janitorai.com", "media.datacat.run"];
+      if (parsed.protocol !== "https:" || !ALLOWED_DC_HOSTS.includes(parsed.hostname)) {
         return reply.status(400).send({ error: "Unsupported avatar host" });
       }
       url = parsed.toString();

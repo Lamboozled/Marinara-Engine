@@ -2,7 +2,8 @@
 // Routes: Browser — Wyvern provider
 // ──────────────────────────────────────────────
 import type { FastifyInstance } from "fastify";
-import { safeFetch } from "../utils/security.js";
+import { isAllowedImageBuffer, safeFetch } from "../utils/security.js";
+import { logger } from "../lib/logger.js";
 
 const WYVERN_API_BASE = "https://api.wyvern.chat";
 const WYVERN_IMAGE_BASE = "https://imagedelivery.net";
@@ -121,12 +122,21 @@ export async function botBrowserWyvernRoutes(app: FastifyInstance) {
       const res = await safeFetch(parsedUrl, {
         signal: controller.signal,
         policy: { allowedProtocols: ["https:"] },
-        allowedContentTypes: ["image/"],
         maxResponseBytes: 10 * 1024 * 1024,
       });
       if (!res.ok) return reply.status(404).send({ error: "Avatar not found" });
       const buf = Buffer.from(await res.arrayBuffer());
-      const ct = res.headers.get("content-type") || "image/webp";
+      const contentType = res.headers.get("content-type")?.toLowerCase() ?? "";
+      const imageInfo = isAllowedImageBuffer(buf);
+      if (contentType && !contentType.startsWith("image/") && !imageInfo) {
+        logger.warn("[bot-browser] Wyvern avatar returned unsupported content type: %s", contentType);
+        return reply.status(415).send({ error: "Unsupported avatar content type" });
+      }
+      if (!contentType && !imageInfo) {
+        logger.warn("[bot-browser] Wyvern avatar response was missing a usable image content type");
+        return reply.status(415).send({ error: "Unsupported avatar content type" });
+      }
+      const ct = contentType || imageInfo?.mimeType || "image/webp";
       return reply.header("Content-Type", ct).header("Cache-Control", "public, max-age=86400").send(buf);
     } finally {
       clearTimeout(timeout);

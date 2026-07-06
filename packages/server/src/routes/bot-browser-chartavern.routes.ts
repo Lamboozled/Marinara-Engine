@@ -6,7 +6,7 @@ import { logger } from "../lib/logger.js";
 import { isAllowedImageBuffer, safeFetch } from "../utils/security.js";
 
 const CT_API_BASE = "https://character-tavern.com/api";
-const CT_CARDS_CDN = "https://cards.character-tavern.com";
+const CT_CARDS_CDN = "https://ct-cards.storage.character-tavern.com";
 const AVATAR_PROXY_MAX_BYTES = 10 * 1024 * 1024;
 
 // In-memory session cookie store (persists until server restart)
@@ -27,20 +27,26 @@ async function proxyFetch(url: string, init?: RequestInit): Promise<unknown> {
   }
 }
 
+const CT_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+
 async function fetchAvatarImage(url: string, signal: AbortSignal) {
   const res = await safeFetch(url, {
     signal,
     policy: { allowedProtocols: ["https:"] },
     maxResponseBytes: AVATAR_PROXY_MAX_BYTES,
+    headers: {
+      "User-Agent": CT_UA,
+      Referer: "https://character-tavern.com/",
+    },
   });
   if (!res.ok) return null;
   const buf = Buffer.from(await res.arrayBuffer());
   const contentType = res.headers.get("content-type")?.toLowerCase() ?? "";
   const imageInfo = isAllowedImageBuffer(buf);
-  if (!contentType.startsWith("image/") || !imageInfo) {
+  if (!contentType.startsWith("image/") && !imageInfo) {
     throw new Error("Unsupported avatar image content");
   }
-  return { buf, mimeType: imageInfo.mimeType };
+  return { buf, mimeType: imageInfo?.mimeType ?? contentType };
 }
 
 /** Build headers for CT API — includes session cookie if stored */
@@ -280,7 +286,7 @@ export async function botBrowserChartavernRoutes(app: FastifyInstance) {
     const timeout = setTimeout(() => controller.abort(), 15_000);
     try {
       const primary = await fetchAvatarImage(
-        `${CT_CARDS_CDN}/cdn-cgi/image/format=auto,width=320,quality=85/${encodeURI(path)}.png`,
+        `${CT_CARDS_CDN}/${encodeURI(path)}.png?width=320&quality=85&format=auto`,
         controller.signal,
       );
       const image = primary ?? (await fetchAvatarImage(`${CT_CARDS_CDN}/${encodeURI(path)}.png`, controller.signal));

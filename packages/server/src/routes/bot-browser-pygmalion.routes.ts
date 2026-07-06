@@ -249,12 +249,12 @@ export async function botBrowserPygmalionRoutes(app: FastifyInstance) {
     const url = assetPath.startsWith("http") ? assetPath : `${PYGMALION_ASSETS_BASE}/${assetPath}`;
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15_000);
+    const timeout = setTimeout(() => controller.abort(), 30_000);
     try {
       const res = await safeFetch(url, {
         signal: controller.signal,
         policy: { allowedProtocols: ["https:"] },
-        maxResponseBytes: 10 * 1024 * 1024,
+        maxResponseBytes: 25 * 1024 * 1024,
       });
       if (!res.ok) return reply.status(404).send({ error: "Avatar not found" });
       const buf = Buffer.from(await res.arrayBuffer());
