@@ -3,7 +3,7 @@
 // ──────────────────────────────────────────────
 import type { FastifyInstance } from "fastify";
 import { logger } from "../lib/logger.js";
-import { isAllowedImageBuffer, safeFetch } from "../utils/security.js";
+import { resolveValidatedImage, safeFetch } from "../utils/security.js";
 
 const CT_API_BASE = "https://character-tavern.com/api";
 const CT_CARDS_CDN = "https://ct-cards.storage.character-tavern.com";
@@ -41,12 +41,9 @@ async function fetchAvatarImage(url: string, signal: AbortSignal) {
   });
   if (!res.ok) return null;
   const buf = Buffer.from(await res.arrayBuffer());
-  const contentType = res.headers.get("content-type")?.toLowerCase() ?? "";
-  const imageInfo = isAllowedImageBuffer(buf);
-  if (!contentType.startsWith("image/") && !imageInfo) {
-    throw new Error("Unsupported avatar image content");
-  }
-  return { buf, mimeType: imageInfo?.mimeType ?? contentType };
+  const image = resolveValidatedImage(buf, res.headers.get("content-type") ?? "");
+  if (!image) throw new Error("Unsupported avatar image content");
+  return { buf, mimeType: image.mimeType };
 }
 
 /** Build headers for CT API — includes session cookie if stored */
