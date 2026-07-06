@@ -114,6 +114,8 @@ const CUSTOM_GENERATION_LOCKS = new Map<string, Promise<void>>();
 const MANIFEST_LOCKS = new Map<string, Promise<void>>();
 const CUSTOM_CLIP_LIMIT = 128;
 const MAX_CALL_VIDEO_TRIM_SECONDS = 3_600;
+const CALL_VIDEO_REFERENCE_WIDTH = 1280;
+const CALL_VIDEO_REFERENCE_HEIGHT = 720;
 
 export class ConversationCallVideoGenerationInProgressError extends Error {
   constructor(message = "This call video clip is still generating") {
@@ -150,9 +152,12 @@ export class ConversationCallVideoClipUploadError extends Error {
   }
 }
 
-type SharpFn = (input: Buffer, options?: Record<string, unknown>) => {
+type SharpPipeline = {
+  resize: (options: Record<string, unknown>) => SharpPipeline;
   png: () => { toBuffer: () => Promise<Buffer> };
 };
+
+type SharpFn = (input: Buffer, options?: Record<string, unknown>) => SharpPipeline;
 
 let sharpLoad: Promise<SharpFn> | null = null;
 
@@ -497,16 +502,45 @@ async function readAvatarIdentity(avatarPath: string | null): Promise<AvatarIden
   }
 }
 
+function isVideoReferenceMimeType(mimeType: string): mimeType is VideoReferenceImage["mimeType"] {
+  return mimeType === "image/png" || mimeType === "image/jpeg";
+}
+
+async function buildCallVideoReferenceImage(
+  buffer: Buffer,
+  mimeType: string,
+  url: string | null,
+): Promise<VideoReferenceImage> {
+  try {
+    const sharp = await getSharp();
+    const framed = await sharp(buffer, { limitInputPixels: false })
+      .resize({
+        width: CALL_VIDEO_REFERENCE_WIDTH,
+        height: CALL_VIDEO_REFERENCE_HEIGHT,
+        fit: "cover",
+        position: "north",
+      })
+      .png()
+      .toBuffer();
+    return { base64: framed.toString("base64"), mimeType: "image/png", url };
+  } catch (err) {
+    if (isVideoReferenceMimeType(mimeType)) {
+      logger.warn(
+        err instanceof Error ? err : new Error(String(err)),
+        "[conversation-call/videos] Failed to frame avatar reference for 16:9 video; using original avatar image",
+      );
+      return { base64: buffer.toString("base64"), mimeType, url };
+    }
+    throw err;
+  }
+}
+
 async function readAvatarReferenceImage(avatarPath: string | null): Promise<AvatarReference> {
   const { buffer, imageInfo } = await readAvatarFile(avatarPath);
   const identity = { path: avatarPath, digest: avatarDigest(buffer) };
   const url = avatarPath?.split("?")[0] ?? null;
-  if (imageInfo.mimeType === "image/png" || imageInfo.mimeType === "image/jpeg") {
-    return { image: { base64: buffer.toString("base64"), mimeType: imageInfo.mimeType, url }, identity };
-  }
-  const sharp = await getSharp();
-  const png = await sharp(buffer, { limitInputPixels: false }).png().toBuffer();
-  return { image: { base64: png.toString("base64"), mimeType: "image/png", url }, identity };
+  const image = await buildCallVideoReferenceImage(buffer, imageInfo.mimeType, url);
+  return { image, identity };
 }
 
 function getClipLabel(kind: ConversationCallCharacterVideoClipKind) {
@@ -530,8 +564,9 @@ async function buildClipPrompt(input: {
   if (!def) {
     return [
       `Create a ${input.durationSeconds}-second 16:9 animated portrait loop for an AI video call.`,
-      "Reference: use the attached image as the character identity and first/final frame target.",
-      "Preserve the reference image's crop, background, lighting, colors, face shape, hair, clothing, mask or eyewear, accessories, and art style.",
+      "Reference: use the attached 16:9 image as the character identity, crop, and first/final frame target.",
+      "Preserve the reference image's crop, especially the top/head framing. If any framing must be lost, crop lower body or lower clothing instead of hair, head, mask, or face.",
+      "Preserve the reference image's background, lighting, colors, face shape, hair, clothing, mask or eyewear, accessories, and art style.",
       `Action: ${getClipInstruction(input.kind)}`,
       "Lighting and background: keep them from the reference image; do not invent a new ambience or setting.",
       "Camera: locked-off still camera, no zoom, pan, tilt, dolly, crop change, reframing, handheld shake, or scene cut.",

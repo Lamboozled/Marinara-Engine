@@ -65,8 +65,9 @@ const CLIP_PROMPT_SEEDS: ClipPromptSeed[] = [
 function buildDefaultPrompt(ctx: ConversationCallVideoClipCtx) {
   return [
     `Create a ${ctx.durationSeconds}-second ${ctx.aspectRatio} animated portrait loop for an AI video call.`,
-    "Reference: use the attached image as the character identity and first/final frame target.",
-    "Preserve the reference image's crop, background, lighting, colors, face shape, hair, clothing, mask or eyewear, accessories, and art style.",
+    "Reference: use the attached 16:9 image as the character identity, crop, and first/final frame target.",
+    "Preserve the reference image's crop, especially the top/head framing. If any framing must be lost, crop lower body or lower clothing instead of hair, head, mask, or face.",
+    "Preserve the reference image's background, lighting, colors, face shape, hair, clothing, mask or eyewear, accessories, and art style.",
     `Action: ${ctx.clipInstruction}`,
     "Lighting and background: keep them from the reference image; do not invent a new ambience or setting.",
     "Camera: locked-off still camera, no zoom, pan, tilt, dolly, crop change, reframing, handheld shake, or scene cut.",
@@ -80,8 +81,9 @@ function buildDefaultPrompt(ctx: ConversationCallVideoClipCtx) {
 function buildDefaultCustomClipPrompt(ctx: ConversationCallCustomVideoClipCtx) {
   return [
     `Create a ${ctx.durationSeconds}-second ${ctx.aspectRatio} custom animated portrait loop for an AI video call.`,
-    "Reference: use the attached image as the character identity and first/final frame target.",
-    "Preserve the reference image's crop, base background, lighting, colors, face shape, hair, clothing, mask or eyewear, accessories, and art style unless the custom request explicitly changes one visual detail.",
+    "Reference: use the attached 16:9 image as the character identity, crop, and first/final frame target.",
+    "Preserve the reference image's crop, especially the top/head framing. If any framing must be lost, crop lower body or lower clothing instead of hair, head, mask, or face.",
+    "Preserve the reference image's base background, lighting, colors, face shape, hair, clothing, mask or eyewear, accessories, and art style unless the custom request explicitly changes one visual detail.",
     `Action: ${ctx.customPrompt}.`,
     "Lighting and background: keep them from the reference image unless the custom request explicitly changes them.",
     "Camera: locked-off still camera, no zoom, pan, tilt, dolly, crop change, reframing, handheld shake, or scene cut.",

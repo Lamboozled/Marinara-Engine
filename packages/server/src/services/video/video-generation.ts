@@ -978,6 +978,8 @@ async function seedanceReferenceImageUrl(
       }
       throw new Error(message);
     }
+    const uploaded = await maybeUploadSeedanceReferenceImage(image, label, publicUpload, signal);
+    if (uploaded) return uploaded;
     const publicBaseUrl = process.env.VIDEO_REFERENCE_PUBLIC_BASE_URL?.trim();
     if (publicBaseUrl) {
       try {
