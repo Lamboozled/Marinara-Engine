@@ -125,6 +125,15 @@ export interface TurnGameEngine<TState, TMove, TConfig, TPublic = unknown> {
    */
   spectatorSummary(state: TState): string;
 
+  /**
+   * Like `spectatorSummary`, but from `seatId`'s own perspective: includes that
+   * seat's OWN private information (their hand, their color, their last move)
+   * so a seated character can talk about the game they are actually playing.
+   * Other seats' hidden information stays redacted. Must fall back to the
+   * spectator text when `seatId` isn't seated in this game.
+   */
+  participantSummary(state: TState, seatId: string): string;
+
   /** A deterministic legal move, so a misbehaving bot can never stall the game. */
   pickFallbackMove(state: TState, seatId: string): TMove;
 
