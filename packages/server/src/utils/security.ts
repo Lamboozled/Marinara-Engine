@@ -620,11 +620,14 @@ export async function safeFetch(url: string | URL, options: SafeFetchOptions = {
   throw new Error("Outbound request exceeded redirect limit");
 }
 
+const SAFE_HEADER_ONLY_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
+
 export function resolveValidatedImage(buf: Buffer, contentTypeHeader: string): { mimeType: string } | null {
-  const contentType = contentTypeHeader.toLowerCase();
+  const contentType = contentTypeHeader.toLowerCase().split(";")[0]?.trim() ?? "";
   const imageInfo = isAllowedImageBuffer(buf);
-  if (!contentType.startsWith("image/") && !imageInfo) return null;
-  return { mimeType: imageInfo?.mimeType ?? contentType };
+  if (imageInfo) return { mimeType: imageInfo.mimeType };
+  if (SAFE_HEADER_ONLY_IMAGE_TYPES.has(contentType)) return { mimeType: contentType };
+  return null;
 }
 
 export function sanitizePathFilename(filename: string, allowedExts?: Set<string>): string {
