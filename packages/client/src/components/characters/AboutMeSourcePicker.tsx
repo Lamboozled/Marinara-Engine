@@ -81,17 +81,13 @@ export function AboutMeSourcePicker({
     ? "This character's lorebook entries — handy when the card fields are blank and the substance lives in the lorebook. Pick which entries below."
     : "This character's lorebook entries. To choose which entries feed the bio, open this character's card → Convo → About Me.";
 
-  // Mobile popout has no expansion and no hover — auto-open the explainer tooltip when
-  // the user selects the Lorebook source there, so they learn where to pick entries.
+  // The chat popout has no entry expansion — auto-open the explainer tooltip when the
+  // user selects the Lorebook source there (desktop and mobile), so they learn entry
+  // selection lives in the card editor. The card editor shows the expansion instead.
   const [lorebookTipSignal, setLorebookTipSignal] = useState(0);
   const toggleLorebook = (checked: boolean) => {
     toggle("lorebook", checked);
-    if (
-      checked &&
-      lorebookEntries === undefined &&
-      typeof window !== "undefined" &&
-      window.matchMedia("(max-width: 767px)").matches
-    ) {
+    if (checked && lorebookEntries === undefined) {
       setLorebookTipSignal((n) => n + 1);
     }
   };
