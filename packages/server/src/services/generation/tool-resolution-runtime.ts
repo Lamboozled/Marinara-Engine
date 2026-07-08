@@ -460,6 +460,7 @@ function createLorebookEntryWriter(
     // envelope (mirroring the structured lorebook_update gate) so the user approves
     // the write before it touches the lorebook DB.
     if (options.requireApproval) {
+      const existingEntries = await lorebooksStore.listEntries(writableLorebookId).catch(() => []);
       return {
         requiresApproval: true,
         approval: buildLorebookWriteApprovalProposal({
@@ -479,6 +480,7 @@ function createLorebookEntryWriter(
           ],
           preferredTargetLorebookId: writableLorebookId,
           writableLorebookIds: [writableLorebookId],
+          existingEntries,
         }),
       };
     }
