@@ -7343,7 +7343,11 @@ export function ChatSettingsDrawer({
                       <div className="space-y-2">
                         <AgentSettingsToggle
                           label="Automatic Visuals"
-                          description="Let Game Mode automatically request backgrounds, NPC portraits, and scene illustrations. Manual buttons stay available when this is off."
+                          description={
+                            gameStoryboardViewerDisplayMode === "background"
+                              ? "Automatically request NPC portraits and scene illustrations. Location background generation is disabled while storyboard visuals are used as the background."
+                              : "Let Game Mode automatically request backgrounds, NPC portraits, and scene illustrations. Manual buttons stay available when this is off."
+                          }
                           enabled={gameImageAutoGenerationEnabled}
                           onToggle={() =>
                             updateMeta.mutate({
@@ -7534,7 +7538,7 @@ export function ChatSettingsDrawer({
                     <div className="space-y-1">
                       <div className="flex items-center gap-1 text-[0.625rem] font-medium text-[var(--foreground)]">
                         Viewer Display
-                        <HelpTooltip text="Floating keeps the draggable storyboard panel. Background places the active storyboard frame behind the game UI, above the normal scene background." />
+                        <HelpTooltip text="Floating keeps the draggable storyboard panel. Background places the active storyboard frame behind the game UI and disables generated location backgrounds." />
                       </div>
                       <AgentSettingsSegmentedControl<GameStoryboardViewerDisplayMode>
                         value={gameStoryboardViewerDisplayMode}

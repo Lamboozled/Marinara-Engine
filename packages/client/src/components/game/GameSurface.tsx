@@ -3670,6 +3670,10 @@ function GameSurfaceComponent({
     typeof chatMeta.gameVideoConnectionId === "string" && chatMeta.gameVideoConnectionId.trim().length > 0;
   const gameImageAutoGenerationEnabled =
     gameImageGenerationEnabled && chatMeta.gameImageAutoGenerationEnabled !== false;
+  const gameStoryboardBackgroundVisualEnabled = gameStoryboardViewerDisplayMode === "background";
+  const gameBackgroundGenerationEnabled = gameImageGenerationEnabled && !gameStoryboardBackgroundVisualEnabled;
+  const gameBackgroundAutoGenerationEnabled =
+    gameImageAutoGenerationEnabled && !gameStoryboardBackgroundVisualEnabled;
   const gameStoryboardAutoIllustrationsEnabled = chatMeta.gameStoryboardAutoIllustrationsEnabled === true;
   const gameStoryboardAutoAnimationsEnabled = chatMeta.gameStoryboardAutoGenerationEnabled === true;
   const gameStoryboardAutoGenerationEnabled =
@@ -3680,6 +3684,7 @@ function GameSurfaceComponent({
   const missingSceneAssetGeneration = useMemo(() => {
     return buildMissingSceneAssetGenerationPayload({
       gameImageGenerationEnabled: gameImageAutoGenerationEnabled,
+      gameBackgroundGenerationEnabled: gameBackgroundAutoGenerationEnabled,
       activeChatId,
       currentBackground,
       savedSceneBackground: chatMeta.gameSceneBackground as string | undefined,
@@ -3694,6 +3699,7 @@ function GameSurfaceComponent({
     scopedAssetMap,
     chatMeta.gameSceneBackground,
     currentBackground,
+    gameBackgroundAutoGenerationEnabled,
     gameImageAutoGenerationEnabled,
     failedNpcAvatarNames,
     npcAvatarLookup,
@@ -4592,7 +4598,7 @@ function GameSurfaceComponent({
       setting:
         ((chatMeta.gameSetupConfig as Record<string, unknown> | undefined)?.setting as string | undefined) ?? null,
       worldOverview: (chatMeta.gameWorldOverview as string | undefined) ?? null,
-      canGenerateBackgrounds: gameImageAutoGenerationEnabled,
+      canGenerateBackgrounds: gameBackgroundAutoGenerationEnabled,
       canGenerateIllustrations: gameImageAutoGenerationEnabled,
       artStylePrompt:
         ((chatMeta.gameSetupConfig as Record<string, unknown> | undefined)?.artStylePrompt as string | undefined) ??
@@ -4832,10 +4838,30 @@ function GameSurfaceComponent({
       assetPayload: GameAssetGenerationPayload,
       options?: Pick<GameAssetGenerationOptions, "allowPromptReview">,
     ): Promise<GameAssetGenerationResult | null> => {
+      const requestedBackground = !!assetPayload.backgroundTag?.trim();
+      const backgroundSafePayload =
+        gameStoryboardBackgroundVisualEnabled && requestedBackground
+          ? {
+              ...assetPayload,
+              backgroundTag: undefined,
+              backgroundDescription: undefined,
+              forceBackground: undefined,
+            }
+          : assetPayload;
+      if (
+        requestedBackground &&
+        gameStoryboardBackgroundVisualEnabled &&
+        !backgroundSafePayload.illustration &&
+        !backgroundSafePayload.npcsNeedingAvatars?.length
+      ) {
+        return null;
+      }
+
       const payload: GameAssetGenerationPayload = {
-        ...assetPayload,
-        useAvatarReferences: assetPayload.useAvatarReferences ?? gameImageUseAvatarReferences,
-        includeCharacterAppearance: assetPayload.includeCharacterAppearance ?? gameImageIncludeCharacterAppearance,
+        ...backgroundSafePayload,
+        useAvatarReferences: backgroundSafePayload.useAvatarReferences ?? gameImageUseAvatarReferences,
+        includeCharacterAppearance:
+          backgroundSafePayload.includeCharacterAppearance ?? gameImageIncludeCharacterAppearance,
         debugMode: useUIStore.getState().debugMode,
         queueImageGenerationRequests: useUIStore.getState().queueImageGenerationRequests,
         imageSizes: getConfiguredGameAssetImageSizes(),
@@ -4895,7 +4921,13 @@ function GameSurfaceComponent({
         },
       );
     },
-    [closeImagePromptReview, gameImageIncludeCharacterAppearance, gameImageUseAvatarReferences, openImagePromptReview],
+    [
+      closeImagePromptReview,
+      gameImageIncludeCharacterAppearance,
+      gameImageUseAvatarReferences,
+      gameStoryboardBackgroundVisualEnabled,
+      openImagePromptReview,
+    ],
   );
 
   const applyGeneratedAssets = useCallback(
@@ -5050,11 +5082,13 @@ function GameSurfaceComponent({
       ].filter((t): t is string => !!t && t !== "black" && t !== "none");
 
       const generatedIllustrationTag = result.generatedIllustration?.tag;
-      const unresolvedBg = allBgTags.find((t) => {
-        if (t === generatedIllustrationTag || latestAssetMap[t]) return false;
-        const resolved = resolveAssetTag(t, "backgrounds", latestAssetMap);
-        return !latestAssetMap[resolved];
-      });
+      const unresolvedBg = gameBackgroundAutoGenerationEnabled
+        ? allBgTags.find((t) => {
+            if (t === generatedIllustrationTag || latestAssetMap[t]) return false;
+            const resolved = resolveAssetTag(t, "backgrounds", latestAssetMap);
+            return !latestAssetMap[resolved];
+          })
+        : undefined;
       // Pre-cache portraits for any tracked named NPC with a description, even if not
       // met yet — by the time the party encounters them their avatar is ready, and the
       // /generate-assets schema already caps this at 10 per turn so cost stays bounded.
@@ -5208,7 +5242,11 @@ function GameSurfaceComponent({
 
   const handleManualSceneBackground = useCallback(async () => {
     if (!activeChatId || manualBackgroundGenerating) return;
-    if (!gameImageGenerationEnabled) {
+    if (gameStoryboardBackgroundVisualEnabled) {
+      toast.error("Scene background generation is disabled while storyboard visuals are shown as the background.");
+      return;
+    }
+    if (!gameBackgroundGenerationEnabled) {
       toast.error("Enable Game Illustrator and choose an image connection first.");
       return;
     }
@@ -5271,7 +5309,8 @@ function GameSurfaceComponent({
     chatMeta.gameSetupConfig,
     chatMeta.gameWorldOverview,
     chat.name,
-    gameImageGenerationEnabled,
+    gameBackgroundGenerationEnabled,
+    gameStoryboardBackgroundVisualEnabled,
     gameSnapshot?.location,
     gameSnapshot?.time,
     gameSnapshot?.weather,
@@ -5845,7 +5884,7 @@ function GameSurfaceComponent({
       genre: (setupConfig?.genre as string | undefined) ?? null,
       setting: (setupConfig?.setting as string | undefined) ?? null,
       worldOverview: (chatMeta.gameWorldOverview as string | undefined) ?? null,
-      canGenerateBackgrounds: gameImageAutoGenerationEnabled,
+      canGenerateBackgrounds: gameBackgroundAutoGenerationEnabled,
       canGenerateIllustrations: gameImageAutoGenerationEnabled,
       artStylePrompt:
         ((chatMeta.gameSetupConfig as Record<string, unknown> | undefined)?.artStylePrompt as string | undefined) ??
@@ -5904,6 +5943,7 @@ function GameSurfaceComponent({
     chatMeta.gameWorldOverview,
     currentBackground,
     fetchSpotifySceneCandidates,
+    gameBackgroundAutoGenerationEnabled,
     gameImageAutoGenerationEnabled,
     gameSnapshot?.location,
     gameSnapshot?.time,
@@ -7265,9 +7305,11 @@ function GameSurfaceComponent({
             .filter((enemy) => enemy.name && enemy.description)
             .slice(0, 10);
           const shouldGenerateBossVisuals = !!visuals?.isBossFight && gameImageAutoGenerationEnabled;
+          const shouldGenerateBossBackground = shouldGenerateBossVisuals && gameBackgroundAutoGenerationEnabled;
           const shouldGenerateEnemyAvatars = gameImageAutoGenerationEnabled && enemyAvatarRequests.length > 0;
           if (
-            (shouldGenerateBossVisuals && (visuals?.backgroundPrompt || visuals?.illustrationPrompt)) ||
+            (shouldGenerateBossVisuals &&
+              ((shouldGenerateBossBackground && visuals?.backgroundPrompt) || visuals?.illustrationPrompt)) ||
             shouldGenerateEnemyAvatars
           ) {
             const illustrationPrompt = visuals?.illustrationPrompt?.trim() || "";
@@ -7278,7 +7320,8 @@ function GameSurfaceComponent({
                 : "";
             const assetPayload = {
               chatId: activeChatId,
-              backgroundTag: backgroundPrompt ? `boss fight: ${backgroundPrompt}` : undefined,
+              backgroundTag:
+                shouldGenerateBossBackground && backgroundPrompt ? `boss fight: ${backgroundPrompt}` : undefined,
               illustration:
                 illustrationPrompt.length >= 40
                   ? {
@@ -7338,6 +7381,7 @@ function GameSurfaceComponent({
     [
       activeChatId,
       combatGenerationPending,
+      gameBackgroundAutoGenerationEnabled,
       gameImageAutoGenerationEnabled,
       hydrateGeneratedCombatState,
       requestAssetGeneration,
@@ -8832,7 +8876,7 @@ function GameSurfaceComponent({
       genre: (setupConfig?.genre as string | undefined) ?? null,
       setting: (setupConfig?.setting as string | undefined) ?? null,
       worldOverview: (chatMeta.gameWorldOverview as string | undefined) ?? null,
-      canGenerateBackgrounds: gameImageAutoGenerationEnabled,
+      canGenerateBackgrounds: gameBackgroundAutoGenerationEnabled,
       canGenerateIllustrations: gameImageAutoGenerationEnabled,
       artStylePrompt: (setupConfig?.artStylePrompt as string | undefined) ?? null,
       imagePromptInstructions:
@@ -8869,6 +8913,7 @@ function GameSurfaceComponent({
     hudWidgets,
     npcs,
     currentBackground,
+    gameBackgroundAutoGenerationEnabled,
     gameImageAutoGenerationEnabled,
     gameSnapshot,
     chatMeta,
@@ -9737,9 +9782,13 @@ function GameSurfaceComponent({
           <button
             type="button"
             onClick={handleManualSceneBackground}
-            disabled={manualBackgroundGenerating || !gameImageGenerationEnabled}
+            disabled={manualBackgroundGenerating || !gameBackgroundGenerationEnabled}
             className="marinara-chat-popover__item flex items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium text-[var(--marinara-chat-chrome-panel-text)] transition-colors hover:bg-[var(--marinara-chat-chrome-highlight-bg-hover)] hover:text-[var(--marinara-chat-chrome-highlight-text)] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
-            title="Generate a background for the current scene"
+            title={
+              gameStoryboardBackgroundVisualEnabled
+                ? "Storyboard background display is active, so scene background generation is disabled"
+                : "Generate a background for the current scene"
+            }
           >
             {manualBackgroundGenerating ? <Loader2 size={14} className="animate-spin" /> : <ImagePlus size={14} />}
             Generate background
