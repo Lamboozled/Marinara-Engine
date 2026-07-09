@@ -187,15 +187,17 @@ export function PokerBoard({ chatId }: Props) {
   // every keystroke would snap "1" up to the minimum before "150" can be typed);
   // it is clamped into the legal range only on blur, quick-pick, and submit.
   const [betInput, setBetInput] = useState("0");
-  // Reset the bet/raise field whenever a fresh decision point arrives (a new
-  // street, a new hand, or turn passing back to you) — a stale amount from a
-  // prior street could exceed the new maxTo. Depending on the whole `view`
-  // covers every field read inside without an exhaustive-deps override.
+  // Reset the bet/raise field only when a fresh DECISION POINT arrives (a new
+  // hand, a new street, turn passing, or the legal bet/raise window moving) —
+  // a stale amount from a prior street could exceed the new maxTo. Keyed off
+  // those fields rather than the whole `view` so an unrelated state patch
+  // (e.g. a dealer-announcement drain) can't wipe a partially typed amount
+  // mid-turn.
   useEffect(() => {
-    if (!view) return;
-    const a = view.yourActions;
-    setBetInput(String(a.canBet ? a.minBet : a.minRaiseTo));
-  }, [view]);
+    if (!yourActions) return;
+    setBetInput(String(minFloor));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view?.handNumber, view?.street, view?.currentSeatId, yourActions?.canBet, minFloor]);
 
   const clampBet = useMemo(
     () => (n: number) => Math.max(minFloor, Math.min(maxTo, Math.floor(Number.isFinite(n) ? n : minFloor))),

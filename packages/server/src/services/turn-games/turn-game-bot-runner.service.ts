@@ -15,7 +15,8 @@
 // so it can never affect a normal conversation/roleplay generation.
 import type { FastifyReply } from "fastify";
 import type { DB } from "../../db/connection.js";
-import { logger } from "../../lib/logger.js";
+import { logDebugOverride, logger } from "../../lib/logger.js";
+import { isDebugAgentsEnabled } from "../../config/runtime-config.js";
 import type { BaseLLMProvider, ChatMessage, LLMToolDefinition } from "../llm/base-provider.js";
 import { createLLMProvider } from "../llm/provider-registry.js";
 import { trySendSseEvent } from "../../routes/generate/sse.js";
@@ -527,6 +528,14 @@ async function narrateAnnouncements(
           `come through accurately. Facts: ${eventSummary}`,
       },
     ];
+    // Prompt visibility for the new dealer-narration call: honors DEBUG_AGENTS
+    // (elevated via logDebugOverride so it shows even at the default warn level).
+    logDebugOverride(
+      isDebugAgentsEnabled(),
+      "[turn-game] dealer announcement prompt (model %s): %s",
+      model,
+      messages[0]?.content ?? "",
+    );
     const res = await provider.chatComplete(messages, {
       model,
       temperature: 0.85,
