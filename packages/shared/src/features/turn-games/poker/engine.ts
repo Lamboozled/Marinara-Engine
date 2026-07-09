@@ -507,8 +507,11 @@ function dealNewHand(state: PokerState, events: GameEvent[]): void {
 
 /**
  * Layer `committedTotal` into main + side pots. Folded seats' chips count toward pot
- * amounts (dead money) but folded seats are never eligible to win. Pure — exported for
- * direct unit testing against hand-crafted commitment maps.
+ * amounts (dead money) but folded seats are never eligible to win. Layers whose
+ * ELIGIBLE set is identical are coalesced into one pot: a folder's dead money sitting
+ * below the callers' totals must not manufacture a "side pot" — real side pots exist
+ * only where an all-in actually splits who can win what. Pure — exported for direct
+ * unit testing against hand-crafted commitment maps.
  */
 export function buildPots(
   committedTotal: Record<string, number>,
@@ -528,7 +531,14 @@ export function buildPots(
     const amount = layerHeight * contributors.length;
     if (amount <= 0) continue;
     const eligibleSeatIds = contributors.filter((id) => contenders.includes(id));
-    pots.push({ amount, eligibleSeatIds });
+    // Eligible sets shrink (weakly) monotonically as the level rises, so layers with
+    // an identical eligible set are always adjacent — merging here is exhaustive.
+    const prev = pots[pots.length - 1];
+    if (prev && prev.eligibleSeatIds.length === eligibleSeatIds.length && prev.eligibleSeatIds.every((id, i) => id === eligibleSeatIds[i])) {
+      prev.amount += amount;
+    } else {
+      pots.push({ amount, eligibleSeatIds });
+    }
   }
   return pots;
 }
