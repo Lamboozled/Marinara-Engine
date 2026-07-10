@@ -67,6 +67,7 @@ import {
 
 const NOODLE_ROUTE_DIR = dirname(fileURLToPath(import.meta.url));
 const CLIENT_PUBLIC_DIR = resolve(NOODLE_ROUTE_DIR, "../../../client/public");
+const NOODLE_FOLLOWED_AT_BY_ACCOUNT_KEY = "followingAccountTimestamps";
 const PROFESSOR_MARI_REFERENCE_ASSETS = [
   "sprites/mari/Mari_profile.png",
   "sprites/mari/chibi-professor-mari.png",
@@ -1551,9 +1552,14 @@ export async function noodleRoutes(app: FastifyInstance) {
         const actorSettings = mutableAccountSettings.get(actor.id) ?? actor.settings;
         const currentFollowingAccountIds = parseStringArray(actorSettings.followingAccountIds);
         if (currentFollowingAccountIds.includes(target.id)) continue;
+        const followedAtByAccount = parseRecord(actorSettings[NOODLE_FOLLOWED_AT_BY_ACCOUNT_KEY]);
         const nextSettings = {
           ...actorSettings,
           followingAccountIds: [...currentFollowingAccountIds, target.id],
+          [NOODLE_FOLLOWED_AT_BY_ACCOUNT_KEY]: {
+            ...followedAtByAccount,
+            [target.id]: new Date().toISOString(),
+          },
         };
         mutableAccountSettings.set(actor.id, nextSettings);
         await noodle.updateAccount(actor.id, { settings: nextSettings });

@@ -548,46 +548,52 @@ test("Noodle persona comments can be edited and deleted without exposing charact
   test.skip(!testInfo.project.name.includes("desktop"), "Comment ownership controls are covered on desktop.");
 
   const errors = collectUnexpectedErrors(page);
-  const activePersonaResponse = await page.request.get("/api/characters/personas/active");
-  const activePersona = activePersonaResponse.ok()
-    ? ((await activePersonaResponse.json()) as { id?: string } | null)
-    : null;
-  let personaId = activePersona?.id ?? null;
+  let personaId: string | null = null;
   let createdPersonaId: string | null = null;
-  if (!personaId) {
-    const personaResponse = await page.request.post("/api/characters/personas", {
-      data: { name: "Noodle Comment Owner", description: "Temporary browser regression persona." },
-    });
-    expect(personaResponse.ok()).toBe(true);
-    const createdPersona = (await personaResponse.json()) as { id: string };
-    personaId = createdPersona.id;
-    createdPersonaId = createdPersona.id;
-    const activateResponse = await page.request.put(`/api/characters/personas/${createdPersona.id}/activate`);
-    expect(activateResponse.ok()).toBe(true);
-  }
-
-  await page.request.get("/api/noodle");
-  const postResponse = await page.request.post("/api/noodle/posts", {
-    data: {
-      authorKind: "character",
-      authorEntityId: "__professor_mari__",
-      content: `Comment ownership regression ${Date.now()}`,
-    },
-  });
-  expect(postResponse.ok()).toBe(true);
-  const post = (await postResponse.json()) as { id: string };
-  const controlPostResponse = await page.request.post("/api/noodle/posts", {
-    data: {
-      authorKind: "character",
-      authorEntityId: "__professor_mari__",
-      content: `Newer control post ${Date.now()}`,
-    },
-  });
-  expect(controlPostResponse.ok()).toBe(true);
-  const controlPost = (await controlPostResponse.json()) as { id: string };
+  let postId: string | null = null;
+  let controlPostId: string | null = null;
 
   try {
-    const ownReplyResponse = await page.request.post(`/api/noodle/posts/${post.id}/interactions`, {
+    const activePersonaResponse = await page.request.get("/api/characters/personas/active");
+    const activePersona = activePersonaResponse.ok()
+      ? ((await activePersonaResponse.json()) as { id?: string } | null)
+      : null;
+    personaId = activePersona?.id ?? null;
+    if (!personaId) {
+      const personaResponse = await page.request.post("/api/characters/personas", {
+        data: { name: "Noodle Comment Owner", description: "Temporary browser regression persona." },
+      });
+      expect(personaResponse.ok()).toBe(true);
+      const createdPersona = (await personaResponse.json()) as { id: string };
+      personaId = createdPersona.id;
+      createdPersonaId = createdPersona.id;
+      const activateResponse = await page.request.put(`/api/characters/personas/${createdPersona.id}/activate`);
+      expect(activateResponse.ok()).toBe(true);
+    }
+
+    await page.request.get("/api/noodle");
+    const postResponse = await page.request.post("/api/noodle/posts", {
+      data: {
+        authorKind: "character",
+        authorEntityId: "__professor_mari__",
+        content: `Comment ownership regression ${Date.now()}`,
+      },
+    });
+    expect(postResponse.ok()).toBe(true);
+    const post = (await postResponse.json()) as { id: string };
+    postId = post.id;
+    const controlPostResponse = await page.request.post("/api/noodle/posts", {
+      data: {
+        authorKind: "character",
+        authorEntityId: "__professor_mari__",
+        content: `Newer control post ${Date.now()}`,
+      },
+    });
+    expect(controlPostResponse.ok()).toBe(true);
+    const controlPost = (await controlPostResponse.json()) as { id: string };
+    controlPostId = controlPost.id;
+
+    const ownReplyResponse = await page.request.post(`/api/noodle/posts/${postId}/interactions`, {
       data: {
         actorKind: "persona",
         actorEntityId: personaId,
@@ -598,7 +604,7 @@ test("Noodle persona comments can be edited and deleted without exposing charact
     expect(ownReplyResponse.ok()).toBe(true);
     const ownReply = (await ownReplyResponse.json()) as { id: string };
 
-    const childReplyResponse = await page.request.post(`/api/noodle/posts/${post.id}/interactions`, {
+    const childReplyResponse = await page.request.post(`/api/noodle/posts/${postId}/interactions`, {
       data: {
         actorKind: "character",
         actorEntityId: "__professor_mari__",
@@ -611,7 +617,7 @@ test("Noodle persona comments can be edited and deleted without exposing charact
     const childReply = (await childReplyResponse.json()) as { id: string };
 
     const unauthorizedEditResponse = await page.request.patch(
-      `/api/noodle/posts/${post.id}/interactions/${childReply.id}`,
+      `/api/noodle/posts/${postId}/interactions/${childReply.id}`,
       { data: { personaId, content: "This must be rejected." } },
     );
     expect(unauthorizedEditResponse.status()).toBe(403);
@@ -620,8 +626,8 @@ test("Noodle persona comments can be edited and deleted without exposing charact
     await page.locator('[data-tour="noodle-tab"]').click();
 
     const noodle = page.locator('[data-component="NoodleView"]');
-    const activePost = noodle.locator(`[data-noodle-post-id="${post.id}"]`);
-    const newerControlPost = noodle.locator(`[data-noodle-post-id="${controlPost.id}"]`);
+    const activePost = noodle.locator(`[data-noodle-post-id="${postId}"]`);
+    const newerControlPost = noodle.locator(`[data-noodle-post-id="${controlPostId}"]`);
     const ownComment = noodle.locator(`[data-noodle-interaction-id="${ownReply.id}"]`);
     const characterComment = noodle.locator(`[data-noodle-interaction-id="${childReply.id}"]`);
     await expect(newerControlPost).toBeVisible();
@@ -631,7 +637,7 @@ test("Noodle persona comments can be edited and deleted without exposing charact
       await activePost.evaluate((element, controlPostId) => {
         const control = document.querySelector(`[data-noodle-post-id="${controlPostId}"]`);
         return Boolean(control && element.compareDocumentPosition(control) & Node.DOCUMENT_POSITION_FOLLOWING);
-      }, controlPost.id),
+      }, controlPostId),
     ).toBe(true);
     await expect(ownComment.getByRole("button", { name: "Edit comment" })).toBeVisible();
     await expect(ownComment.getByRole("button", { name: "Delete comment" })).toBeVisible();
@@ -653,8 +659,12 @@ test("Noodle persona comments can be edited and deleted without exposing charact
 
     expect(errors).toEqual([]);
   } finally {
-    await page.request.delete(`/api/noodle/posts/${post.id}`, { timeout: 5_000 }).catch(() => undefined);
-    await page.request.delete(`/api/noodle/posts/${controlPost.id}`, { timeout: 5_000 }).catch(() => undefined);
+    if (postId) {
+      await page.request.delete(`/api/noodle/posts/${postId}`, { timeout: 5_000 }).catch(() => undefined);
+    }
+    if (controlPostId) {
+      await page.request.delete(`/api/noodle/posts/${controlPostId}`, { timeout: 5_000 }).catch(() => undefined);
+    }
     if (createdPersonaId) {
       await page.request
         .delete(`/api/characters/personas/${createdPersonaId}`, { timeout: 5_000 })

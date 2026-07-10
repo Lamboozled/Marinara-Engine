@@ -109,6 +109,7 @@ const NOODLE_BLUE = "#7EA7FF";
 const NOODLE_ICON_SCOPE_CLASS = "[&_svg]:!text-[var(--noodle-blue)]";
 const NOODLE_LOGO_SRC = "/noodle-klusek.png";
 const NOODLE_NOTIFICATIONS_READ_AT_KEY = "notificationsReadAt";
+const NOODLE_FOLLOWED_AT_BY_ACCOUNT_KEY = "followingAccountTimestamps";
 const NOODLE_INVITE_PAGE_SIZE = 50;
 const NOODLE_PERSONA_SWITCHER_PAGE_SIZE = 5;
 const NOODLE_CARRYOVER_TARGETS: NoodleCarryoverTarget[] = ["conversation", "roleplay", "game"];
@@ -1493,12 +1494,14 @@ export function NoodleView() {
   const notificationFollowAccounts = useMemo(() => {
     if (!personaAccount) return [];
     return accounts
-      .filter((account) => {
-        if (account.id === personaAccount.id) return false;
+      .flatMap((account) => {
+        if (account.id === personaAccount.id) return [];
         const followingAccountIds = readStringArray(account.settings?.followingAccountIds);
-        return followingAccountIds.includes(personaAccount.id);
+        if (!followingAccountIds.includes(personaAccount.id)) return [];
+        const followedAtByAccount = parseRecord(account.settings?.[NOODLE_FOLLOWED_AT_BY_ACCOUNT_KEY]);
+        return [{ account, followedAt: readString(followedAtByAccount[personaAccount.id]) }];
       })
-      .sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime());
+      .sort((left, right) => (Date.parse(right.followedAt) || 0) - (Date.parse(left.followedAt) || 0));
   }, [accounts, personaAccount]);
   const notificationReplyItems = useMemo(() => {
     if (!personaAccount) return [];
@@ -1602,7 +1605,7 @@ export function NoodleView() {
   const notificationReadTime = Date.parse(notificationReadAt) || 0;
   const notificationCount =
     notificationLikes.filter((item) => new Date(item.interaction.createdAt).getTime() > notificationReadTime).length +
-    notificationFollowAccounts.filter((account) => new Date(account.updatedAt).getTime() > notificationReadTime)
+    notificationFollowAccounts.filter((item) => (Date.parse(item.followedAt) || 0) > notificationReadTime)
       .length +
     notificationReplyItems.filter((item) => new Date(item.createdAt).getTime() > notificationReadTime).length;
   const notificationBadgeLabel = notificationCount > 99 ? "99+" : String(notificationCount);
@@ -1752,10 +1755,19 @@ export function NoodleView() {
     const nextFollowingAccountIds = followed
       ? Array.from(new Set([...currentFollowingAccountIds, account.id]))
       : currentFollowingAccountIds.filter((id) => id !== account.id);
+    const nextFollowedAtByAccount = {
+      ...parseRecord(personaAccount.settings?.[NOODLE_FOLLOWED_AT_BY_ACCOUNT_KEY]),
+    };
+    if (followed) nextFollowedAtByAccount[account.id] = new Date().toISOString();
+    else delete nextFollowedAtByAccount[account.id];
     updateAccount.mutate(
       {
         id: personaAccount.id,
-        settings: { ...personaAccount.settings, followingAccountIds: nextFollowingAccountIds },
+        settings: {
+          ...personaAccount.settings,
+          followingAccountIds: nextFollowingAccountIds,
+          [NOODLE_FOLLOWED_AT_BY_ACCOUNT_KEY]: nextFollowedAtByAccount,
+        },
       },
       {
         onError: (error) => toast.error(error instanceof Error ? error.message : "Could not update followed accounts."),
@@ -2105,19 +2117,37 @@ export function NoodleView() {
 
   const openNotifications = () => {
     if (personaAccount) {
+      const accountId = personaAccount.id;
+      const previousOverride = notificationReadOverrides[accountId];
       const readAt = new Date().toISOString();
-      setNotificationReadOverrides((current) => ({ ...current, [personaAccount.id]: readAt }));
+      setNotificationReadOverrides((current) => ({ ...current, [accountId]: readAt }));
       updateAccount.mutate(
         {
-          id: personaAccount.id,
+          id: accountId,
           settings: {
             ...personaAccount.settings,
             [NOODLE_NOTIFICATIONS_READ_AT_KEY]: readAt,
           },
         },
         {
-          onError: (error) =>
-            toast.error(error instanceof Error ? error.message : "Could not mark Noodle notifications as read."),
+          onSuccess: () => {
+            setNotificationReadOverrides((current) => {
+              if (current[accountId] !== readAt) return current;
+              const next = { ...current };
+              delete next[accountId];
+              return next;
+            });
+          },
+          onError: (error) => {
+            setNotificationReadOverrides((current) => {
+              if (current[accountId] !== readAt) return current;
+              const next = { ...current };
+              if (previousOverride) next[accountId] = previousOverride;
+              else delete next[accountId];
+              return next;
+            });
+            toast.error(error instanceof Error ? error.message : "Could not mark Noodle notifications as read.");
+          },
         },
       );
     }
@@ -3386,23 +3416,26 @@ export function NoodleView() {
     );
   };
 
-  const renderFollowNotification = (account: NoodleAccount) => (
-    <div key={account.id} className="flex items-start gap-3 border-b border-[var(--noodle-divider)] px-4 py-4">
+  const renderFollowNotification = (item: (typeof notificationFollowAccounts)[number]) => (
+    <div
+      key={item.account.id}
+      className="flex items-start gap-3 border-b border-[var(--noodle-divider)] px-4 py-4"
+    >
       <button
         type="button"
-        onClick={() => openProfile(account)}
+        onClick={() => openProfile(item.account)}
         className="rounded-full transition-opacity hover:opacity-80"
-        title={`View @${account.handle}`}
+        title={`View @${item.account.handle}`}
       >
-        <Avatar account={account} />
+        <Avatar account={item.account} />
       </button>
       <button
         type="button"
-        onClick={() => openProfile(account)}
+        onClick={() => openProfile(item.account)}
         className="min-w-0 flex-1 text-left transition-colors hover:text-[var(--noodle-blue)]"
       >
-        <span className="block truncate text-sm font-bold">{account.displayName}</span>
-        <span className="block truncate text-sm text-[var(--muted-foreground)]">@{account.handle}</span>
+        <span className="block truncate text-sm font-bold">{item.account.displayName}</span>
+        <span className="block truncate text-sm text-[var(--muted-foreground)]">@{item.account.handle}</span>
         <span className="mt-1 block text-sm leading-5">followed you</span>
       </button>
     </div>
