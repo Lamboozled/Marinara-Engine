@@ -33,6 +33,8 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 
 ### Fixed
 
+- Fixed example dialogue `<START>` sentinels being escaped as `&lt;START&gt;` in XML-wrapped prompts while continuing to escape arbitrary imported markup (#3441).
+- Fixed Conversation **About Me** and Noodle avatars ignoring saved crop settings, and restored custom emoji rendering in Noodle profile bios (#3443).
 - Fixed structured Game and Noodle generations being rejected when a model wraps an otherwise valid JSON object or array in thinking, metadata, or other stray text.
 - Fixed GPT-5.6 Sol rejecting Noodle timeline/profile generation by supplying strict JSON schemas with `additionalProperties: false` at every object level and placing an explicit JSON instruction in Responses API input messages.
 - Fixed native Z.AI GLM-5.2 connections using legacy thinking parameters; Marinara now sends the documented `thinking.type` and compatible `reasoning_effort` values while preserving JSON mode on Z.AI endpoints.
