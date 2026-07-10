@@ -11,6 +11,10 @@ import {
   resolveMacros,
   resolveDeferredCharacterMacros,
   hasDeferredCharacterMacros,
+  hasDeferredRelocationConditionals,
+  DEFERRED_RELOCATION_CONDITIONAL_TOKEN_RE,
+  parseDeferredConditionalPayload,
+  selectConditionalPayloadBranch,
   LIMITS,
   coerceGameStateTextValue,
   appendChatSummaryEntryToMetadata,
@@ -31,6 +35,7 @@ import {
   LOCAL_SIDECAR_CONNECTION_ID,
   normalizeTextForMatch,
   type APIProvider,
+  type MacroContext,
 } from "@marinara-engine/shared";
 import type {
   AgentContext,
@@ -461,12 +466,87 @@ function conversationContextMacroPattern(key: ConversationContextMacroKey): RegE
   return new RegExp(`\\{\\{\\s*(?:${aliases.join("|")})\\s*\\}\\}`, "gi");
 }
 
+// Matches a relocation alias used as a BARE {{#if}}/{{else if}} operand, e.g.
+// `{{#if memories != ""}}` (the braced `{{#if {{memories}}}}` form is already
+// caught by conversationContextMacroPattern). Used so a header-only conditional
+// block still triggers the underlying retrieval (#3448).
+function conversationContextMacroConditionPattern(key: ConversationContextMacroKey): RegExp {
+  const aliases = CONVERSATION_CONTEXT_MACRO_ALIASES[key].map((alias) => alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  return new RegExp(`\\{\\{\\s*(?:#if|else\\s+if)\\b[^}]*\\b(?:${aliases.join("|")})\\b[^}]*\\}\\}`, "gi");
+}
+
+// Lowercased relocation aliases, for the deferConditionalOperand predicate.
+const RELOCATION_CONDITION_OPERANDS: ReadonlySet<string> = new Set(
+  Object.values(CONVERSATION_CONTEXT_MACRO_ALIASES)
+    .flat()
+    .map((alias) => alias.toLowerCase()),
+);
+
+// True when a {{#if}} operand references a relocation macro (bare `memories` or
+// braced `{{memories}}`). A quoted literal like `"memories"` is NOT a reference.
+function isRelocationConditionOperand(operand: string): boolean {
+  const normalized = operand
+    .trim()
+    .replace(/^\{\{\s*|\s*\}\}$/g, "")
+    .replace(/^@/, "")
+    .trim()
+    .toLowerCase();
+  return RELOCATION_CONDITION_OPERANDS.has(normalized);
+}
+
 function resolveConversationContextMacroSlots(template: string): ConversationContextMacroSlots {
   const slots: ConversationContextMacroSlots = { ...EMPTY_CONVERSATION_CONTEXT_MACRO_SLOTS };
   for (const key of Object.keys(CONVERSATION_CONTEXT_MACRO_ALIASES) as ConversationContextMacroKey[]) {
-    slots[key] = conversationContextMacroPattern(key).test(template);
+    slots[key] =
+      conversationContextMacroPattern(key).test(template) ||
+      conversationContextMacroConditionPattern(key).test(template);
   }
   return slots;
+}
+
+/**
+ * Evaluate deferred relocation {{#if}} tokens (encoded during the conversation
+ * prompt pass, #3448) now that every relocation value is known, substituting
+ * the inner relocation macros ({{memories}} etc.) from the same value map. The
+ * values are seeded as variables under every alias spelling so bare and braced
+ * operands both resolve. Mutates `messages` in place.
+ */
+function decodeDeferredRelocationConditionals(
+  messages: GenerationPromptMessage[],
+  relocationValues: Record<ConversationContextMacroKey, string>,
+  baseContext: MacroContext,
+): void {
+  if (!messages.some((message) => hasDeferredRelocationConditionals(message.content))) return;
+
+  const relocationVariables: Record<string, string> = {};
+  for (const key of Object.keys(CONVERSATION_CONTEXT_MACRO_ALIASES) as ConversationContextMacroKey[]) {
+    const value = (relocationValues[key] ?? "").trim();
+    for (const alias of CONVERSATION_CONTEXT_MACRO_ALIASES[key]) {
+      relocationVariables[alias] = value;
+      relocationVariables[alias.toLowerCase()] = value;
+    }
+  }
+  const evalContext: MacroContext = {
+    ...baseContext,
+    variables: { ...baseContext.variables, ...relocationVariables },
+  };
+
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index]!;
+    if (!hasDeferredRelocationConditionals(message.content)) continue;
+    messages[index] = {
+      ...message,
+      content: message.content.replace(DEFERRED_RELOCATION_CONDITIONAL_TOKEN_RE, (_match, encoded: string) => {
+        const payload = parseDeferredConditionalPayload(encoded);
+        if (!payload) {
+          logger.error("[generate/conversation] Malformed deferred relocation conditional token; dropping block");
+          return "";
+        }
+        const selected = selectConditionalPayloadBranch(payload, evalContext, { trimResult: false });
+        return resolveMacros(selected, evalContext, { trimResult: false });
+      }),
+    };
+  }
 }
 
 function replaceConversationContextMacro(
@@ -1203,6 +1283,11 @@ export async function generateRoutes(app: FastifyInstance) {
         };
         let conversationReactRules: string | null = null;
         let conversationImportantMemoryBlock: string | null = null;
+        // Relocation-macro content captured for the deferred-{{#if}} decode pass
+        // (#3448) — set where each is computed, read after all are known.
+        let conversationContextBlockValue = "";
+        let conversationLorebookBlockValue = "";
+        let conversationMemoriesBlockValue = "";
         const identityFallbackPromptTemplateSources: string[] = [];
         const conversationCommandsEnabled = chatMode === "conversation" && chatMeta.characterCommands !== false;
         let temperature: number | undefined = 1;
@@ -1823,6 +1908,9 @@ export async function generateRoutes(app: FastifyInstance) {
               .replace(/\{\{charName\}\}/g, charNameList)
               .replace(/\{\{userName\}\}/g, personaName),
             promptMacroContext,
+            // Defer {{#if}} blocks that test a relocation macro — their value is
+            // filled in later; the decode pass below evaluates them (#3448).
+            { deferConditionalOperand: isRelocationConditionOperand },
           );
           const conversationInstructionParts = [unwrapConversationInstructions(renderedConversationPrompt)];
 
@@ -1915,6 +2003,7 @@ export async function generateRoutes(app: FastifyInstance) {
             earlyGroupMode,
             wrapFormat,
           });
+          conversationContextBlockValue = contextBlock ?? "";
 
           // ── Cross-chat awareness: show messages from other chats this character is in ──
           // (awarenessBlock is injected later, after persona info)
@@ -2040,6 +2129,7 @@ export async function generateRoutes(app: FastifyInstance) {
               .join("\n");
             if (loreContent) {
               const loreBlock = wrapContent(loreContent, "Lore", wrapFormat);
+              conversationLorebookBlockValue = loreBlock;
               if (conversationContextMacroSlots.lorebook) {
                 replaceConversationContextMacro(finalMessages, "lorebook", loreBlock);
               } else {
@@ -2582,11 +2672,10 @@ export async function generateRoutes(app: FastifyInstance) {
             .map((message) => message.content)
             .filter(Boolean)
             .join("\n\n");
-          replaceConversationContextMacro(
-            finalMessages,
-            "memories",
-            [conversationImportantMemoryBlock, memoryRecallBlock].filter(Boolean).join("\n\n"),
-          );
+          conversationMemoriesBlockValue = [conversationImportantMemoryBlock, memoryRecallBlock]
+            .filter(Boolean)
+            .join("\n\n");
+          replaceConversationContextMacro(finalMessages, "memories", conversationMemoriesBlockValue);
         } else if (enableMemoryRecall && memoryRecallVectorizerAvailable) {
           await injectMemoryRecallContext({
             db: app.db,
@@ -2599,6 +2688,23 @@ export async function generateRoutes(app: FastifyInstance) {
             signal: abortController.signal,
             resolveMacros: (value) => resolveMacros(value, promptMacroContext, { trimResult: false }),
           });
+        }
+
+        // ── Deferred relocation {{#if}} decode (#3448) ──
+        // Every relocation value is now known: evaluate {{#if memories != ""}} /
+        // {{#if lorebook contains "x"}} etc. and fill in their inner macros.
+        if (chatMode === "conversation") {
+          decodeDeferredRelocationConditionals(
+            finalMessages,
+            {
+              context: conversationContextBlockValue,
+              commands: !input.impersonate ? (conversationCommandsReminder ?? "") : "",
+              reactRules: conversationReactRules ?? "",
+              memories: conversationMemoriesBlockValue,
+              lorebook: conversationLorebookBlockValue,
+            },
+            promptMacroContext,
+          );
         }
 
         if (
@@ -4470,6 +4576,18 @@ export async function generateRoutes(app: FastifyInstance) {
               : message.content
             ).replace(/\n([ \t]*\n){2,}/g, "\n\n"),
           }));
+          // Defense in depth: the relocation decode pass should have consumed
+          // every token already; strip any that slipped through so no control
+          // sentinel reaches the provider (#3448).
+          for (const message of preparedMessagesForGen) {
+            if (hasDeferredRelocationConditionals(message.content)) {
+              logger.error(
+                { chatId: input.chatId },
+                "[generate] Deferred relocation conditional token remained before provider request",
+              );
+              message.content = message.content.replace(DEFERRED_RELOCATION_CONDITIONAL_TOKEN_RE, "");
+            }
+          }
           dedupeLastMessageWrappers(preparedMessagesForGen);
           if (
             deferCharacterMacros &&
