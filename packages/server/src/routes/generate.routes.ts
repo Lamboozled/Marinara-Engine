@@ -65,10 +65,7 @@ import { createCustomStickersStorage } from "../services/storage/custom-stickers
 import { createCharacterGalleryStorage } from "../services/storage/character-gallery.storage.js";
 import { createPersonaGalleryStorage } from "../services/storage/persona-gallery.storage.js";
 import { createAppSettingsStorage } from "../services/storage/app-settings.storage.js";
-import {
-  buildLorebookSemanticEmbeddingsById,
-  warmLorebookEntryEmbeddings,
-} from "../services/lorebook/embeddings.js";
+import { buildLorebookSemanticEmbeddingsById, warmLorebookEntryEmbeddings } from "../services/lorebook/embeddings.js";
 import { applyRegexScriptsToPromptMessages } from "../services/regex/regex-application.js";
 import { createPromptOverridesStorage } from "../services/storage/prompt-overrides.storage.js";
 import { filterRelevantLorebooks, processLorebooks } from "../services/lorebook/index.js";
@@ -1294,6 +1291,7 @@ export async function generateRoutes(app: FastifyInstance) {
         let conversationContextBlockValue = "";
         let conversationLorebookBlockValue = "";
         let conversationMemoriesBlockValue = "";
+        let conversationReplyRulesBlockValue = "";
         const identityFallbackPromptTemplateSources: string[] = [];
         const conversationCommandsEnabled = chatMode === "conversation" && chatMeta.characterCommands !== false;
         let temperature: number | undefined = 1;
@@ -2416,6 +2414,7 @@ export async function generateRoutes(app: FastifyInstance) {
           conversationCustomEmojiUrlByName,
           replyRulesMacroPlacement: conversationContextMacroSlots.replyRules
             ? (content) => {
+                conversationReplyRulesBlockValue = content;
                 replaceConversationContextMacro(finalMessages, "replyRules", content);
               }
             : undefined,
@@ -2711,6 +2710,7 @@ export async function generateRoutes(app: FastifyInstance) {
               context: conversationContextBlockValue,
               commands: !input.impersonate ? (conversationCommandsReminder ?? "") : "",
               reactRules: conversationReactRules ?? "",
+              replyRules: conversationReplyRulesBlockValue,
               memories: conversationMemoriesBlockValue,
               lorebook: conversationLorebookBlockValue,
             },

@@ -23,6 +23,10 @@ import {
   GAME_STORYBOARD_BUILT_IN_PROMPT_TEMPLATES,
   GAME_STORYBOARD_NOVELAI_PROMPT_TEMPLATE,
   GAME_STORYBOARD_NOVELAI_PROMPT_TEMPLATE_ID,
+  DEFERRED_RELOCATION_CONDITIONAL_TOKEN_RE,
+  hasDeferredRelocationConditionals,
+  parseDeferredConditionalPayload,
+  selectConditionalPayloadBranch,
 } from "../../packages/shared/src/index.js";
 import {
   compactGameStateForAgentContext,
@@ -577,6 +581,40 @@ const cases: RegressionCase[] = [
     },
   },
   {
+    name: "deferred relocation conditionals support reply rules",
+    run() {
+      const context = {
+        user: "Mari",
+        char: "Dottore",
+        characters: ["Dottore"],
+        variables: {},
+      };
+      const deferred = resolveMacros(
+        '{{#if replyRules != ""}}Reply rules: {{replyRules}}{{else}}No reply rules{{/if}}',
+        context,
+        {
+          deferConditionalOperand: (operand) => operand === "replyRules",
+          trimResult: false,
+        },
+      );
+
+      assert.equal(hasDeferredRelocationConditionals(deferred), true);
+      DEFERRED_RELOCATION_CONDITIONAL_TOKEN_RE.lastIndex = 0;
+      const match = DEFERRED_RELOCATION_CONDITIONAL_TOKEN_RE.exec(deferred);
+      assert.ok(match?.[1]);
+      const payload = parseDeferredConditionalPayload(match[1]);
+      assert.ok(payload);
+
+      const withRules = { ...context, variables: { replyRules: "Use :pasta:." } };
+      const selectedWithRules = selectConditionalPayloadBranch(payload, withRules, { trimResult: false });
+      assert.equal(resolveMacros(selectedWithRules, withRules, { trimResult: false }), "Reply rules: Use :pasta:.");
+
+      const withoutRules = { ...context, variables: { replyRules: "" } };
+      const selectedWithoutRules = selectConditionalPayloadBranch(payload, withoutRules, { trimResult: false });
+      assert.equal(resolveMacros(selectedWithoutRules, withoutRules, { trimResult: false }), "No reply rules");
+    },
+  },
+  {
     name: "random range macros normalize reversed bounds and zero-sided dice",
     run() {
       const context = {
@@ -798,10 +836,7 @@ const cases: RegressionCase[] = [
       assert.match(drawerSource, /onAddTemplate\(GAME_STORYBOARD_NOVELAI_PROMPT_TEMPLATE_ID\)/);
       assert.match(drawerSource, /Add NovelAI Copy/);
       assert.match(gameRouteSource, /meta\.gameStoryboardUseNovelAiCharacterPrompts !== false/);
-      assert.match(
-        gameRouteSource,
-        /useNovelAiCharacterPrompts\s*&&\s*providerSupportsStructuredCharacterPrompts/,
-      );
+      assert.match(gameRouteSource, /useNovelAiCharacterPrompts\s*&&\s*providerSupportsStructuredCharacterPrompts/);
     },
   },
   {
