@@ -484,6 +484,7 @@ test("liking one Noodle post leaves unrelated reaction controls visually stable"
 
     const targetLike = targetPost.getByRole("button", { name: "Like post" });
     const unrelatedLike = unrelatedPost.getByRole("button", { name: "Like post" });
+    await expect(targetLike.locator("svg")).toHaveAttribute("fill", "none");
     const unrelatedClass = await unrelatedLike.getAttribute("class");
     const unrelatedText = await unrelatedLike.textContent();
     let markReactionRequestStarted: (() => void) | null = null;
@@ -520,7 +521,9 @@ test("liking one Noodle post leaves unrelated reaction controls visually stable"
 
     releaseReactionRequest?.();
     releaseReactionRequest = null;
-    await expect(targetPost.getByRole("button", { name: "Unlike post" })).toBeEnabled();
+    const targetUnlike = targetPost.getByRole("button", { name: "Unlike post" });
+    await expect(targetUnlike).toBeEnabled();
+    await expect(targetUnlike.locator("svg")).toHaveAttribute("fill", "currentColor");
     await expect(targetPost.locator('[data-noodle-reaction="like"]')).toContainText("1");
     await expect(unrelatedLike).toBeEnabled();
     await page.waitForTimeout(150);

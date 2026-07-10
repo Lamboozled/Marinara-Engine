@@ -3028,7 +3028,15 @@ export function NoodleView() {
                 aria-busy={postLikePending}
                 data-noodle-reaction="like"
               >
-                <Heart size={18} />
+                <Heart
+                  size={18}
+                  fill={likedByPersona ? "currentColor" : "none"}
+                  strokeWidth={likedByPersona ? 2.4 : 2}
+                  className={cn(
+                    "transition-[fill,transform] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)]",
+                    likedByPersona && "scale-110",
+                  )}
+                />
                 {countInteractions(rootPostInteractions, "like")}
               </button>
               <button
@@ -3154,7 +3162,15 @@ export function NoodleView() {
                               title={likedReplyByPersona ? "Unlike comment" : "Like comment"}
                               aria-busy={reactionPendingFor(post.id, "like", reply.id)}
                             >
-                              <Heart size={14} />
+                              <Heart
+                                size={14}
+                                fill={likedReplyByPersona ? "currentColor" : "none"}
+                                strokeWidth={likedReplyByPersona ? 2.4 : 2}
+                                className={cn(
+                                  "transition-[fill,transform] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)]",
+                                  likedReplyByPersona && "scale-110",
+                                )}
+                              />
                               {replyLikes.length > 0 && replyLikes.length}
                             </button>
                             <button
