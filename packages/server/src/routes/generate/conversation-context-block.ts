@@ -52,7 +52,7 @@ export function buildConversationCurrentContextBlock(args: {
   const statusLine = buildConversationStatusLine(args.convoCharInfo);
 
   const userStatusLabels: Record<string, string> = {
-    active: "active",
+    active: "online",
     idle: "idle / away from the computer",
     dnd: "do not disturb",
   };
@@ -95,13 +95,13 @@ export function buildConversationCurrentContextBlock(args: {
 
 function buildConversationStatusLine(convoCharInfo: ConversationContextCharacter[]): string {
   const statusLabels: Record<string, string> = {
-    online: "online and active",
+    online: "online",
     idle: "idle / away",
     dnd: "busy / do not disturb",
     offline: "offline",
   };
   const buildCharStatus = (character: ConversationContextCharacter) => {
-    const label = statusLabels[character.status] ?? "online and active";
+    const label = statusLabels[character.status] ?? "online";
     return character.activity ? `${label} (${character.activity})` : label;
   };
   return convoCharInfo.length === 1
