@@ -576,6 +576,15 @@ test("Noodle persona comments can be edited and deleted without exposing charact
   });
   expect(postResponse.ok()).toBe(true);
   const post = (await postResponse.json()) as { id: string };
+  const controlPostResponse = await page.request.post("/api/noodle/posts", {
+    data: {
+      authorKind: "character",
+      authorEntityId: "__professor_mari__",
+      content: `Newer control post ${Date.now()}`,
+    },
+  });
+  expect(controlPostResponse.ok()).toBe(true);
+  const controlPost = (await controlPostResponse.json()) as { id: string };
 
   try {
     const ownReplyResponse = await page.request.post(`/api/noodle/posts/${post.id}/interactions`, {
@@ -611,10 +620,19 @@ test("Noodle persona comments can be edited and deleted without exposing charact
     await page.locator('[data-tour="noodle-tab"]').click();
 
     const noodle = page.locator('[data-component="NoodleView"]');
+    const activePost = noodle.locator(`[data-noodle-post-id="${post.id}"]`);
+    const newerControlPost = noodle.locator(`[data-noodle-post-id="${controlPost.id}"]`);
     const ownComment = noodle.locator(`[data-noodle-interaction-id="${ownReply.id}"]`);
     const characterComment = noodle.locator(`[data-noodle-interaction-id="${childReply.id}"]`);
+    await expect(newerControlPost).toBeVisible();
     await expect(ownComment).toBeVisible();
     await expect(characterComment).toBeVisible();
+    expect(
+      await activePost.evaluate((element, controlPostId) => {
+        const control = document.querySelector(`[data-noodle-post-id="${controlPostId}"]`);
+        return Boolean(control && element.compareDocumentPosition(control) & Node.DOCUMENT_POSITION_FOLLOWING);
+      }, controlPost.id),
+    ).toBe(true);
     await expect(ownComment.getByRole("button", { name: "Edit comment" })).toBeVisible();
     await expect(ownComment.getByRole("button", { name: "Delete comment" })).toBeVisible();
     await expect(characterComment.getByRole("button", { name: "Edit comment" })).toHaveCount(0);
@@ -636,6 +654,7 @@ test("Noodle persona comments can be edited and deleted without exposing charact
     expect(errors).toEqual([]);
   } finally {
     await page.request.delete(`/api/noodle/posts/${post.id}`, { timeout: 5_000 }).catch(() => undefined);
+    await page.request.delete(`/api/noodle/posts/${controlPost.id}`, { timeout: 5_000 }).catch(() => undefined);
     if (createdPersonaId) {
       await page.request
         .delete(`/api/characters/personas/${createdPersonaId}`, { timeout: 5_000 })

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {
   canGenerateNoodleActivityForAccountKind,
+  formatNoodleTimelineForPrompt,
   noodlePastMemoryCutoff,
   noodlePastMemorySampleSize,
   NOODLE_PERSONA_AUTHORSHIP_INSTRUCTION,
@@ -16,6 +17,51 @@ assert.match(
   NOODLE_PERSONA_AUTHORSHIP_INSTRUCTION,
   /Never generate posts, replies, likes, reposts, poll votes, or follows/u,
 );
+
+const threadedTimeline = formatNoodleTimelineForPrompt(
+  [
+    {
+      id: "post-1",
+      authorAccountId: "character-account",
+      authorSnapshot: {
+        id: "character-account",
+        kind: "character",
+        entityId: "character-1",
+        handle: "character_one",
+        displayName: "Character One",
+        avatarUrl: null,
+      },
+      content: "A character post.",
+      imagePrompt: null,
+      metadata: {},
+      createdAt: "2026-07-10T10:00:00.000Z",
+    },
+  ],
+  [
+    {
+      id: "persona-comment-1",
+      postId: "post-1",
+      parentInteractionId: null,
+      actorAccountId: "persona-account",
+      actorSnapshot: {
+        id: "persona-account",
+        kind: "persona",
+        entityId: "persona-1",
+        handle: "smarinara_spaghetti",
+        displayName: "Mari",
+        avatarUrl: null,
+      },
+      type: "reply",
+      content: "Mari asks a follow-up question.",
+      imageUrl: null,
+      createdAt: "2026-07-10T10:05:00.000Z",
+    },
+  ],
+  { priorityActorAccountId: "persona-account" },
+);
+assert.match(threadedTimeline, /replyId=persona-comment-1/u);
+assert.match(threadedTimeline, /@smarinara_spaghetti/u);
+assert.match(threadedTimeline, /Mari asks a follow-up question/u);
 
 const activeAccountsInstruction = "- Use only the active accounts listed by entityId. Do not invent accounts.";
 const imageGenerationInstruction =

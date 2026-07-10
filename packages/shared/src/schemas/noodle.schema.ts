@@ -244,6 +244,11 @@ export const noodleGeneratedInteractionSchema = z
       .min(1)
       .nullish()
       .transform((value) => value ?? undefined),
+    parentInteractionId: z
+      .string()
+      .min(1)
+      .nullish()
+      .transform((value) => value ?? undefined),
     type: noodleInteractionTypeSchema,
     content: z.string().max(2000).nullable().optional(),
     pollOptionIndex: z
@@ -260,6 +265,13 @@ export const noodleGeneratedInteractionSchema = z
         code: z.ZodIssueCode.custom,
         path: ["pollOptionIndex"],
         message: "Poll votes require a poll option index.",
+      });
+    }
+    if (interaction.type !== "reply" && interaction.parentInteractionId !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["parentInteractionId"],
+        message: "Only replies can target an existing comment.",
       });
     }
   });

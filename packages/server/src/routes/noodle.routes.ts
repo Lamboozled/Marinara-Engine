@@ -56,6 +56,7 @@ import {
 } from "../services/noodle/noodle-refresh-schedule.js";
 import {
   canGenerateNoodleActivityForAccountKind,
+  formatNoodleTimelineForPrompt,
   noodlePastMemoryCutoff,
   noodlePastMemorySampleSize,
   NOODLE_PERSONA_AUTHORSHIP_INSTRUCTION,
@@ -417,37 +418,6 @@ async function ensureSelectedGroupCharacterAccounts(
   return selectedCharacterIds;
 }
 
-function formatTimelineForPrompt(
-  posts: NoodlePost[],
-  interactions: Array<{ postId: string; type: string; content: string | null }>,
-  options: { emptyMessage?: string; includeTimestamp?: boolean } = {},
-) {
-  if (posts.length === 0) return options.emptyMessage ?? "No Noodle posts yet today.";
-  return posts
-    .slice()
-    .reverse()
-    .map((post) => {
-      const author = post.authorSnapshot?.displayName ?? post.authorAccountId;
-      const poll = readNoodlePollFromMetadata(post.metadata);
-      const pollSummary = poll
-        ? ` [poll: ${poll.question}; ${poll.options
-            .map((option, index) => {
-              const votes = interactions.filter(
-                (interaction) =>
-                  interaction.postId === post.id && interaction.type === "vote" && interaction.content === option.id,
-              ).length;
-              return `option ${index}: ${option.label} (${votes} vote${votes === 1 ? "" : "s"})`;
-            })
-            .join("; ")}]`
-        : "";
-      const timestamp = options.includeTimestamp ? ` at ${post.createdAt}` : "";
-      return `- ${post.id} by ${author}${timestamp}: ${post.content}${pollSummary}${
-        post.imagePrompt ? ` [image prompt: ${post.imagePrompt}]` : ""
-      }`;
-    })
-    .join("\n");
-}
-
 async function ensurePersonaAccounts(
   noodle: ReturnType<typeof createNoodleStorage>,
   characters: ReturnType<typeof createCharactersStorage>,
@@ -623,13 +593,13 @@ async function buildRefreshPrompt(input: {
   const selectedCharacterIds = activeCharacters.map((account) => account.entityId);
   const characterRows = await Promise.all(selectedCharacterIds.map((id) => input.characters.getById(id)));
   const personaRow = input.personaAccount ? await input.characters.getPersona(input.personaAccount.entityId) : null;
-  const todayPosts = await input.noodle.listPosts({ since: dayStartIso(), limit: 100 });
+  const recentPosts = await input.noodle.listPosts({ since: sinceHoursIso(48), limit: 100 });
   const pastMemorySampleSize = noodlePastMemorySampleSize();
   const olderPosts = pastMemorySampleSize > 0 ? await input.noodle.listPostsBefore(noodlePastMemoryCutoff()) : [];
   const recalledPosts = sampleNoodlePastMemories(olderPosts, pastMemorySampleSize);
-  const [chatContext, todayInteractions, recalledInteractions] = await Promise.all([
+  const [chatContext, recentInteractions, recalledInteractions] = await Promise.all([
     buildOptedInChatContext(input.chats, input.characters, selectedCharacterIds),
-    input.noodle.listInteractions(todayPosts.map((post) => post.id)),
+    input.noodle.listInteractions(recentPosts.map((post) => post.id)),
     input.noodle.listInteractions(recalledPosts.map((post) => post.id)),
   ]);
 
@@ -662,6 +632,7 @@ async function buildRefreshPrompt(input: {
     "- Random user accounts are not characters. Treat them as ordinary fictional Noodle profiles that may follow, like, reply, repost, gossip, or casually join public drama.",
     "- Structured actions are limited to posts, polls, follows, likes, reposts, replies, and poll votes.",
     "- Generated interactions may target existing posts included in this prompt or posts you create in this response.",
+    "- To respond directly to an existing comment, create a reply interaction for its post and set parentInteractionId to that comment's exact replyId.",
     NOODLE_PERSONA_AUTHORSHIP_INSTRUCTION,
     "- For each interaction, set either targetTempId or targetPostId. The unused target field may be omitted or null.",
     "- pollOptionIndex is required only for votes and must be a zero-based integer. For other interactions, omit it or use null.",
@@ -687,16 +658,20 @@ async function buildRefreshPrompt(input: {
     "Only chats whose Chat Settings allow Noodle references are included here.",
     chatContext,
     "",
-    "# Today's Existing Noodle Timeline",
-    formatTimelineForPrompt(todayPosts, todayInteractions),
+    "# Recent Noodle Timeline",
+    "Recent persona comments are especially relevant. Characters may naturally respond to them by using the comment replyId as parentInteractionId.",
+    formatNoodleTimelineForPrompt(recentPosts, recentInteractions, {
+      priorityActorAccountId: input.personaAccount?.id,
+    }),
     ...(recalledPosts.length > 0
       ? [
           "",
           "# Randomly Recalled Older Noodle Activity",
           "These posts are more than 48 hours old and are optional long-term memories. Active accounts may naturally remember, revisit, like, repost, reply to, or build on them, but do not force a reference.",
-          formatTimelineForPrompt(recalledPosts, recalledInteractions, {
+          formatNoodleTimelineForPrompt(recalledPosts, recalledInteractions, {
             emptyMessage: "No older Noodle activity was recalled.",
             includeTimestamp: true,
+            priorityActorAccountId: input.personaAccount?.id,
           }),
         ]
       : []),
@@ -734,6 +709,7 @@ async function buildRefreshPrompt(input: {
             actorEntityId: "exact non-persona entityId allowed to perform generated activity",
             targetTempId: "tempId from posts, if targeting a newly created post",
             targetPostId: "existing post id, if targeting an existing post",
+            parentInteractionId: "existing replyId when directly answering a comment, otherwise null",
             type: "like | repost | reply | vote",
             content: "required for reply, optional/null otherwise",
             pollOptionIndex: 1,
@@ -1390,6 +1366,12 @@ export async function noodleRoutes(app: FastifyInstance) {
       );
       const freshPosts = await noodle.listPosts({ since: sinceHoursIso(48), limit: 200 });
       const allowedExistingPostIds = new Set([...freshPosts.map((post) => post.id), ...recalledPostIds]);
+      const existingInteractionById = new Map(
+        (await noodle.listInteractions([...allowedExistingPostIds])).map((interaction) => [
+          interaction.id,
+          interaction,
+        ]),
+      );
       const todayPosts = await noodle.listPosts({ since: dayStartIso(), limit: 200 });
       let remainingImagePrompts = settings.enableImagePrompts
         ? Math.max(0, settings.maxImagePromptsPerDay - todayPosts.filter((post) => !!post.imagePrompt).length)
@@ -1496,6 +1478,15 @@ export async function noodleRoutes(app: FastifyInstance) {
         }
         const targetPost = await noodle.getPostById(targetPostId);
         if (!targetPost) continue;
+        const parentInteraction = generatedInteraction.parentInteractionId
+          ? (existingInteractionById.get(generatedInteraction.parentInteractionId) ?? null)
+          : null;
+        if (
+          generatedInteraction.parentInteractionId &&
+          (!parentInteraction || parentInteraction.postId !== targetPostId || parentInteraction.type !== "reply")
+        ) {
+          continue;
+        }
         const poll = readNoodlePollFromMetadata(targetPost.metadata);
         const selectedPollOption =
           generatedInteraction.type === "vote" ? poll?.options[generatedInteraction.pollOptionIndex ?? -1] : undefined;
@@ -1504,6 +1495,7 @@ export async function noodleRoutes(app: FastifyInstance) {
           actorAccountId: actor.id,
           type: generatedInteraction.type,
           content: selectedPollOption?.id ?? generatedInteraction.content ?? null,
+          parentInteractionId: parentInteraction?.id ?? null,
         });
         if (!interaction) continue;
         quotas[generatedInteraction.type] -= 1;
@@ -1513,7 +1505,9 @@ export async function noodleRoutes(app: FastifyInstance) {
               ? `${poll.question}: ${selectedPollOption.label}`
               : interaction.content || targetPost.content;
           await noodle.createDigest({
-            accountIds: Array.from(new Set([actor.id, targetPost.authorAccountId])).filter(Boolean),
+            accountIds: Array.from(
+              new Set([actor.id, targetPost.authorAccountId, parentInteraction?.actorAccountId]),
+            ).filter((accountId): accountId is string => Boolean(accountId)),
             content: `${actor.displayName} ${interactionDigestVerb(
               generatedInteraction.type,
             )} a Noodle post: ${interactionSummary}`,

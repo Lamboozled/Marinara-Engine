@@ -1353,13 +1353,30 @@ export function NoodleView() {
       ),
     [accounts, folderInvitedCharacterIds, followedAccountIds],
   );
-  const baseTimelinePosts = useMemo(
-    () =>
+  const latestReplyAtByPostId = useMemo(() => {
+    const latest = new Map<string, number>();
+    for (const interaction of interactions) {
+      if (interaction.type !== "reply") continue;
+      const createdAt = new Date(interaction.createdAt).getTime();
+      if (!Number.isFinite(createdAt)) continue;
+      latest.set(interaction.postId, Math.max(latest.get(interaction.postId) ?? 0, createdAt));
+    }
+    return latest;
+  }, [interactions]);
+  const baseTimelinePosts = useMemo(() => {
+    const visiblePosts =
       timelineTab === "following"
         ? posts.filter((post) => followedCharacterAccountIds.has(post.authorAccountId))
-        : posts,
-    [followedCharacterAccountIds, posts, timelineTab],
-  );
+        : posts;
+    return visiblePosts.slice().sort((left, right) => {
+      const leftActivityAt = Math.max(new Date(left.createdAt).getTime() || 0, latestReplyAtByPostId.get(left.id) ?? 0);
+      const rightActivityAt = Math.max(
+        new Date(right.createdAt).getTime() || 0,
+        latestReplyAtByPostId.get(right.id) ?? 0,
+      );
+      return rightActivityAt - leftActivityAt;
+    });
+  }, [followedCharacterAccountIds, latestReplyAtByPostId, posts, timelineTab]);
   const timelinePosts = useMemo(() => {
     if (!normalizedPostSearch || isAccountSearch) return baseTimelinePosts;
     return baseTimelinePosts.filter((post) => {
