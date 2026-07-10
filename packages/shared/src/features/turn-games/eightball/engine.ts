@@ -1,58 +1,62 @@
 // ──────────────────────────────────────────────
 // 8-Ball Pool — deterministic engine (server-authoritative)
 // ──────────────────────────────────────────────
-// HYBRID model: real 2D ball positions on a real table (geometry.ts). Every
-// turn the engine computes a finite, difficulty-scored candidate shot menu
-// from those positions; the LLM bot only PICKS a shot in character — it never
-// aims. Resolution (pot / miss / scratch / break scatter) is seeded-RNG vs.
-// the chosen candidate's difficulty, via `deterministicRng(seed, shotCounter)`
-// — the same per-shot-cursor pattern poker uses for its deck (rng.ts).
+// PHYSICS model (v2). Every turn the engine still computes a finite,
+// difficulty-scored candidate shot menu from live ball positions
+// (geometry.ts) — bots pick from it in character, never aiming directly.
+// Humans aim directly (`aimed`: angleDeg + power). EITHER WAY, resolution now
+// runs through physics.ts's deterministic simulation: the engine converts a
+// bot's menu pick into an aim vector + power (with skill/style jitter), then
+// both move kinds build a `SimBall[]` + cue velocity and call `simulateShot`.
+// A shot's outcome is whatever the balls actually do — never a seeded-RNG
+// roll against the candidate's difficulty. `deterministicRng(seed,
+// shotCounter)` is now used ONLY to jitter a bot's aim angle.
 //
-// DOCUMENTED SIMPLIFICATIONS (bar-rules, not tournament rules — see the design
-// spec for the full list):
-//  - Fouls = cue scratch only. No rail-after-contact fouls.
-//  - A shot can only pocket its OWN target ball — misses never pocket an
-//    unintended ball, so a shot's outcome is always exactly "target potted"
-//    or "target not potted", never a surprise multi-ball result.
-//  - The 8 is never a legal target until the shooter's group is fully
-//    cleared, so "early 8" fouls/losses can't occur — the only modeled 8-loss
-//    is scratching on the shot that legally pots the 8.
-//  - Break scratch gives ball-in-hand ANYWHERE (not "behind the head string").
-//  - The 8 never drops on the break in this model.
+// DOCUMENTED SIMPLIFICATIONS (bar-rules, not tournament rules — see the v2
+// design spec for the full list):
+//  - Foul = cue scratch OR wrong/no first-contact ball. No rail-after-contact
+//    foul (a shot that legally contacts an object ball but never sends
+//    anything to a cushion afterward is NOT a foul here).
+//  - No called shots / no called pockets beyond what the candidate implies —
+//    "slop" counts: any ball that legally drops counts for whoever's group
+//    it's in, called or not.
+//  - The break is exempt from the group-legality check for first contact
+//    (the table is open, pre-groups): only a total whiff (no contact at all)
+//    is a break foul. Break pots never assign groups; the table is ALWAYS
+//    open immediately after the break regardless of what dropped.
+//  - The 8 on the break is a rack WIN for the breaker unless they also
+//    scratch (then a loss) — a deliberate, documented bar-rules choice, not
+//    "re-rack and re-break".
 //
 // ACCOUNTING INVARIANT (read before touching resolution code): every object
-// ball (1-15) is in EXACTLY ONE of `state.balls` (on table) or `state.pocketed`
-// (fell in a pocket) at all times. The cue is in EXACTLY ONE of `state.cuePos`
-// (non-null, on table) or `state.ballInHandFor` (non-null, awaiting the next
-// shot's virtual placement) — never both, never neither. This is what "all 16
-// balls accounted for" means in the test suite, and every resolution path
-// below must preserve it.
+// ball (1-15) has EXACTLY ONE entry in `state.balls`, always, with
+// `onTable: true` (still in play) xor `onTable: false` (+ `pocketId`, fell in
+// a pocket) — see `EightBallBallState`'s doc in types.ts. The cue is in
+// EXACTLY ONE of `state.cuePos` (non-null, on table) or
+// `state.awaitingPlacement` (true, awaiting the next `place` move) — never
+// both, never neither. This is what "all 16 balls accounted for" means in
+// the test suite, and every resolution path below must preserve it.
 
 import type { GameEvent, ModelTurnView, MoveResult, Seat, TerminalResult, TurnGameEngine } from "../engine.types.js";
 import {
-  add,
   ballLabel,
-  clampToBounds,
   distance,
   generateCandidates,
   ghostBallPoint,
+  inBounds,
   pocketLabel,
-  pointScratches,
-  resolveOverlaps,
-  scale,
-  segmentScratches,
+  railContactPoint,
+  reflectAcrossRail,
   standardRackPositions,
-  sub,
-  unit,
   zoneName,
+  type Rail,
 } from "./geometry.js";
+import { powerToSpeed, simulateShot, type SimBall, type SimResult } from "./physics.js";
 import { deterministicRng } from "./rng.js";
 import { EIGHTBALL_TOOL_MANIFESTS, parseEightBallToolCall } from "./tools.js";
 import {
-  AGGRESSIVE_SUCCESS_PENALTY,
-  BALL_R,
   BREAK_NOMINAL_SUCCESS_PCT,
-  CONTROLLED_SUCCESS_BONUS,
+  BALL_R,
   CUE_ID,
   DEFAULT_EIGHTBALL_CONFIG,
   EIGHTBALL_LOG_CAP,
@@ -71,6 +75,7 @@ import {
   eightBallConfigSchema,
   type BallGroup,
   type BallPos,
+  type EightBallBallState,
   type EightBallConfig,
   type EightBallMove,
   type EightBallPublicBall,
@@ -122,29 +127,33 @@ function setLast(state: EightBallState, seatId: string, summary: string): void {
   state.lastAction = { seatId, summary };
 }
 
-function clampPct(n: number): number {
-  return Math.min(99, Math.max(1, n));
-}
-
 // ── group / ball-count helpers ───────────────────────────────────────────────
 
 function remainingIdsForGroup(state: EightBallState, group: BallGroup): number[] {
   const ids = group === "solids" ? SOLID_IDS : STRIPE_IDS;
-  return state.balls.filter((b) => ids.includes(b.id)).map((b) => b.id).sort((a, b) => a - b);
+  return state.balls
+    .filter((b) => b.onTable && ids.includes(b.id))
+    .map((b) => b.id)
+    .sort((a, b) => a - b);
 }
 
-/** The shooter's legal target set right now (empty during break — that's a single
- * fixed candidate, not a ball-target menu). Table-open rule and group-cleared ->
- * 8-only rule live here, matching the design spec exactly. */
+/** The shooter's legal FIRST-CONTACT / target set right now (empty during break
+ * — the break is exempted from this check entirely, see `isLegalFirstContact`).
+ * Table-open rule and group-cleared -> 8-only rule live here, matching the
+ * design spec exactly, and are shared by both the candidate menu (what a bot
+ * may pick) and foul detection (what a human's free aim is allowed to hit). */
 function legalTargetIdsFor(state: EightBallState, seatId: string): number[] {
   if (state.phase === "break") return [];
   const group = state.groups[seatId] ?? null;
   if (!group) {
-    return state.balls.filter((b) => b.id !== EIGHT_ID).map((b) => b.id).sort((a, b) => a - b);
+    return state.balls
+      .filter((b) => b.onTable && b.id !== EIGHT_ID)
+      .map((b) => b.id)
+      .sort((a, b) => a - b);
   }
   const remaining = remainingIdsForGroup(state, group);
   if (remaining.length > 0) return remaining;
-  return state.balls.some((b) => b.id === EIGHT_ID) ? [EIGHT_ID] : [];
+  return state.balls.some((b) => b.onTable && b.id === EIGHT_ID) ? [EIGHT_ID] : [];
 }
 
 const BREAK_CANDIDATE: ShotCandidate = {
@@ -155,6 +164,37 @@ const BREAK_CANDIDATE: ShotCandidate = {
   desc: "Break the rack open.",
 };
 
+/** Convert the engine's flat on-table ball state into the `{id, pos}` shape
+ * geometry.ts's (untouched) candidate/placement functions expect. */
+function toBallPos(state: EightBallState): BallPos[] {
+  return state.balls.filter((b) => b.onTable).map((b) => ({ id: b.id, pos: { x: b.x, y: b.y } }));
+}
+
+/**
+ * LEAD ADDITION: a placement is only legal if it's fully on-table, doesn't
+ * overlap any on-table ball, and sits outside every pocket's capture zone —
+ * physics.ts's pocket-capture quadratic returns null (never captures) for a
+ * ball that STARTS inside a pocket's `captureRadius` (see physics.ts's
+ * `pocketCaptureTime` doc), so a cue placed inside one would behave
+ * nonsensically (immune to being sunk from where it sits). Also enforces the
+ * kitchen boundary for a "kitchen"-zoned placement (break-foul ball-in-hand,
+ * or the optional pre-break reposition) — the head string sits at
+ * `KITCHEN_SPOT.x` (the table's standard 1/4-length spot), so kitchen means
+ * "at or behind that x".
+ */
+function isValidCuePlacement(p: Point, onTableBalls: readonly EightBallBallState[], zone: "kitchen" | "anywhere"): boolean {
+  if (!inBounds(p, BALL_R)) return false;
+  for (const b of onTableBalls) {
+    if (distance(p, { x: b.x, y: b.y }) < 2 * BALL_R + 0.05) return false;
+  }
+  for (const id of POCKET_IDS) {
+    const pocket = POCKETS[id];
+    if (distance(p, pocket.pos) < pocket.captureRadius + BALL_R) return false;
+  }
+  if (zone === "kitchen" && p.x > KITCHEN_SPOT.x) return false;
+  return true;
+}
+
 /** The current shot menu for `seatId`, or [] if it isn't their turn. Pure
  * function of state — regenerated fresh on every call rather than cached, so
  * it can never drift from the live ball positions. */
@@ -162,121 +202,261 @@ function buildCandidateMenu(state: EightBallState, seatId: string): ShotCandidat
   if (state.status !== "active" || state.currentSeatId !== seatId) return [];
   if (state.phase === "break") return [BREAK_CANDIDATE];
   const legalTargets = legalTargetIdsFor(state, seatId);
-  return generateCandidates({ cuePos: state.cuePos, balls: state.balls, legalTargets });
+  const raw = generateCandidates({ cuePos: state.cuePos, balls: toBallPos(state), legalTargets });
+  if (state.cuePos !== null) return raw;
+  // Ball-in-hand: geometry.ts's pickCuePlacementForBallInHand (untouched,
+  // used internally by generateCandidates for the null-cuePos branch) checks
+  // bounds/overlap/obstruction but NOT the pocket-zone margin above — filter
+  // its output through the same validator rather than ever offering a
+  // candidate whose assumed placement would land inside a pocket's capture
+  // zone (this is what actually places the cue for a bot's ball-in-hand
+  // `menu` move — see applyMove).
+  const zone = state.placementZone ?? "anywhere";
+  const onTable = state.balls.filter((b) => b.onTable);
+  const validated = raw.filter((c) => !c.virtualCuePos || isValidCuePlacement(c.virtualCuePos, onTable, zone));
+  // geometry.ts's `safety` candidates NEVER carry a `virtualCuePos` (it only
+  // computes one for pot/bank) — without this, resolving a ball-in-hand
+  // `menu` move on a safety candidate would try to read the (null) real
+  // `state.cuePos`. Give every safety a validated default placement here so
+  // ball-in-hand always has a real position to aim a safety from, and so the
+  // "menu is never empty" invariant survives even if the pocket-zone filter
+  // above drops every pot/bank candidate.
+  const fallbackPos = defaultPlacementPoint(state, zone);
+  return validated.map((c) => (c.kind === "safety" ? { ...c, virtualCuePos: fallbackPos } : c));
+}
+
+/** A single canonical legal placement — NOT an enumeration of the (continuous)
+ * legal space, just a deterministic, always-valid representative used by
+ * `legalMoves`/`pickFallbackMove` for a human awaiting placement. Bots never
+ * reach this path: their ball-in-hand resolves via `menu` (see
+ * `buildCandidateMenu`'s ball-in-hand branch). */
+function defaultPlacementPoint(state: EightBallState, zone: "kitchen" | "anywhere"): Point {
+  const onTable = state.balls.filter((b) => b.onTable);
+  const candidates: Point[] =
+    zone === "kitchen"
+      ? [KITCHEN_SPOT, { x: 15, y: 15 }, { x: 15, y: 35 }, { x: 10, y: 25 }, { x: 20, y: 10 }, { x: 20, y: 40 }]
+      : [
+          { x: TABLE_WIDTH / 2, y: TABLE_HEIGHT / 2 },
+          { x: 60, y: 15 },
+          { x: 40, y: 35 },
+          { x: 60, y: 35 },
+          { x: 40, y: 15 },
+          { x: 25, y: 25 },
+        ];
+  for (const p of candidates) if (isValidCuePlacement(p, onTable, zone)) return p;
+  return KITCHEN_SPOT; // last-resort; unreachable with at most 15 balls on a real table
+}
+
+/** Whether — and where — `seatId` may legally `place` the cue right now: true
+ * ball-in-hand (awaitingPlacement), or the optional pre-break reposition
+ * within the kitchen. Shared by `applyMove` and `legalMovesFor`. */
+function placementZoneFor(state: EightBallState, seatId: string): "kitchen" | "anywhere" | null {
+  if (state.status !== "active" || state.currentSeatId !== seatId) return null;
+  if (state.awaitingPlacement) return state.placementZone;
+  if (state.phase === "break" && state.cuePos !== null) return "kitchen";
+  return null;
 }
 
 function legalMovesFor(state: EightBallState, seatId: string): EightBallMove[] {
   if (state.status === "rack_over") {
-    return state.currentSeatId === seatId ? [{ type: "next_rack" }] : [];
+    return state.currentSeatId === seatId ? [{ kind: "next_rack" }] : [];
   }
+  if (state.status !== "active" || state.currentSeatId !== seatId) return [];
   const candidates = buildCandidateMenu(state, seatId);
   const moves: EightBallMove[] = [];
   for (const c of candidates) {
-    moves.push({ type: "shoot", shotId: c.id, style: "controlled" });
-    moves.push({ type: "shoot", shotId: c.id, style: "aggressive" });
+    moves.push({ kind: "menu", shotId: c.id, style: "controlled" });
+    moves.push({ kind: "menu", shotId: c.id, style: "aggressive" });
+  }
+  const zone = placementZoneFor(state, seatId);
+  if (zone) {
+    // See `defaultPlacementPoint`'s doc: (x, y) is a continuous legal space,
+    // so this is a representative sample, not a full enumeration.
+    const p = defaultPlacementPoint(state, zone);
+    moves.push({ kind: "place", x: p.x, y: p.y });
   }
   return moves;
 }
 
-// ── cue placement / physics-lite helpers ────────────────────────────────────
+// ── sim plumbing ─────────────────────────────────────────────────────────────
 
-/** One-rail reflection + clamp — the simplified "cue went long" recovery from the spec. */
-function reflectOnce(p: Point): Point {
-  let x = p.x;
-  let y = p.y;
-  if (x < BALL_R) x = 2 * BALL_R - x;
-  else if (x > TABLE_WIDTH - BALL_R) x = 2 * (TABLE_WIDTH - BALL_R) - x;
-  if (y < BALL_R) y = 2 * BALL_R - y;
-  else if (y > TABLE_HEIGHT - BALL_R) y = 2 * (TABLE_HEIGHT - BALL_R) - y;
-  return clampToBounds({ x, y });
+/** Build physics.ts's `SimBall[]` input from the engine's on-table balls +
+ * cue (which must be on the table — callers only reach this once `cuePos` is
+ * non-null). Initial velocities are all zero; `simulateShot` overwrites the
+ * cue's from `cueVelocity` regardless of what's passed here. */
+function buildSimBalls(s: EightBallState): SimBall[] {
+  const balls: SimBall[] = s.balls.filter((b) => b.onTable).map((b) => ({ id: b.id, x: b.x, y: b.y, vx: 0, vy: 0 }));
+  balls.push({ id: CUE_ID, x: s.cuePos!.x, y: s.cuePos!.y, vx: 0, vy: 0 });
+  return balls;
 }
 
-/** Nudges `proposedCuePos` (plus everything in `balls`) apart via the shared
- * overlap resolver, then splits the cue back out. Used by every resolution
- * path that places the cue (pot, miss, break, safety). */
-function settleCuePosition(balls: BallPos[], proposedCuePos: Point): { cuePos: Point; balls: BallPos[] } {
-  const combined = resolveOverlaps([{ id: CUE_ID, pos: clampToBounds(proposedCuePos) }, ...balls]);
-  const cueEntry = combined.find((b) => b.id === CUE_ID)!;
-  const rest = combined.filter((b) => b.id !== CUE_ID);
-  return { cuePos: cueEntry.pos, balls: rest };
+function angleDegToVelocity(angleDeg: number, power: number): { vx: number; vy: number } {
+  const rad = (angleDeg * Math.PI) / 180;
+  const speed = powerToSpeed(power);
+  return { vx: Math.cos(rad) * speed, vy: Math.sin(rad) * speed };
 }
 
-/** Push a point out of every pocket's capture radius. Used for every placement
- * that must never READ as "in the pocket" without actually being pocketed:
- * safety hide/gift spots (which never scratch in this simplified engine),
- * missed object balls (a real ball can't rest inside the pocket mouth — it
- * would fall in), and the post-break cue (its scratch was already decided by
- * the break's own roll, so it can't be left LOOKING sunk). */
-function avoidPockets(p: Point): Point {
-  for (const id of POCKET_IDS) {
-    const pocket = POCKETS[id];
-    const d = distance(p, pocket.pos);
-    if (d < pocket.captureRadius + BALL_R) {
-      const dir = unit(sub(p, pocket.pos));
-      const safeDir = dir.x === 0 && dir.y === 0 ? { x: 1, y: 0 } : dir;
-      return clampToBounds(add(pocket.pos, scale(safeDir, pocket.captureRadius + BALL_R + 0.5)));
+/** Apply a completed sim's result onto the engine's ball bookkeeping: moves
+ * every still-on-table object ball to its final resting spot, flips any newly
+ * potted object ball to `onTable: false` (parked at its pocket's point), and
+ * sets `cuePos` from the cue's final position (or null if it never appears in
+ * `finalBalls`, i.e. it was potted/scratched). Callers that need to react to
+ * a foul (which discards the cue regardless of where physics left it) do so
+ * AFTER calling this, by overwriting `cuePos` again — see `resolveShot`. */
+function applySimToBalls(s: EightBallState, sim: SimResult): void {
+  const finalById = new Map(sim.finalBalls.map((b) => [b.id, b]));
+  for (const ball of s.balls) {
+    if (!ball.onTable) continue;
+    const f = finalById.get(ball.id);
+    if (f) {
+      ball.x = f.x;
+      ball.y = f.y;
     }
   }
-  return p;
-}
-
-function nearestRailPoint(pos: Point): Point {
-  const options: Point[] = [
-    { x: pos.x, y: 0 },
-    { x: pos.x, y: TABLE_HEIGHT },
-    { x: 0, y: pos.y },
-    { x: TABLE_WIDTH, y: pos.y },
-  ];
-  return options.reduce((best, cur) => (distance(cur, pos) < distance(best, pos) ? cur : best));
-}
-
-function nearestPocketId(pos: Point): PocketId {
-  let best: PocketId = "NW";
-  let bestDist = Infinity;
-  for (const id of POCKET_IDS) {
-    const d = distance(pos, POCKETS[id].pos);
-    if (d < bestDist) {
-      bestDist = d;
-      best = id;
-    }
+  for (const p of sim.events.potted) {
+    if (p.ballId === CUE_ID) continue;
+    const ball = s.balls.find((b) => b.id === p.ballId);
+    if (!ball) continue;
+    ball.onTable = false;
+    ball.pocketId = p.pocketId;
+    const pos = POCKETS[p.pocketId].pos;
+    ball.x = pos.x;
+    ball.y = pos.y;
   }
-  return best;
+  const cueFinal = finalById.get(CUE_ID);
+  s.cuePos = cueFinal ? { x: cueFinal.x, y: cueFinal.y } : null;
+}
+
+function objectPottedFrom(sim: SimResult): Array<{ ballId: number; pocketId: PocketId }> {
+  return sim.events.potted.filter((p) => p.ballId !== CUE_ID).map((p) => ({ ballId: p.ballId, pocketId: p.pocketId }));
+}
+
+/** First-contact legality (spec: own group required; any ball while the table
+ * is open; the 8 only once your group is cleared). The break is exempted
+ * entirely — the table's still open and pre-groups, so only a total whiff
+ * (no contact) is a break foul; this is the "no rail-after-contact foul"
+ * simplification's break-specific cousin, both documented in the file header. */
+function isLegalFirstContact(state: EightBallState, seatId: string, isBreakShot: boolean, firstContactBallId: number | null): boolean {
+  if (firstContactBallId === null) return false;
+  if (isBreakShot) return true;
+  return legalTargetIdsFor(state, seatId).includes(firstContactBallId);
+}
+
+// ── menu -> aim conversion (bot shots) ───────────────────────────────────────
+// Sigma values and power heuristics below are the v2 design spec's exact
+// numbers — see the spec's "Engine rework" § move schema. `rng` (aim jitter)
+// is the ONLY randomness consumer left in the engine.
+
+const JITTER_SIGMA_DEG: Readonly<Record<ShotTier, number>> = { easy: 0.6, medium: 1.4, hard: 2.6, very_hard: 4.2 };
+const STYLE_JITTER_MULT: Readonly<Record<ShotStyle, number>> = { controlled: 0.7, aggressive: 1.35 };
+const BREAK_JITTER_SIGMA = 1.0;
+const TABLE_DIAGONAL = Math.hypot(TABLE_WIDTH, TABLE_HEIGHT);
+/**
+ * Fixed rail search order, mirroring geometry.ts's internal (unexported)
+ * `RAILS` constant used by `generateCandidates` when it built this same bank
+ * candidate. Duplicated here (rather than exported from geometry.ts, which
+ * this rework must not touch) purely to re-derive AIM geometry for a bank
+ * candidate that's already known to exist — this does NOT re-decide whether
+ * the bank is offered (that already happened this same turn), just picks a
+ * concrete ghost point/travel distance to aim at and jitter around.
+ */
+const BANK_RAIL_ORDER: readonly Rail[] = ["top", "bottom", "left", "right"];
+
+function findBankAimGeometry(ballPos: Point, pocketPos: Point): { ghost: Point; contact: Point } | null {
+  for (const rail of BANK_RAIL_ORDER) {
+    const virtualPocket = reflectAcrossRail(pocketPos, rail);
+    const contact = railContactPoint(ballPos, virtualPocket, rail);
+    if (!contact) continue;
+    return { ghost: ghostBallPoint(ballPos, virtualPocket), contact };
+  }
+  return null;
 }
 
 /**
- * Cue travel direction off the ghost point: perpendicular-ish to the impact
- * line, side chosen by which way the cut bent (the sign of the cross product
- * between the cue's approach and the object ball's departure); near-straight
- * shots follow through roughly along the shot line instead, matching a real
- * stop/follow shot. `rng` adds a small seeded wobble either way.
+ * Converts a chosen bot candidate into a concrete aim + power, exactly per
+ * the design spec: target point = ghost-ball point (pot/bank) or the ball
+ * itself (safety); base angle = atan2 to that target; jitter the angle by
+ * `(rng()*2-1) * sigmaDeg * styleMult`; power from a deterministic distance
+ * heuristic (never rng-derived — jitter is the only randomness here).
+ * `effectiveCuePos` is `candidate.virtualCuePos` when this is a ball-in-hand
+ * candidate (becomes the ACTUAL `state.cuePos` in `applyMove`) or the
+ * already-real `state.cuePos` otherwise.
  */
-function tangentDirection(cuePos: Point, ghost: Point, ballPos: Point, pocketPos: Point, rng: () => number): Point {
-  const travel = unit(sub(pocketPos, ballPos));
-  const perp = { x: -travel.y, y: travel.x };
-  const cueToGhost = unit(sub(ghost, cuePos));
-  const cross = cueToGhost.x * travel.y - cueToGhost.y * travel.x;
-  if (Math.abs(cross) < 0.05) {
-    return unit(add(scale(travel, 0.8), scale(perp, (rng() - 0.5) * 0.4)));
+function convertMenuToAim(
+  s: EightBallState,
+  candidate: ShotCandidate,
+  style: ShotStyle,
+  isBreakShot: boolean,
+): { angleDeg: number; power: number; effectiveCuePos: Point } {
+  const rng = deterministicRng(s.seed, s.shotCounter);
+  const effectiveCuePos = candidate.virtualCuePos ?? s.cuePos!;
+  const mult = STYLE_JITTER_MULT[style];
+  const jitter = (sigma: number): number => (rng() * 2 - 1) * sigma * mult;
+  const angleTo = (target: Point): number => (Math.atan2(target.y - effectiveCuePos.y, target.x - effectiveCuePos.x) * 180) / Math.PI;
+
+  if (isBreakShot) {
+    const power = style === "aggressive" ? 1.0 : 0.95;
+    return { angleDeg: angleTo(FOOT_SPOT) + jitter(BREAK_JITTER_SIGMA), power, effectiveCuePos };
   }
-  const side = cross > 0 ? 1 : -1;
-  return unit(add(scale(perp, side * 0.85), scale(travel, (rng() - 0.5) * 0.5)));
+
+  if (candidate.kind === "safety") {
+    const ball = s.balls.find((b) => b.id === candidate.ballId && b.onTable)!;
+    const target: Point = { x: ball.x, y: ball.y };
+    const d1 = distance(effectiveCuePos, target);
+    const power = Math.min(0.35, Math.max(0.18, 0.18 + 0.17 * Math.min(1, d1 / TABLE_WIDTH)));
+    return { angleDeg: angleTo(target) + jitter(JITTER_SIGMA_DEG[candidate.tier]), power, effectiveCuePos };
+  }
+
+  // pot / bank
+  const ball = s.balls.find((b) => b.id === candidate.ballId && b.onTable)!;
+  const pocket = POCKETS[candidate.pocketId!];
+  let target: Point;
+  let d1: number;
+  let d2: number;
+  if (candidate.kind === "bank") {
+    const bankGeo = findBankAimGeometry({ x: ball.x, y: ball.y }, pocket.pos);
+    if (bankGeo) {
+      target = bankGeo.ghost;
+      d1 = distance(effectiveCuePos, bankGeo.ghost);
+      d2 = distance({ x: ball.x, y: ball.y }, bankGeo.contact) + distance(bankGeo.contact, pocket.pos);
+    } else {
+      // Degenerate fallback (shouldn't occur — the candidate wouldn't exist
+      // without a valid rail found at generation time): aim direct-pocket
+      // rather than fail.
+      target = ghostBallPoint({ x: ball.x, y: ball.y }, pocket.pos);
+      d1 = distance(effectiveCuePos, target);
+      d2 = distance({ x: ball.x, y: ball.y }, pocket.pos);
+    }
+  } else {
+    target = ghostBallPoint({ x: ball.x, y: ball.y }, pocket.pos);
+    d1 = distance(effectiveCuePos, target);
+    d2 = distance({ x: ball.x, y: ball.y }, pocket.pos);
+  }
+  const travelFactor = Math.min(1, Math.max(0, (d1 + d2) / TABLE_DIAGONAL));
+  let power = 0.25 + 0.65 * travelFactor + (style === "aggressive" ? 0.15 : -0.05);
+  power = Math.min(0.9, Math.max(0.25, power));
+  return { angleDeg: angleTo(target) + jitter(JITTER_SIGMA_DEG[candidate.tier]), power, effectiveCuePos };
 }
 
 // ── group assignment / narration triggers ───────────────────────────────────
 
-/** First potted ball on an OPEN table (non-break, both groups still null)
- * assigns the shooter that group and the opponent the other. No-op once
- * groups are set, and unreachable for the 8 (it's never a legal target while
- * the table is open — see `legalTargetIdsFor`). DELIBERATE bar-rules choice:
- * a pot that also scratches STILL assigns ("you got what you made" — the foul
- * costs the inning, not the group). Besides matching common bar play, this
- * guarantees the table can't stay open indefinitely, which is what keeps the
- * "candidate menu is never empty while a rack is active" invariant trivially
- * true (an open table with zero non-8 balls left is impossible). */
-function maybeAssignGroups(s: EightBallState, events: GameEvent[], seatId: string, ballId: number): void {
-  const bothOpen = s.seatOrder.every((id) => s.groups[id] === null);
-  if (!bothOpen) return;
-  const group: BallGroup = SOLID_IDS.includes(ballId) ? "solids" : "stripes";
+/** First LEGAL (non-foul) shot that pots on an OPEN table assigns groups by
+ * majority of what dropped this shot; a tie goes to the lowest-numbered
+ * potted ball's group. Fouled pots never reach here (see `resolveShot`). */
+function assignGroupsFromPotted(s: EightBallState, events: GameEvent[], seatId: string, potted: Array<{ ballId: number; pocketId: PocketId }>): void {
+  let solids = 0;
+  let stripes = 0;
+  for (const p of potted) {
+    if (SOLID_IDS.includes(p.ballId)) solids++;
+    else if (STRIPE_IDS.includes(p.ballId)) stripes++;
+  }
+  let group: BallGroup;
+  if (solids !== stripes) {
+    group = solids > stripes ? "solids" : "stripes";
+  } else {
+    const lowest = Math.min(...potted.map((p) => p.ballId));
+    group = SOLID_IDS.includes(lowest) ? "solids" : "stripes";
+  }
   const opp = otherSeat(s, seatId);
   s.groups[seatId] = group;
   s.groups[opp] = group === "solids" ? "stripes" : "solids";
@@ -287,23 +467,33 @@ function maybeAssignGroups(s: EightBallState, events: GameEvent[], seatId: strin
   });
 }
 
-function maybeAnnounceGreatShot(s: EightBallState, events: GameEvent[], seatId: string, candidate: ShotCandidate): void {
-  if (candidate.tier === "very_hard" || candidate.kind === "bank") {
-    announce(s, events, {
-      type: "great_shot",
-      seatId,
-      message: `${nameOf(s, seatId)} nails ${candidate.kind === "bank" ? "the bank" : "a brutal cut"} — incredible shot!`,
-    });
-  }
+/** v2: fires for any LEGAL shot that pots 2+ of the shooter's own balls, or
+ * any successful bank pot (spec, updated from v1's tier/kind-based trigger —
+ * "great" is now about what actually happened, not what was attempted). */
+function maybeAnnounceGreatShot(s: EightBallState, events: GameEvent[], seatId: string, reason: "multi" | "bank"): void {
+  announce(s, events, {
+    type: "great_shot",
+    seatId,
+    message:
+      reason === "bank"
+        ? `${nameOf(s, seatId)} nails the bank — incredible shot!`
+        : `${nameOf(s, seatId)} runs multiple balls in one shot — incredible!`,
+  });
 }
 
-/** Fires exactly once — the shot that pots the shooter's LAST non-8 ball — since
- * every subsequent shot for that seat targets the 8 (a different resolution path). */
+/** Fires exactly once — the shot that pots the shooter's LAST non-8 ball —
+ * since every subsequent shot for that seat targets the 8 (a different
+ * resolution path). */
 function maybeAnnounceOnTheEight(s: EightBallState, events: GameEvent[], seatId: string): void {
   const group = s.groups[seatId];
   if (group && remainingIdsForGroup(s, group).length === 0) {
     announce(s, events, { type: "on_the_8", seatId, message: `${nameOf(s, seatId)} is on the 8!` });
   }
+}
+
+function describePottedList(potted: Array<{ ballId: number; pocketId: PocketId }>): string {
+  if (potted.length === 1) return `${ballLabel(potted[0]!.ballId)} into ${pocketLabel(potted[0]!.pocketId)}`;
+  return potted.map((p) => ballLabel(p.ballId)).join(" and ");
 }
 
 // ── rack lifecycle ──────────────────────────────────────────────────────────
@@ -340,13 +530,19 @@ function finishRack(s: EightBallState, events: GameEvent[], winnerSeatId: string
   });
 }
 
+function freshRackBalls(): EightBallBallState[] {
+  return standardRackPositions(FOOT_SPOT).map((b) => ({ id: b.id, x: b.pos.x, y: b.pos.y, onTable: true }));
+}
+
 function startNewRack(s: EightBallState, events: GameEvent[]): void {
   s.rackNumber += 1;
   s.phase = "break";
   s.status = "active";
-  s.balls = standardRackPositions(FOOT_SPOT);
+  s.balls = freshRackBalls();
   s.cuePos = { ...KITCHEN_SPOT };
-  s.pocketed = {};
+  s.awaitingPlacement = false;
+  s.placementZone = null;
+  s.lastShot = null;
   for (const id of s.seatOrder) s.groups[id] = null;
   s.ballInHandFor = null;
   s.currentSeatId = s.breakerSeatId; // already toggled by finishRack for the upcoming rack
@@ -357,250 +553,151 @@ function startNewRack(s: EightBallState, events: GameEvent[]): void {
   });
 }
 
-// ── resolution: break ────────────────────────────────────────────────────────
+// ── resolution: the ONE path every sim-backed move (aimed or menu) runs through ──
 
-/** Clamp to the "foot half" of the table (x in [50, 100], per the design spec's
- * break scatter — the rack lives entirely on the foot side, so a break shouldn't
- * fling balls back across the head string into the kitchen). */
-function clampToFootHalf(p: Point): Point {
-  const clamped = clampToBounds(p);
-  return { x: Math.max(TABLE_WIDTH / 2 + BALL_R, clamped.x), y: clamped.y };
-}
-
-function resolveBreak(s: EightBallState, seatId: string, style: ShotStyle, rng: () => number, events: GameEvent[]): void {
-  const rack = standardRackPositions(FOOT_SPOT);
-  const aggressive = style === "aggressive";
-  // A real break sends balls flying across the whole foot half, not just a small
-  // jitter from their rack slot — magnitudes here are tuned so the post-scatter
-  // menu reliably includes clear direct pots (verified by the engine fuzz/scenario
-  // tests), not just banks/safeties every time.
-  const magMin = aggressive ? 6 : 4;
-  const magRange = aggressive ? 24 : 16;
-  const driftScale = aggressive ? 0.6 : 0.3;
-  const center: Point = { x: TABLE_WIDTH / 2, y: TABLE_HEIGHT / 2 };
-
-  let scattered: BallPos[] = rack.map((b) => {
-    const angle = rng() * Math.PI * 2;
-    const mag = magMin + rng() * magRange;
-    const jitter = { x: Math.cos(angle) * mag, y: Math.sin(angle) * mag };
-    const towardCenter = scale(unit(sub(center, b.pos)), driftScale);
-    // avoidPockets AFTER the foot-half clamp: a surviving scattered ball must not
-    // rest inside a pocket mouth (whether balls actually dropped is a separate,
-    // dedicated roll below). Pockets reachable from the foot half all push back
-    // toward the foot half, so the clamp is never undone.
-    return { id: b.id, pos: avoidPockets(clampToFootHalf(add(add(b.pos, jitter), towardCenter))) };
-  });
-  scattered = resolveOverlaps(scattered);
-
-  const dropRoll = rng();
-  const p0 = aggressive ? 0.45 : 0.65; // P(0 balls drop)
-  const p1 = aggressive ? 0.75 : 0.9; // P(<= 1 ball drops)
-  const dropCount = dropRoll < p0 ? 0 : dropRoll < p1 ? 1 : 2;
-
-  // The 8 never drops on the break in this model — see file header.
-  const droppable = scattered.filter((b) => b.id !== EIGHT_ID).sort((a, b) => a.id - b.id);
-  const droppedIds: number[] = [];
-  for (let i = 0; i < dropCount && droppable.length > 0; i++) {
-    const idx = Math.floor(rng() * droppable.length);
-    const [chosen] = droppable.splice(idx, 1);
-    droppedIds.push(chosen!.id);
-  }
-  for (const id of droppedIds) {
-    const b = scattered.find((x) => x.id === id)!;
-    s.pocketed[id] = nearestPocketId(b.pos);
-  }
-  s.balls = scattered.filter((b) => !droppedIds.includes(b.id));
-  s.phase = "play";
-  // Table stays OPEN after every break regardless of what dropped — break pots
-  // never assign groups (spec, explicit).
-
-  const scratchChance = aggressive ? 0.12 : 0.04;
-  const scratched = rng() < scratchChance;
+/**
+ * Turns a completed `SimResult` into rule consequences: foul detection, the
+ * 8-ball win/loss branches, open-table group assignment, and turn
+ * continuation — all derived from what physics actually did, never a roll.
+ * `candidate` is present only for `menu` moves (used for the bank-success
+ * great_shot clause); `aimed` moves have no candidate to reference.
+ */
+function resolveShot(
+  s: EightBallState,
+  seatId: string,
+  isBreakShot: boolean,
+  moveKind: "aimed" | "menu",
+  sim: SimResult,
+  events: GameEvent[],
+  candidate?: ShotCandidate,
+): void {
   const opp = otherSeat(s, seatId);
+  const cueScratched = sim.events.cueScratched;
+  const legalContact = isLegalFirstContact(s, seatId, isBreakShot, sim.events.firstContactBallId);
+  const foul = cueScratched || !legalContact;
 
-  if (scratched) {
-    s.cuePos = null;
-    s.ballInHandFor = opp;
-    s.currentSeatId = opp;
-  } else {
-    const cueAngle = rng() * Math.PI * 2;
-    const cueMag = 8 + rng() * 20;
-    const proposedCue = avoidPockets(clampToBounds(add(KITCHEN_SPOT, { x: Math.cos(cueAngle) * cueMag, y: Math.sin(cueAngle) * cueMag })));
-    const settled = settleCuePosition(s.balls, proposedCue);
-    s.balls = settled.balls;
-    s.cuePos = settled.cuePos;
-    s.ballInHandFor = null;
-    s.currentSeatId = droppedIds.length > 0 ? seatId : opp;
-  }
+  // Facts we need "as of before this shot" — captured BEFORE applySimToBalls
+  // mutates onTable flags (remainingIdsForGroup reads live ball state).
+  const groupBeforeShot = s.groups[seatId] ?? null;
+  const groupClearedBeforeShot = !!groupBeforeShot && remainingIdsForGroup(s, groupBeforeShot).length === 0;
+  const bothOpenBeforeShot = s.groups[seatId] === null && s.groups[opp] === null;
 
-  const dropText = droppedIds.length === 0 ? "nothing drops" : droppedIds.length === 1 ? "1 ball drops" : `${droppedIds.length} balls drop`;
-  setLast(s, seatId, `breaks${scratched ? " and scratches" : ""}`);
-  announce(s, events, {
-    type: "break_result",
-    seatId,
-    message: `${nameOf(s, seatId)} breaks — ${dropText}${scratched ? ", but scratches" : ""}.`,
-    data: { droppedIds, scratched },
-  });
-  if (scratched) {
-    announce(s, events, { type: "foul", seatId, message: `${nameOf(s, seatId)} scratches on the break — ${nameOf(s, opp)} gets ball in hand.` });
-  }
-}
+  applySimToBalls(s, sim);
+  const potted = objectPottedFrom(sim);
+  s.lastShot = { frames: sim.frames, shooterSeatId: seatId, moveKind, potted, cueScratched, foul };
 
-// ── resolution: pot / bank ───────────────────────────────────────────────────
+  const eightPotted = potted.some((p) => p.ballId === EIGHT_ID);
 
-// NOTE: banks resolve with DIRECT-pocket geometry (ghost point + tangent travel
-// + miss slide all aim at the real pocket, not the rail-mirrored virtual one).
-// Rules-wise a bank is just a very_hard pot — only the resulting ball placement
-// is slightly idealized, a deliberate cosmetic simplification.
-function resolvePotOrBank(s: EightBallState, seatId: string, candidate: ShotCandidate, style: ShotStyle, rng: () => number, events: GameEvent[]): void {
-  const ballId = candidate.ballId!;
-  const pocketId = candidate.pocketId!;
-  const pocket = POCKETS[pocketId];
-  const startCuePos = candidate.virtualCuePos ?? s.cuePos!;
-  const ball = s.balls.find((b) => b.id === ballId)!;
-  const ghost = ghostBallPoint(ball.pos, pocket.pos);
-
-  const adjustedPct = clampPct(candidate.successPct + (style === "controlled" ? CONTROLLED_SUCCESS_BONUS : -AGGRESSIVE_SUCCESS_PENALTY));
-  const potted = rng() * 100 < adjustedPct;
-
-  if (potted) {
-    const remainingBalls = s.balls.filter((b) => b.id !== ballId);
-    s.pocketed[ballId] = pocketId;
-
-    const travelDist = (style === "aggressive" ? 18 : 9) * (0.6 + rng() * 0.8);
-    const dir = tangentDirection(startCuePos, ghost, ball.pos, pocket.pos, rng);
-    const rawTravel = add(ghost, scale(dir, travelDist));
-    // Check the PRE-reflection straight-line path for a pocket crossing before
-    // bouncing it off a rail: reflectOnce's single-axis bounce can send a
-    // corner-overshooting cue far from the corner it just passed through,
-    // which would silently make corner scratches unreachable (see
-    // `segmentScratches`'s doc for why the raw path is checked first).
-    const inFlightScratch = segmentScratches(ghost, rawTravel);
-    const proposed = reflectOnce(rawTravel);
-    const settled = settleCuePosition(remainingBalls, proposed);
-    s.balls = settled.balls;
-    const scratched = inFlightScratch || pointScratches(settled.cuePos);
-
-    if (ballId === EIGHT_ID) {
-      s.cuePos = settled.cuePos;
-      s.ballInHandFor = null;
-      const winner = scratched ? otherSeat(s, seatId) : seatId;
-      setLast(s, seatId, scratched ? "pots the 8 but scratches" : "pots the 8 clean");
-      record(s, events, {
-        type: scratched ? "foul" : "eight_ball_win",
-        seatId,
-        message: scratched
-          ? `${nameOf(s, seatId)} scratches while potting the 8 — rack goes to ${nameOf(s, winner)}!`
-          : `${nameOf(s, seatId)} pots the 8 clean — racks it up!`,
-      });
-      finishRack(s, events, winner, scratched);
-      return;
-    }
-
-    maybeAssignGroups(s, events, seatId, ballId);
-    setLast(s, seatId, `pots ${ballLabel(ballId)} into ${pocketLabel(pocketId)}${scratched ? ", but scratches" : ""}`);
-    record(s, events, {
-      type: scratched ? "foul" : "pot",
-      seatId,
-      message: `${nameOf(s, seatId)} pots ${ballLabel(ballId)}${scratched ? " but scratches — foul!" : "."}`,
-      data: { ballId, pocketId },
-    });
-
-    if (scratched) {
-      const opp = otherSeat(s, seatId);
-      s.cuePos = null;
-      s.ballInHandFor = opp;
-      s.currentSeatId = opp;
-      announce(s, events, { type: "foul", seatId, message: `${nameOf(s, seatId)} scratches — ${nameOf(s, opp)} gets ball in hand.` });
+  if (eightPotted) {
+    let winner: string;
+    let earlyOrFoul = false;
+    if (isBreakShot) {
+      // Bar-rules choice (documented, deliberate — see design spec): the 8 on
+      // the break is a win for the breaker unless they also scratch.
+      winner = cueScratched ? opp : seatId;
     } else {
-      s.cuePos = settled.cuePos;
-      s.ballInHandFor = null;
-      maybeAnnounceGreatShot(s, events, seatId, candidate);
-      maybeAnnounceOnTheEight(s, events, seatId);
-      // currentSeatId unchanged — continue shooting on any clean pot.
+      // Timing/contact legality is checked INDEPENDENTLY of the scratch —
+      // otherwise a legally-timed pot that merely scratched would get
+      // mislabeled as "early" (both are a loss, but for different reasons,
+      // and the narration must say which).
+      const legalTiming = groupClearedBeforeShot && legalContact;
+      earlyOrFoul = !legalTiming;
+      winner = !legalTiming ? opp : cueScratched ? opp : seatId;
     }
+    setLast(s, seatId, winner === seatId ? "pots the 8 clean" : earlyOrFoul ? "pots the 8 early" : "pots the 8 but scratches");
+    record(s, events, {
+      type: winner === seatId ? "eight_ball_win" : "foul",
+      seatId,
+      message:
+        winner === seatId
+          ? `${nameOf(s, seatId)} pots the 8 clean — racks it up!`
+          : earlyOrFoul
+            ? `${nameOf(s, seatId)} pots the 8 too early — rack goes to ${nameOf(s, winner)}!`
+            : `${nameOf(s, seatId)} scratches while potting the 8 — rack goes to ${nameOf(s, winner)}!`,
+    });
+    if (cueScratched) {
+      // The rack is over either way (finishRack below) and nobody is ever
+      // asked to `place` at rack_over, so a scratch here must NOT leave the
+      // cue in the null/no-one-awaiting-placement state applySimToBalls just
+      // set — reset it to any valid neutral spot instead (startNewRack
+      // overwrites it for real once the next rack begins; `defaultPlacementPoint`
+      // already searches for one that can't overlap a remaining ball).
+      s.cuePos = defaultPlacementPoint(s, "anywhere");
+    }
+    finishRack(s, events, winner, cueScratched);
     return;
   }
 
-  // MISS: the object ball slides partway toward the pocket and stops short; the
-  // cue resolves via the same tangent logic with its own small scratch chance.
-  const d2 = distance(ball.pos, pocket.pos);
-  const frac = 0.55 + rng() * 0.35;
-  const travel = unit(sub(pocket.pos, ball.pos));
-  const perp = { x: -travel.y, y: travel.x };
-  const missedPos = avoidPockets(clampToBounds(add(add(ball.pos, scale(travel, d2 * frac)), scale(perp, (rng() - 0.5) * 6))));
-  const movedBalls = resolveOverlaps(s.balls.map((b) => (b.id === ballId ? { id: ballId, pos: missedPos } : b)));
-
-  const dir = tangentDirection(startCuePos, ghost, ball.pos, pocket.pos, rng);
-  const travelDist = (style === "aggressive" ? 14 : 7) * (0.6 + rng() * 0.8);
-  const rawTravel = add(ghost, scale(dir, travelDist));
-  const inFlightScratch = segmentScratches(ghost, rawTravel); // see the pot branch's note on why the raw path is checked
-  const proposed = reflectOnce(rawTravel);
-  const settled = settleCuePosition(movedBalls, proposed);
-  s.balls = settled.balls;
-
-  const missScratchChance = style === "aggressive" ? 0.08 : 0.03;
-  const scratched = inFlightScratch || pointScratches(settled.cuePos) || rng() < missScratchChance;
-  const opp = otherSeat(s, seatId);
-
-  setLast(s, seatId, `misses ${ballLabel(ballId)}${scratched ? " and scratches" : ""}`);
-  record(s, events, {
-    type: scratched ? "foul" : "miss",
-    seatId,
-    message: `${nameOf(s, seatId)} misses ${ballLabel(ballId)}${scratched ? " and scratches — foul!" : "."}`,
-  });
-
-  if (scratched) {
-    s.cuePos = null;
+  if (foul) {
+    s.cuePos = null; // discard wherever physics left it — ball-in-hand always picks the cue UP
+    s.awaitingPlacement = true;
+    s.placementZone = isBreakShot ? "kitchen" : "anywhere";
     s.ballInHandFor = opp;
-    announce(s, events, { type: "foul", seatId, message: `${nameOf(s, seatId)} scratches — ${nameOf(s, opp)} gets ball in hand.` });
-  } else {
-    s.cuePos = settled.cuePos;
-    s.ballInHandFor = null;
-  }
-  s.currentSeatId = opp;
-}
-
-// ── resolution: safety ───────────────────────────────────────────────────────
-
-function resolveSafety(s: EightBallState, seatId: string, candidate: ShotCandidate, rng: () => number, events: GameEvent[]): void {
-  const ballId = candidate.ballId!;
-  const ball = s.balls.find((b) => b.id === ballId);
-  const success = rng() * 100 < candidate.successPct;
-  const opp = otherSeat(s, seatId);
-
-  if (success && ball) {
-    // Tuck the cue near whichever rail is closest to the target ball and nudge
-    // that ball slightly rail-ward too — a deterministic "hide" heuristic.
-    // Safety placements never scratch in this model (see file header).
-    const railPoint = nearestRailPoint(ball.pos);
-    const hideDir = unit(sub(railPoint, ball.pos));
-    const hidePos = avoidPockets(clampToBounds(add(ball.pos, scale(hideDir, 2 * BALL_R + rng() * 3))));
-    const nudgedBallPos = clampToBounds(add(ball.pos, scale(hideDir, rng() * 8)));
-    const settled = settleCuePosition(
-      s.balls.map((b) => (b.id === ballId ? { id: ballId, pos: nudgedBallPos } : b)),
-      hidePos,
-    );
-    s.balls = settled.balls;
-    s.cuePos = settled.cuePos;
-  } else {
-    // Fail: cue left open near the table center — opponent inherits a gift.
-    // Real difficulty emerges from geometry on their next turn; no ad-hoc penalty flag.
-    const jitter = { x: (rng() - 0.5) * 16, y: (rng() - 0.5) * 10 };
-    const giftPos = avoidPockets(clampToBounds(add({ x: TABLE_WIDTH / 2, y: TABLE_HEIGHT / 2 }, jitter)));
-    const settled = settleCuePosition(s.balls, giftPos);
-    s.balls = settled.balls;
-    s.cuePos = settled.cuePos;
+    s.currentSeatId = opp;
+    if (isBreakShot) s.phase = "play"; // the break always resolves the phase, foul or not
+    setLast(s, seatId, isBreakShot ? "fouls on the break" : cueScratched ? "scratches" : "fouls (wrong ball first)");
+    announce(s, events, {
+      type: "foul",
+      seatId,
+      message: isBreakShot
+        ? `${nameOf(s, seatId)} fouls on the break — ${nameOf(s, opp)} gets ball in hand behind the head string.`
+        : cueScratched
+          ? `${nameOf(s, seatId)} scratches — ${nameOf(s, opp)} gets ball in hand.`
+          : `${nameOf(s, seatId)} fouls (wrong ball first) — ${nameOf(s, opp)} gets ball in hand.`,
+    });
+    return;
   }
 
-  s.ballInHandFor = null;
-  s.currentSeatId = opp; // safeties never pot — turn always passes
-  setLast(s, seatId, success ? "plays a safety" : "attempts a safety and leaves it open");
-  record(s, events, {
-    type: success ? "safety" : "safety_fail",
-    seatId,
-    message: `${nameOf(s, seatId)} ${success ? "plays a nice safety, tucking the cue away" : "tries a safety but leaves the cue exposed"}.`,
-  });
+  // Legal, non-8 shot.
+  if (isBreakShot) {
+    s.phase = "play";
+    // Table is ALWAYS open after the break regardless of what dropped — break
+    // pots never assign groups (spec, explicit). Continuation is its OWN rule
+    // here (not the general "own group potted" rule below, which can't apply
+    // yet since no group exists): any drop at all keeps the breaker shooting.
+    s.currentSeatId = potted.length > 0 ? seatId : opp;
+    const dropText = potted.length === 0 ? "nothing drops" : potted.length === 1 ? "1 ball drops" : `${potted.length} balls drop`;
+    setLast(s, seatId, "breaks");
+    announce(s, events, {
+      type: "break_result",
+      seatId,
+      message: `${nameOf(s, seatId)} breaks — ${dropText}.`,
+      data: { droppedIds: potted.map((p) => p.ballId) },
+    });
+    return;
+  }
+
+  if (bothOpenBeforeShot && potted.length > 0) {
+    assignGroupsFromPotted(s, events, seatId, potted);
+  }
+
+  const myGroup = s.groups[seatId] ?? null;
+  const ownGroupIds = myGroup === "solids" ? SOLID_IDS : myGroup === "stripes" ? STRIPE_IDS : [];
+  const pottedOwn = potted.filter((p) => ownGroupIds.includes(p.ballId));
+
+  if (potted.length > 0) {
+    setLast(s, seatId, `pots ${describePottedList(potted)}`);
+    record(s, events, {
+      type: "pot",
+      seatId,
+      message: `${nameOf(s, seatId)} pots ${describePottedList(potted)}.`,
+      data: { potted },
+    });
+  } else {
+    setLast(s, seatId, "plays a shot");
+  }
+
+  if (pottedOwn.length > 0) {
+    s.currentSeatId = seatId; // continue shooting on any own-group pot
+    const bankSuccess = candidate?.kind === "bank" && candidate.ballId !== undefined && potted.some((p) => p.ballId === candidate.ballId);
+    if (pottedOwn.length >= 2) maybeAnnounceGreatShot(s, events, seatId, "multi");
+    else if (bankSuccess) maybeAnnounceGreatShot(s, events, seatId, "bank");
+    maybeAnnounceOnTheEight(s, events, seatId);
+  } else {
+    // Nothing dropped, or only the opponent's balls dropped (still counts for
+    // them — "slop", no called shots) — turn passes either way.
+    s.currentSeatId = opp;
+  }
 }
 
 // ── prompt + summary builders ────────────────────────────────────────────────
@@ -632,7 +729,7 @@ function buildBoardSummary(state: EightBallState, seatId: string): string {
       if (remaining.length === 0) {
         lines.push(`You are ${myGroup.toUpperCase()} — cleared! You're shooting for the 8.`);
       } else {
-        const zones = remaining.map((id) => `${ballLabel(id)} (${zoneName(state.balls.find((b) => b.id === id)!.pos)})`).join(", ");
+        const zones = remaining.map((id) => `${ballLabel(id)} (${zoneName(state.balls.find((b) => b.id === id)!)})`).join(", ");
         lines.push(`You are ${myGroup.toUpperCase()} — ${remaining.length} left: ${zones}.`);
       }
       lines.push(`${nameOf(state, opp)} is ${oppGroup.toUpperCase()} with ${oppRemaining.length} left.`);
@@ -647,15 +744,15 @@ function buildBoardSummary(state: EightBallState, seatId: string): string {
 
 function buildInstructions(state: EightBallState, seatId: string, candidates: ShotCandidate[]): string {
   const header = state.ballInHandFor === seatId ? "Ball in hand — your shot menu (each choice places the cue for you):" : "Your shot menu:";
-  const menuLines = candidates.map((c) => `  • ${c.id} [${c.tier}, ${c.successPct}% honest odds]: ${c.desc}`);
+  const menuLines = candidates.map((c) => `  • ${c.id} [${c.tier}, ${c.successPct}% estimated odds]: ${c.desc}`);
   return [
     header,
     ...menuLines,
     "",
     'Call eightball_action with `shotId` copied EXACTLY from the menu above (plus optional `style`: "controlled" or "aggressive").',
-    "Pick like YOUR character, not like a pro solver. Daredevils attempt the showoff bank; cold tacticians play the " +
-      "safety and leave them nothing; hotheads smash aggressive. successPct is honest — personality decides what's " +
-      "worth the risk. Trash-talk is chat, not moves.",
+    "The odds above are ESTIMATES, not a dice roll — your aim gets executed with skill/style-based accuracy and the physics " +
+      "decides what actually happens. Pick like YOUR character, not like a pro solver. Daredevils attempt the showoff bank; " +
+      "cold tacticians play the safety and leave them nothing; hotheads smash aggressive. Trash-talk is chat, not moves.",
   ].join("\n");
 }
 
@@ -706,13 +803,24 @@ function buildParticipantSummary(state: EightBallState, seatId: string): string 
 const TIER_ORDER: Readonly<Record<ShotTier, number>> = { easy: 0, medium: 1, hard: 2, very_hard: 3 };
 
 function pickFallback(state: EightBallState, seatId: string): EightBallMove {
-  if (state.status === "rack_over") return { type: "next_rack" };
+  if (state.status === "rack_over") return { kind: "next_rack" };
+  const legal = legalMovesFor(state, seatId);
+  const menuMoves = legal.filter((m): m is Extract<EightBallMove, { kind: "menu" }> => m.kind === "menu");
+  if (menuMoves.length === 0) {
+    const placeMove = legal.find((m): m is Extract<EightBallMove, { kind: "place" }> => m.kind === "place");
+    if (placeMove) return placeMove;
+    return { kind: "next_rack" }; // unreachable while active + it's their turn; total fallback
+  }
   const candidates = buildCandidateMenu(state, seatId);
-  if (candidates.length === 0) return { type: "next_rack" }; // unreachable while active + it's their turn; total fallback
-  const nonSafety = candidates.filter((c) => c.kind !== "safety");
-  const pool = nonSafety.length ? nonSafety : candidates;
-  const best = [...pool].sort((a, b) => TIER_ORDER[a.tier] - TIER_ORDER[b.tier] || b.successPct - a.successPct || a.id.localeCompare(b.id))[0]!;
-  return { type: "shoot", shotId: best.id, style: "controlled" };
+  const byId = new Map(candidates.map((c) => [c.id, c]));
+  const nonSafetyIds = candidates.filter((c) => c.kind !== "safety").map((c) => c.id);
+  const poolIds = nonSafetyIds.length ? nonSafetyIds : candidates.map((c) => c.id);
+  const bestId = [...poolIds].sort((a, b) => {
+    const ca = byId.get(a)!;
+    const cb = byId.get(b)!;
+    return TIER_ORDER[ca.tier] - TIER_ORDER[cb.tier] || cb.successPct - ca.successPct || a.localeCompare(b);
+  })[0]!;
+  return { kind: "menu", shotId: bestId, style: "controlled" };
 }
 
 // ── the engine object ────────────────────────────────────────────────────────
@@ -762,9 +870,11 @@ export const eightBallEngine: TurnGameEngine<EightBallState, EightBallMove, Eigh
       seatNames,
       status: "active",
       phase: "break",
-      balls: standardRackPositions(FOOT_SPOT),
+      balls: freshRackBalls(),
       cuePos: { ...KITCHEN_SPOT },
-      pocketed: {},
+      awaitingPlacement: false,
+      placementZone: null,
+      lastShot: null,
       groups: Object.fromEntries(seatOrder.map((id) => [id, null])),
       rackScore: Object.fromEntries(seatOrder.map((id) => [id, 0])),
       rackNumber: 1,
@@ -801,12 +911,11 @@ export const eightBallEngine: TurnGameEngine<EightBallState, EightBallMove, Eigh
   applyMove(state, seatId, move): MoveResult<EightBallState, EightBallMove> {
     if (state.status === "finished") return fail("The match is already over.");
 
-    if (move?.type === "next_rack") {
+    if (move?.kind === "next_rack") {
       if (state.status !== "rack_over" || state.currentSeatId !== seatId) {
         return { ok: false, error: "It's not time for the next rack yet.", legalMoves: legalMovesFor(state, seatId) };
       }
       const s = clone(state);
-      s.shotCounter += 1; // keeps the rng cursor consistent across every applyMove, even non-random ones
       const events: GameEvent[] = [];
       startNewRack(s, events);
       return { ok: true, state: s, events };
@@ -815,36 +924,75 @@ export const eightBallEngine: TurnGameEngine<EightBallState, EightBallMove, Eigh
     if (state.status !== "active" || state.currentSeatId !== seatId) {
       return { ok: false, error: "It's not your turn.", legalMoves: legalMovesFor(state, seatId) };
     }
-    if (!move || move.type !== "shoot") {
-      return { ok: false, error: "Unknown move.", legalMoves: legalMovesFor(state, seatId) };
+
+    if (move?.kind === "place") {
+      const zone = placementZoneFor(state, seatId);
+      if (!zone) return fail("You don't have ball in hand right now.", legalMovesFor(state, seatId));
+      if (!Number.isFinite(move.x) || !Number.isFinite(move.y)) {
+        return fail("Placement coordinates must be finite numbers.", legalMovesFor(state, seatId));
+      }
+      const p: Point = { x: move.x, y: move.y };
+      const onTable = state.balls.filter((b) => b.onTable);
+      if (!isValidCuePlacement(p, onTable, zone)) {
+        return fail(
+          "That placement isn't legal — off the table, overlapping a ball, inside a pocket's zone, or outside the kitchen.",
+          legalMovesFor(state, seatId),
+        );
+      }
+      const s = clone(state);
+      s.cuePos = p;
+      if (s.awaitingPlacement) {
+        s.awaitingPlacement = false;
+        s.placementZone = null;
+        s.ballInHandFor = null;
+      }
+      const events: GameEvent[] = [];
+      record(s, events, { type: "cue_placed", seatId, message: `${nameOf(s, seatId)} places the cue ball.` });
+      return { ok: true, state: s, events };
     }
 
-    const candidates = buildCandidateMenu(state, seatId);
-    const candidate = candidates.find((c) => c.id === move.shotId);
-    if (!candidate) {
-      return { ok: false, error: `Unknown or no-longer-legal shot "${move.shotId}".`, legalMoves: legalMovesFor(state, seatId) };
-    }
-    const style: ShotStyle = move.style === "aggressive" ? "aggressive" : "controlled";
-
-    const s = clone(state);
-    const events: GameEvent[] = [];
-    const rng = deterministicRng(s.seed, s.shotCounter);
-    s.shotCounter += 1;
-
-    switch (candidate.kind) {
-      case "break":
-        resolveBreak(s, seatId, style, rng, events);
-        break;
-      case "pot":
-      case "bank":
-        resolvePotOrBank(s, seatId, candidate, style, rng, events);
-        break;
-      case "safety":
-        resolveSafety(s, seatId, candidate, rng, events);
-        break;
+    if (move?.kind === "aimed") {
+      if (state.cuePos === null) {
+        return fail("You have ball in hand — place the cue first.", legalMovesFor(state, seatId));
+      }
+      const isBreakShot = state.phase === "break";
+      const s = clone(state);
+      const power = Number.isFinite(move.power) ? move.power : 0;
+      const angleDeg = Number.isFinite(move.angleDeg) ? move.angleDeg : 0;
+      const sim = simulateShot({ balls: buildSimBalls(s), cueVelocity: angleDegToVelocity(angleDeg, power) });
+      s.shotCounter += 1;
+      const events: GameEvent[] = [];
+      resolveShot(s, seatId, isBreakShot, "aimed", sim, events);
+      return { ok: true, state: s, events };
     }
 
-    return { ok: true, state: s, events };
+    if (move?.kind === "menu") {
+      const candidates = buildCandidateMenu(state, seatId);
+      const candidate = candidates.find((c) => c.id === move.shotId);
+      if (!candidate) {
+        return { ok: false, error: `Unknown or no-longer-legal shot "${move.shotId}".`, legalMoves: legalMovesFor(state, seatId) };
+      }
+      const style: ShotStyle = move.style === "aggressive" ? "aggressive" : "controlled";
+      const isBreakShot = state.phase === "break";
+      const s = clone(state);
+      const aim = convertMenuToAim(s, candidate, style, isBreakShot);
+      s.shotCounter += 1;
+      if (s.cuePos === null) {
+        // Ball-in-hand for this (possibly bot) seat: the chosen candidate's
+        // assumed placement becomes the real cue position (v1 behavior kept —
+        // see ShotCandidate.virtualCuePos's doc).
+        s.cuePos = { x: aim.effectiveCuePos.x, y: aim.effectiveCuePos.y };
+        s.awaitingPlacement = false;
+        s.placementZone = null;
+        s.ballInHandFor = null;
+      }
+      const sim = simulateShot({ balls: buildSimBalls(s), cueVelocity: angleDegToVelocity(aim.angleDeg, aim.power) });
+      const events: GameEvent[] = [];
+      resolveShot(s, seatId, isBreakShot, "menu", sim, events, candidate);
+      return { ok: true, state: s, events };
+    }
+
+    return { ok: false, error: "Unknown move.", legalMoves: legalMovesFor(state, seatId) };
   },
 
   isTerminal(state): TerminalResult {
@@ -883,22 +1031,15 @@ export const eightBallEngine: TurnGameEngine<EightBallState, EightBallMove, Eigh
       };
     });
 
-    const balls: EightBallPublicBall[] = [];
-    for (const b of state.balls) balls.push({ id: b.id, x: b.pos.x, y: b.pos.y, pocketed: false });
-    for (const key of Object.keys(state.pocketed)) {
-      const id = Number(key);
-      const pocketId = state.pocketed[id]!;
-      const pos = POCKETS[pocketId].pos;
-      balls.push({ id, x: pos.x, y: pos.y, pocketed: true });
-    }
+    const balls: EightBallPublicBall[] = state.balls.map((b) => ({ id: b.id, x: b.x, y: b.y, pocketed: !b.onTable }));
     if (state.cuePos) balls.push({ id: CUE_ID, x: state.cuePos.x, y: state.cuePos.y, pocketed: false });
     balls.sort((a, b) => a.id - b.id);
 
     const pocketedByGroup: Record<BallGroup, number> = { solids: 0, stripes: 0 };
-    for (const key of Object.keys(state.pocketed)) {
-      const id = Number(key);
-      if (SOLID_IDS.includes(id)) pocketedByGroup.solids += 1;
-      else if (STRIPE_IDS.includes(id)) pocketedByGroup.stripes += 1;
+    for (const b of state.balls) {
+      if (b.onTable) continue;
+      if (SOLID_IDS.includes(b.id)) pocketedByGroup.solids += 1;
+      else if (STRIPE_IDS.includes(b.id)) pocketedByGroup.stripes += 1;
     }
 
     let yourShots: EightBallPublicCandidate[] | null = null;
@@ -914,6 +1055,7 @@ export const eightBallEngine: TurnGameEngine<EightBallState, EightBallMove, Eigh
       gameType: "eightball",
       status: state.status,
       phase: state.phase,
+      shotCounter: state.shotCounter,
       balls,
       pocketedByGroup,
       groups: { ...state.groups },
@@ -921,6 +1063,9 @@ export const eightBallEngine: TurnGameEngine<EightBallState, EightBallMove, Eigh
       currentSeatId: state.currentSeatId,
       yourSeatId: viewerSeatId,
       ballInHandFor: state.ballInHandFor,
+      awaitingPlacement: state.awaitingPlacement,
+      placementZone: state.placementZone,
+      lastShot: state.lastShot,
       onTheEight,
       raceTo: state.config.raceTo,
       rackNumber: state.rackNumber,

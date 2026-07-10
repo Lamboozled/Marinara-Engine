@@ -3,11 +3,14 @@
 // ──────────────────────────────────────────────
 // NOT registered in the global tool registry. The runner injects this only on
 // a bot seat's turn (scoped per active game). The human never uses it — the
-// board UI posts moves to the REST endpoint directly. One flat tool covers the
-// whole action space (break / in-rack shot / safety are all "shoot" with a
-// shotId copied from the candidate menu `describeForModel` provides); there is
-// no separate `next_rack` tool — pacing between racks is a human/UI-only move
-// (mirrors poker's `next_hand`).
+// v2 board UI aims/shoots directly (`aimed`/`place` moves), since an LLM can't
+// aim a cursor. One flat tool covers the whole bot action space (break /
+// in-rack shot / safety are all a `kind: "menu"` move with a shotId copied
+// from the candidate menu `describeForModel` provides — the engine converts
+// the pick into an aim + power with skill/style jitter and runs the same
+// physics simulation a human's aim would); there is no separate `next_rack`
+// tool — pacing between racks is a human/UI-only move (mirrors poker's
+// `next_hand`).
 
 import type { ToolDefinition } from "../../function-calls/tool-definitions.js";
 import type { EightBallMove, ShotStyle } from "./types.js";
@@ -19,7 +22,9 @@ export const eightBallActionToolManifest = {
     '(e.g. "pot-3-NE", "bank-5-SW", "safety-12", or "break" during the break). ' +
     'Optionally set `style` to "controlled" (safer, tighter position) or "aggressive" ' +
     '(riskier, better position, higher scratch odds) — defaults to "controlled". ' +
-    'Use action "break" only on the opening shot of a rack; use "shoot" for every other shot.',
+    'Use action "break" only on the opening shot of a rack; use "shoot" for every other shot. ' +
+    "The odds shown in the menu are ESTIMATES, not a guaranteed outcome — your aim is executed " +
+    "with skill-based accuracy and the physics decides what actually happens.",
   parameters: {
     type: "object",
     properties: {
@@ -55,14 +60,14 @@ export function parseEightBallToolCall(name: string, args: Record<string, unknow
   const rawStyle = typeof args.style === "string" ? args.style.trim().toLowerCase() : "";
   const style: ShotStyle = rawStyle === "aggressive" ? "aggressive" : "controlled";
 
-  if (action === "break") return { type: "shoot", shotId: "break", style };
+  if (action === "break") return { kind: "menu", shotId: "break", style };
   if (action === "shoot") {
     // Leniency: "shoot" with no shotId is how a model naturally calls the sole
     // break candidate when it forgets to say action="break" — default to it.
     // If the game isn't actually in the break phase, applyMove rejects "break"
     // and returns the real legal set, and the fallback picks deterministically.
-    return { type: "shoot", shotId: rawShotId || "break", style };
+    return { kind: "menu", shotId: rawShotId || "break", style };
   }
   // Unknown/missing action: still a well-shaped move so applyMove can reject it cleanly.
-  return { type: "shoot", shotId: rawShotId, style };
+  return { kind: "menu", shotId: rawShotId, style };
 }

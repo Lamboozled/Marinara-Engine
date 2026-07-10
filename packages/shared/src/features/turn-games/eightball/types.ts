@@ -1,15 +1,23 @@
 // ──────────────────────────────────────────────
 // 8-Ball Pool — State, Moves, Config, Table Constants
 // ──────────────────────────────────────────────
-// HYBRID model: real 2D ball positions on a real table. Each turn the ENGINE
-// geometrically computes a finite candidate-shot menu (see geometry.ts); the
-// LLM bot only PICKS a shot in character (personality surface = shot choice,
-// not aim). Resolution is seeded-RNG vs. the candidate's difficulty. See
-// packages/shared/src/features/turn-games/poker for the sibling this mirrors
-// (seeded rng keyed on a counter, pendingAnnouncements queue, flat tool).
+// PHYSICS model (v2): real 2D ball positions on a real table. Every shot that
+// actually fires (human `aimed`, bot `menu`) is executed through physics.ts's
+// deterministic simulation — a shot's outcome is whatever the balls actually
+// do, not a seeded-RNG roll against a difficulty score. The candidate-shot
+// menu (see geometry.ts) still exists and is still generated every turn —
+// bots pick from it in character, and the engine converts that pick into an
+// aim vector + power with skill/style-based jitter, then runs the SAME sim a
+// human's `aimed` move would. `successPct` on a candidate is now an advisory
+// estimate for the bot prompt, not a resolution mechanism. See
+// packages/shared/src/features/turn-games/poker for the sibling pattern this
+// still mirrors for seats/announcements/tool shape (seeded rng keyed on a
+// counter — now used ONLY for aim jitter — pendingAnnouncements queue, flat
+// tool).
 
 import { z } from "zod";
 import type { GameEvent } from "../engine.types.js";
+import type { SimFrame } from "./physics.js";
 
 // ── Table geometry constants ────────────────────────────────────────────────
 // A real 9-ft table expressed in inches: 100×50 playfield, origin top-left,
@@ -43,8 +51,12 @@ export interface Point {
 export interface PocketDef {
   id: PocketId;
   pos: Point;
-  /** Used ONLY for cue-scratch placement checks — pockets are aim points in
-   * this hybrid model, not simulated jaws the ball physically falls into. */
+  /** The physical capture radius physics.ts uses to decide when a ball's
+   * center has fallen in (see physics.ts § Pockets). Also used by the engine
+   * for cue-placement validation: a placed/auto-placed cue must sit outside
+   * `captureRadius + BALL_R` of every pocket (a ball starting inside a
+   * pocket's capture zone would never be captured by the sim's quadratic —
+   * see physics.ts's `pocketCaptureTime` — and would behave nonsensically). */
   captureRadius: number;
 }
 
@@ -89,13 +101,22 @@ export interface ShotCandidate {
   ballId?: number;
   pocketId?: PocketId;
   tier: ShotTier;
+  /**
+   * ADVISORY ESTIMATE ONLY (v2): a difficulty-derived odds figure shown in the
+   * bot prompt so personality (not this number) decides what's worth the
+   * risk. The actual outcome is never rolled against this — the engine
+   * converts the chosen candidate into an aim + power and runs it through
+   * physics.ts's real simulation, same as a human's `aimed` move.
+   */
   successPct: number;
   /** Plain-English tactical color, generated from a deterministic phrase table. */
   desc: string;
   /**
    * Set ONLY for candidates generated while the shooter has ball-in-hand: the
-   * optimal virtual cue placement this specific candidate assumes. Applied to
-   * `state.cuePos` at resolution time if this candidate is the one chosen.
+   * optimal virtual cue placement this specific candidate assumes. Becomes
+   * the ACTUAL `state.cuePos` at resolution time if this candidate is the one
+   * chosen (see engine.ts's `menu` move handling) — this is how ball-in-hand
+   * placement happens for bots, which never issue a `place` move themselves.
    * Internal to the engine — stripped from the client-facing public view.
    */
   virtualCuePos?: Point;
@@ -126,10 +147,11 @@ export const MAX_POT_BANK_CANDIDATES = 12;
 export const MAX_BANK_CANDIDATES = 2;
 export const MAX_SAFETY_CANDIDATES = 3;
 
-/** Shot-style resolution modifiers (spec: controlled = safer/shorter, aggressive =
- * riskier/longer with better position but higher scratch odds). */
-export const CONTROLLED_SUCCESS_BONUS = 5;
-export const AGGRESSIVE_SUCCESS_PENALTY = 8;
+// NOTE (v2): the old CONTROLLED_SUCCESS_BONUS / AGGRESSIVE_SUCCESS_PENALTY
+// success-roll modifiers are gone — style now only perturbs the bot's AIM
+// JITTER SIGMA and POWER HEURISTIC in engine.ts's menu->aim conversion
+// (STYLE_JITTER_MULT / the aggressive/controlled power deltas), never a
+// resolution roll. See engine.ts § menu -> aim conversion.
 
 // ── Config ───────────────────────────────────────────────────────────────────
 
@@ -173,16 +195,33 @@ export const EIGHTBALL_LOG_CAP = 30;
 
 export type ShotStyle = "controlled" | "aggressive";
 
+/**
+ * Discriminated on `kind` (not `type`, unlike v1's lone "shoot"/"next_rack"
+ * union) — chosen to match the design spec's move pseudo-code exactly and to
+ * give every move a single consistent discriminant field, `next_rack`
+ * included, rather than mixing two discriminant names in one union.
+ */
 export type EightBallMove =
-  /** Covers break AND every in-rack shot — `shotId` selects the candidate (see
-   * `ShotCandidate.id`). Style defaults to "controlled" (see engine.ts). */
-  | { type: "shoot"; shotId: string; style?: ShotStyle }
+  /** Human aim-and-shoot (covers the break too): built into a cue velocity via
+   * `powerToSpeed(power)` and run through `simulateShot`. Legal whenever it's
+   * your turn and the cue is on the table (not awaiting placement). */
+  | { kind: "aimed"; angleDeg: number; power: number }
+  /** Bot shot pick — `shotId` selects a candidate (see `ShotCandidate.id`);
+   * the engine converts it to an aim + power with jitter, then runs the same
+   * simulation an `aimed` move would. Style defaults to "controlled". */
+  | { kind: "menu"; shotId: string; style?: ShotStyle }
+  /** Ball-in-hand placement. Legal only when the shooter has ball in hand (or,
+   * pre-break, as an optional reposition within the kitchen). Does NOT
+   * consume the turn or the shot counter — the same seat then aims/shoots. */
+  | { kind: "place"; x: number; y: number }
   /** Human-only pacing move: legal only in `rack_over`, only for `currentSeat`. */
-  | { type: "next_rack" };
+  | { kind: "next_rack" };
 
-export const eightBallMoveSchema: z.ZodType<EightBallMove> = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("shoot"), shotId: z.string(), style: z.enum(["controlled", "aggressive"]).optional() }),
-  z.object({ type: z.literal("next_rack") }),
+export const eightBallMoveSchema: z.ZodType<EightBallMove> = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("aimed"), angleDeg: z.number(), power: z.number() }),
+  z.object({ kind: z.literal("menu"), shotId: z.string(), style: z.enum(["controlled", "aggressive"]).optional() }),
+  z.object({ kind: z.literal("place"), x: z.number(), y: z.number() }),
+  z.object({ kind: z.literal("next_rack") }),
 ]);
 
 // ── State ────────────────────────────────────────────────────────────────────
@@ -190,27 +229,70 @@ export const eightBallMoveSchema: z.ZodType<EightBallMove> = z.discriminatedUnio
 export type EightBallStatus = "active" | "rack_over" | "finished";
 export type EightBallPhase = "break" | "play";
 
+/**
+ * One OBJECT ball's live state (ids 1-15; the cue, id 0, is tracked
+ * separately via `cuePos` because ball-in-hand needs a "not currently
+ * anywhere" state this shape can't represent). ALWAYS 15 entries in
+ * `EightBallState.balls`, for the lifetime of a rack — a potted ball stays in
+ * the array with `onTable: false` rather than moving to a side dict, so "is
+ * every object ball accounted for" is a single length check, not a
+ * cross-structure invariant.
+ */
+export interface EightBallBallState {
+  id: number;
+  x: number;
+  y: number;
+  onTable: boolean;
+  /** Set iff `onTable` is false — which pocket it dropped into. Positions the
+   * ball at that pocket's point for display once potted. */
+  pocketId?: PocketId;
+}
+
+/** One shot's animation + outcome payload, overwritten every time a sim runs
+ * (`aimed` or `menu` — never `place`, which doesn't run a sim). Fully
+ * JSON-serializable so it survives persistence/replay; exposed as-is in the
+ * public view for client animation (see `physics.ts`'s `SimFrame`). */
+export interface EightBallLastShot {
+  frames: SimFrame[];
+  shooterSeatId: string;
+  moveKind: "aimed" | "menu";
+  potted: Array<{ ballId: number; pocketId: PocketId }>;
+  cueScratched: boolean;
+  foul: boolean;
+}
+
 export interface EightBallState {
   config: EightBallConfig;
-  /** Seeded RNG root. Each shot's outcome is `deterministicRng(seed, shotCounter)`
-   * — reproducible and rewind-safe without persisting any resolution rolls. */
+  /** Seeded RNG root. Bot aim jitter is `deterministicRng(seed, shotCounter)`
+   * — reproducible and rewind-safe without persisting any jitter draws. This
+   * is the ONLY rng consumer left in the engine (v2): shot OUTCOMES come from
+   * physics.ts's deterministic simulation, never a roll. */
   seed: number;
-  /** Increments on every applyMove — the per-shot rng cursor (poker deck-cursor pattern). */
+  /** Increments on every applyMove that runs a sim (`aimed`/`menu`, break
+   * included; NOT `place` or `next_rack`) — the per-shot rng cursor (poker
+   * deck-cursor pattern). */
   shotCounter: number;
   seats: Array<{ seatId: string; displayName: string; kind: "human" | "bot" }>;
   seatOrder: string[];
   seatNames: Record<string, string>;
   status: EightBallStatus;
   phase: EightBallPhase;
-  /** On-table OBJECT balls only (ids 1-15). The cue is tracked separately via
-   * `cuePos` because ball-in-hand needs a "not currently anywhere" state that a
-   * plain BallPos can't represent. */
-  balls: BallPos[];
-  /** Null while a ball-in-hand placement is pending (i.e. `ballInHandFor` is set). */
+  /** All 15 object balls, always present (see `EightBallBallState`'s doc). */
+  balls: EightBallBallState[];
+  /** Null while a ball-in-hand placement is pending (i.e. `awaitingPlacement`
+   * is true) — the sole source of truth physics.ts's sim reads the cue's
+   * position from. */
   cuePos: Point | null;
-  /** ballId -> the pocket it dropped into. Never contains the cue (0) — a scratch
-   * is represented by `cuePos: null` + `ballInHandFor`, not a "pocketed" cue. */
-  pocketed: Partial<Record<number, PocketId>>;
+  /** True iff `cuePos` is null — the current seat must `place` before they can
+   * `aimed`/`menu` (bots resolve this transparently via `menu`; see engine.ts). */
+  awaitingPlacement: boolean;
+  /** Where a pending placement must land: "kitchen" for a break-shot foul (or
+   * the optional pre-break reposition), "anywhere" for every other foul. Null
+   * whenever `awaitingPlacement` is false. */
+  placementZone: "kitchen" | "anywhere" | null;
+  /** The most recent sim's frames + outcome, for client animation. Null before
+   * the first shot of the match. */
+  lastShot: EightBallLastShot | null;
   /** seatId -> assigned group. Both null = table open. */
   groups: Record<string, BallGroup | null>;
   /** seatId -> racks won this match. */
@@ -219,7 +301,10 @@ export interface EightBallState {
   /** Who breaks the CURRENT (or, during rack_over, the NEXT) rack. Alternates every rack. */
   breakerSeatId: string;
   currentSeatId: string | null;
-  /** seatId who must place the cue via their next shot's virtual placement, or null. */
+  /** seatId who has ball-in-hand right now (kept in lockstep with
+   * `awaitingPlacement`/`cuePos === null`) — redundant with `currentSeatId`
+   * while true, but kept as its own field so the client doesn't have to infer
+   * "who" from "is anyone awaiting placement". */
   ballInHandFor: string | null;
   winnerSeatId: string | null;
   lastAction: { seatId: string; summary: string } | null;
@@ -255,6 +340,12 @@ export interface EightBallPublicView {
   gameType: "eightball";
   status: EightBallStatus;
   phase: EightBallPhase;
+  /** Mirrors `EightBallState.shotCounter` — increments once per executed sim
+   * (`aimed`/`menu`), never for `place`/`next_rack`. The client keys its
+   * shot-animation bookkeeping on this ("have I already animated the shot
+   * `lastShot` describes?"), which needs a monotonic per-sim identity rather
+   * than object identity on `lastShot` (snapshots are re-fetched/re-sent). */
+  shotCounter: number;
   /** All 16 balls, cue included when it's on the table (omitted while ball-in-hand). */
   balls: EightBallPublicBall[];
   pocketedByGroup: Record<BallGroup, number>;
@@ -263,6 +354,13 @@ export interface EightBallPublicView {
   currentSeatId: string | null;
   yourSeatId: string | null;
   ballInHandFor: string | null;
+  /** True iff the cue is off-table awaiting a `place` move. */
+  awaitingPlacement: boolean;
+  /** Where that placement must land; null unless `awaitingPlacement`. */
+  placementZone: "kitchen" | "anywhere" | null;
+  /** The most recent shot's animation frames + outcome, for the client to
+   * animate. Null before the first shot of the match. */
+  lastShot: EightBallLastShot | null;
   /** Whether `currentSeatId`'s group is fully cleared, so the 8 is their legal target. */
   onTheEight: boolean;
   raceTo: number;
@@ -270,7 +368,9 @@ export interface EightBallPublicView {
   winnerSeatId: string | null;
   lastAction: { seatId: string; summary: string } | null;
   /** The current shot menu, populated ONLY when the viewer is the current seat
-   * (chess `legalMovesForYou` pattern). */
+   * (chess `legalMovesForYou` pattern). Bots always need this to pick a `menu`
+   * move; kept for humans too as a possible future hint overlay (not consumed
+   * by the v2 human board UI, which aims/shoots directly). */
   yourShots: EightBallPublicCandidate[] | null;
   recentLog: GameEvent[];
   hasPendingAnnouncements: boolean;
