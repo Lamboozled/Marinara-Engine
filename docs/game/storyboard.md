@@ -81,6 +81,7 @@ All of these live in the **Storyboards** card. Open **Chat Settings**, go to **A
 | **Viewer Display** | Floating | Floating panel or full background |
 | **Illustration Prompt** | Still Keyframes | Style preset for still-only storyboards |
 | **Animation Prompt** | Comic Page | Style preset when animations are on |
+| **Storyboard Motion Prompt** | Cinematic Scene Video | Motion preset used only for storyboard clips |
 
 **Keyframes per Turn** is a slider. The engine tries to plan this many keyframes. A short turn may get fewer. It never plans more than 6.
 
@@ -93,23 +94,26 @@ The style presets shape how each keyframe looks. Two selectors pick them:
 - **Illustration Prompt** is used when storyboards make still keyframes without videos. Default: **Still Keyframes**.
 - **Animation Prompt** is used when **Automatic Storyboard Animations** is on. Default: **Comic Page**.
 
-There are five built-in presets. They are for Game Mode storyboards only. They are separate from Roleplay illustrator presets.
+There are six built-in image presets. They are for Game Mode storyboards only. They are separate from Roleplay illustrator presets.
 
 | Preset | Best for |
 | --- | --- |
 | **Still Keyframes** | Normal reading. Single-scene keyframes. Avoids comic panels, speech bubbles, captions, and SFX text, so the viewer does not spoil later beats. |
 | **NovelAI Keyframes** | Compact tag prompts tuned for NovelAI V4 and V4.5. Best paired with **Use Storyboard Prompt Directly**. |
+| **Anime Episode Director** | Animation-ready single-shot first frames with causal staging and compact Start/Action/Camera/Environment/End direction. |
 | **Comic Page** | Comic panels with dialogue bubbles, captions, and lettering. Meant for the animation path. |
 | **Colored Manga** | Colored manga staging, cell shading, screentones, speech bubbles, and SFX. |
 | **B&W Manga** | Black-and-white manga inks, screentones, heavy blacks, speech bubbles, and SFX. |
 
-The **NovelAI Keyframes** preset writes compact Danbooru tags. Danbooru tags are short comma-separated keyword tags that some anime image models expect. Choosing a comic or manga preset does not turn animations on by itself. You still need **Automatic Storyboard Animations** and a video connection for clips.
+The **NovelAI Keyframes** preset writes compact Danbooru tags. Danbooru tags are short comma-separated keyword tags that some anime image models expect. Choosing a comic, manga, or anime preset does not turn animations on by itself. You still need **Automatic Storyboard Animations** and a video connection for clips.
+
+Choosing **Anime** presentation in the setup wizard coordinates three opt-in built-ins without changing Standard defaults: **Anime Game Prompt** gives the GM a soft `{{gameStoryboardKeyframeCount}}` visual-anchor target, **Anime Episode Director** creates direct single-shot first-frame prompts, and **Anime Game Video** animates those frames with continuity and provider-safe staging. You can change each selector later in Chat Settings. The storyboard-specific motion selector does not change the prompt used for ordinary scene videos.
 
 ## Editing storyboard presets
 
 The built-in presets are read-only. To make your own, open the **Edit Storyboard Presets** section inside the **Storyboards** card. It shows a count of your custom copies.
 
-You copy a built-in into a chat-only editable template, then pick that copy in either selector. The copy buttons are **Add Still Copy**, **Add Comic Copy**, **Add NovelAI Copy**, **Add Colored Manga Copy**, and **Add B&W Manga Copy**.
+You copy a built-in into a chat-only editable template, then pick that copy in either selector. The copy buttons include **Add Still Copy**, **Add Comic Copy**, **Add NovelAI Copy**, **Add Anime Director Copy**, **Add Colored Manga Copy**, and **Add B&W Manga Copy**. Video prompts have separate **Add Video Copy** and **Add Anime Video Copy** actions.
 
 Each custom copy has a name, a short description, and the prompt body you edit. A trash button removes a copy after a confirm dialog. These copies are stored on that one chat, not across your whole app.
 

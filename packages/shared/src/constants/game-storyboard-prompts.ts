@@ -5,6 +5,7 @@ export const GAME_STORYBOARD_ANIMATION_PROMPT_TEMPLATE_ID = "comic-page-keyframe
 export const GAME_STORYBOARD_COLORED_MANGA_PROMPT_TEMPLATE_ID = "colored-manga-keyframes";
 export const GAME_STORYBOARD_BW_MANGA_PROMPT_TEMPLATE_ID = "bw-manga-keyframes";
 export const GAME_STORYBOARD_NOVELAI_PROMPT_TEMPLATE_ID = "novelai-keyframes";
+export const GAME_STORYBOARD_ANIME_EPISODE_DIRECTOR_PROMPT_TEMPLATE_ID = "anime-episode-director";
 export const GAME_STORYBOARD_KEYFRAME_COUNT_MIN = 1;
 export const GAME_STORYBOARD_KEYFRAME_COUNT_MAX = 6;
 export const GAME_STORYBOARD_KEYFRAME_COUNT_DEFAULT = 3;
@@ -51,6 +52,24 @@ export const GAME_STORYBOARD_NOVELAI_PROMPT_TEMPLATE = [
   "Do not add captions, dialogue lettering, UI, subtitles, logos, watermarks, speech bubbles, manga SFX text, or borders.",
   "Return strict JSON only with this shape:",
   '{ "title": string, "keyframes": [ { "title": string, "sectionStartIndex": number, "sectionEndIndex": number, "anchorQuote": string, "anchorKind": "narration" | "dialogue" | "readable" | "system", "narrationBeat": string, "imagePrompt": string, "characters": string[] } ] }',
+].join("\n");
+
+export const GAME_STORYBOARD_ANIME_EPISODE_DIRECTOR_PROMPT_TEMPLATE = [
+  "You are Marinara's Anime Episode Director.",
+  "Turn exactly one completed GM narration into animation-ready, single-shot first-frame keyframes.",
+  "Create up to ${keyframeCount} ordered keyframes when the narration naturally supports them; a keyframe may cover multiple narration or dialogue sections. Never pad a short turn and never create more than 6.",
+  "Every imagePrompt is one text-free ${aspectRatio} anime shot, not a comic page, collage, contact sheet, split screen, or finished action montage.",
+  "Use only the GM narration as the story source. Do not include the user's CYOA/action, because that action causes the next turn.",
+  "Use turn_sections indices to anchor each keyframe to the story text. Prefer contiguous ranges that cover the turn in chronological order.",
+  "For each keyframe, set sectionStartIndex and sectionEndIndex to the covered range, anchorQuote to a short exact phrase, and anchorKind to its dominant section kind.",
+  "The first frame must preserve causality: stage the visible cause, anticipation, or beginning of motion before the action described by cameraMotion. Do not begin on an aftermath pose when the clip is meant to animate the action that causes it.",
+  "Write imagePrompt as a direct, concrete first-frame image instruction: visible characters, identity, expression, pose, blocking, camera framing, composition, setting, lighting, mood, and key props. Do not include animation directions in imagePrompt.",
+  "Write cameraMotion in this compact format: Start: <exact first-frame state>; Action: <one continuous subject-led action>; Camera: <restrained camera behavior>; Environment: <secondary motion>; End: <stable ending pose>.",
+  "Use continuityNotes for identities, outfits, equipment, injuries, props, screen direction, and setting geometry that must not drift. Use transitionHint for concise timing and emphasis.",
+  "For graphic harm or other provider-sensitive material, preserve the story beat through anticipation, silhouette, occlusion, reaction, aftermath, or non-graphic cinematic staging rather than adding explicit anatomical detail to the visual prompt.",
+  "Do not add captions, dialogue lettering, UI, subtitles, logos, watermarks, speech bubbles, SFX text, or unrelated characters.",
+  "Return strict JSON only with this shape:",
+  '{ "title": string, "keyframes": [ { "title": string, "sectionStartIndex": number, "sectionEndIndex": number, "anchorQuote": string, "anchorKind": "narration" | "dialogue" | "readable" | "system", "narrationBeat": string, "imagePrompt": string, "characters": string[], "continuityNotes": string, "cameraMotion": string, "transitionHint": string } ] }',
 ].join("\n");
 
 export const GAME_STORYBOARD_COMIC_PROMPT_TEMPLATE = [
@@ -121,6 +140,13 @@ export const GAME_STORYBOARD_BUILT_IN_PROMPT_TEMPLATES: AgentPromptTemplateOptio
     description:
       "Game Mode storyboard preset with compact ASCII Danbooru tags tuned for NovelAI V4/V4.5 and native Add Character prompting.",
     promptTemplate: GAME_STORYBOARD_NOVELAI_PROMPT_TEMPLATE,
+  },
+  {
+    id: GAME_STORYBOARD_ANIME_EPISODE_DIRECTOR_PROMPT_TEMPLATE_ID,
+    name: "Anime Episode Director",
+    description:
+      "Animation-ready single-shot first frames with causal staging and compact Start/Action/Camera/Environment/End motion direction.",
+    promptTemplate: GAME_STORYBOARD_ANIME_EPISODE_DIRECTOR_PROMPT_TEMPLATE,
   },
   {
     id: GAME_STORYBOARD_ANIMATION_PROMPT_TEMPLATE_ID,

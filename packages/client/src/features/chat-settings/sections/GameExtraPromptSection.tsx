@@ -82,7 +82,7 @@ export function GameExtraPromptSection({
               {(
                 [
                   { id: "standard", label: "Standard", icon: BookOpen },
-                  { id: "living_anime", label: "Living Anime", icon: PanelsTopLeft },
+                  { id: "living_anime", label: "Anime", icon: PanelsTopLeft },
                 ] as const
               ).map((option) => {
                 const Icon = option.icon;
@@ -108,8 +108,8 @@ export function GameExtraPromptSection({
             </div>
             <p className="text-[0.575rem] leading-relaxed text-[var(--muted-foreground)]">
               {experienceStyle === "living_anime"
-                ? "The GM writes visually staged anime scenes before storyboard and animation generation."
-                : "Uses the general RPG and visual-novel narration direction."}
+                ? "Anime Game Prompt adds filmable beats and a soft keyframe-aware visual-anchor target."
+                : "Uses the general RPG narration direction and existing storyboard defaults."}
             </p>
           </div>
           <label className="flex flex-col gap-1.5">

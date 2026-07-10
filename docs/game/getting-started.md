@@ -30,7 +30,7 @@ When you create a Game Mode chat, a **setup wizard** opens. It has seven steps. 
 The seven steps are:
 
 1. **Connection.** Set the game name, pick the GM connection, and optionally set a scene-effects connection. Scene effects default to **Local Model (Gemma)**.
-2. **World.** Set the genre, setting, tone, difficulty, content rating, and language.
+2. **World.** Choose Standard or Anime presentation, then set the genre, setting, tone, difficulty, content rating, and language.
 3. **Party.** Pick your persona (the character you play), the **Game Master Mode**, and any party members.
 4. **Goals.** Tell the GM what you want from the adventure.
 5. **Lorebooks.** Attach any lorebooks whose facts the GM should treat as canon. A lorebook is a set of background world facts. See [Lorebooks](../lorebooks/overview.md).
@@ -48,12 +48,14 @@ These are the starting values in the **World**, **Party**, and **Features** step
 | Genre | Fantasy | Multi-select, plus your own custom entries |
 | Tone | Heroic | Multi-select |
 | Difficulty | Normal | Casual, Normal, Hard, or Brutal; higher settings make combat more punishing |
+| Presentation | Standard | Anime opts into filmable GM narration and coordinated storyboard/video prompts |
 | Content Rating | SFW | SFW or NSFW; NSFW only permits adult content, it does not force it |
 | Language | English | All in-game text is written in this language |
 | Game Master Mode | Standalone GM | Standalone GM builds a GM for you; Character GM uses one of your cards as the GM |
 | Visual Generation | Off | Turn on for images; needs an image generation connection |
 | Automatic Storyboard Illustrations | On | Only active once Visual Generation is on |
 | Automatic Storyboard Animations | Off | Needs a video generation connection |
+| Keyframes per Turn | 3 | Soft target from 1 to 6; short turns may use fewer |
 | Music DJ | Off | Needs Spotify or a local music folder |
 | Custom HUD Widgets | On | Uses AI-made status widgets from the new world |
 | Start Muted | Off | Begins the game with audio muted |

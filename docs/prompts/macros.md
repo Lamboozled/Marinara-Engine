@@ -109,6 +109,10 @@ The value of `{{lastGenerationType}}` is a plain label. Example values seen in t
 
 The `{{agent::TYPE}}` macro inserts the saved output of an agent (a background helper that fills in things like a scene tracker). The easiest way to add it is inside the **Preset Editor**: click **Add Section**, open the **Agent Sections** group, and pick an agent. Marinara creates a section that already contains the right `{{agent::TYPE}}` tag. This macro is resolved last, so agent text cannot inject more macros into your prompt.
 
+### Game Mode prompt macro
+
+`{{gameStoryboardKeyframeCount}}` works in the Game prompt used during world setup and ordinary GM turns. It resolves to that game's **Keyframes per Turn** value, from 1 to 6. The built-in **Anime Game Prompt** uses it as a soft visual-anchor target: a keyframe may cover several narration or dialogue sections, and short turns are not padded to reach the number.
+
 ## Time macros
 
 All time macros read one shared moment per resolution, so they always agree with each other. The timezone comes from your browser.

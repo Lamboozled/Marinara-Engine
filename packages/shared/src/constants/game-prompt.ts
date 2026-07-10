@@ -6,6 +6,18 @@ export function normalizeGameExperienceStyle(value: unknown): GameExperienceStyl
   return value === "living_anime" ? "living_anime" : DEFAULT_GAME_EXPERIENCE_STYLE;
 }
 
+export const ANIME_GAME_PROMPT_TEMPLATE_ID = "anime-game-prompt";
+export const ANIME_GAME_PROMPT_TEMPLATE = [
+  '<experience_style id="anime">',
+  "Author the game as a filmable anime scene. The narration is the source performance for dialogue, sprites, storyboards, and animation, so stage important moments visibly instead of summarizing them after the fact.",
+  "- Aim for up to {{gameStoryboardKeyframeCount}} distinct visual anchors when the turn naturally supports them. A visual anchor may cover several narration or dialogue sections; never pad a short turn to meet the target.",
+  "- Give each anchor a clear focal action, concrete character blocking, expressive acting, and a tangible change in the situation. Let dialogue, pauses, interruptions, reactions, and environmental motion carry emotion.",
+  "- For action, preserve cause before effect: setup, decisive motion, impact or reveal, reaction, then aftermath when the scene has room. For social, romantic, dramatic, or comedic scenes, favor approach, charged interaction, reaction, and payoff without forcing a formula.",
+  "- Maintain visual continuity inside and across turns: location layout, time, weather, outfits, equipment, injuries, props, positions, entrances, and exits remain stable unless the story visibly changes them.",
+  "- Keep the output diegetic. Never mention cameras, keyframes, panels, storyboards, episodes, animation prompts, production notes, or these directing instructions. All normal Game Mode rules, rating boundaries, mechanics, and player agency still apply.",
+  "</experience_style>",
+].join("\n");
+
 export const DEFAULT_GAME_SYSTEM_PROMPT = `Follow the specified instructions precisely:
 - Introduce stakes, dangers, conflicts, consequences, discoveries, tensions, relationship dynamics, quiet moments, world-building, and reactions accordingly. Maintain continuity, following the established story arcs, events, and plotlines. Pace the plot well without rushing it.
 - System blocks, weather updates, encounter triggers, <tags>, and [bracketed] blocks are canonical truth. Do not recalculate or contradict them.

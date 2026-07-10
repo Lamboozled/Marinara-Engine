@@ -28,6 +28,9 @@ import {
 } from "lucide-react";
 import {
   DEFAULT_GAME_SYSTEM_PROMPT,
+  GAME_STORYBOARD_KEYFRAME_COUNT_DEFAULT,
+  GAME_STORYBOARD_KEYFRAME_COUNT_MAX,
+  GAME_STORYBOARD_KEYFRAME_COUNT_MIN,
   type CharacterGroup,
   type GameExperienceStyle,
   type GameSetupConfig,
@@ -412,6 +415,9 @@ export function GameSetupWizard({ onComplete, onCancel, isLoading, characters }:
   const [videoConnectionId, setVideoConnectionId] = useState<string | null>(null);
   const [enableStoryboardIllustrations, setEnableStoryboardIllustrations] = useState(true);
   const [enableStoryboardAnimations, setEnableStoryboardAnimations] = useState(false);
+  const [gameStoryboardKeyframeCount, setGameStoryboardKeyframeCount] = useState(
+    GAME_STORYBOARD_KEYFRAME_COUNT_DEFAULT,
+  );
   const [sceneConnectionId, setSceneConnectionId] = useState<string | null>(null);
   const [activeLorebookIds, setActiveLorebookIds] = useState<string[]>([]);
   const [lbSearch, setLbSearch] = useState("");
@@ -779,6 +785,7 @@ export function GameSetupWizard({ onComplete, onCancel, isLoading, characters }:
           ? enableStoryboardIllustrations
           : undefined,
         gameStoryboardAutoGenerationEnabled: storyboardAnimationsEnabled || undefined,
+        gameStoryboardKeyframeCount,
         activeLorebookIds: activeLorebookIds.length > 0 ? activeLorebookIds : undefined,
         enableCustomWidgets,
         customHudWidgets:
@@ -958,7 +965,7 @@ export function GameSetupWizard({ onComplete, onCancel, isLoading, characters }:
         {step === 1 && (
           <>
             <div>
-              <label className={GAME_SETUP_FIELD_LABEL}>Experience Style</label>
+              <label className={GAME_SETUP_FIELD_LABEL}>Presentation</label>
               <div className="grid grid-cols-2 gap-2">
                 <button
                   type="button"
@@ -992,10 +999,10 @@ export function GameSetupWizard({ onComplete, onCancel, isLoading, characters }:
                 >
                   <span className="flex items-center gap-1.5 text-xs font-medium text-[var(--foreground)]">
                     <PanelsTopLeft size={13} />
-                    Living Anime
+                    Anime
                   </span>
                   <span className="mt-1 block text-[0.625rem] leading-snug text-[var(--muted-foreground)]">
-                    Visually staged beats, expressive acting, and anime continuity.
+                    Uses the Anime Game Prompt for filmable beats, expressive acting, and visual continuity.
                   </span>
                 </button>
               </div>
@@ -1839,6 +1846,31 @@ export function GameSetupWizard({ onComplete, onCancel, isLoading, characters }:
                             />
                           </span>
                         </button>
+                        <label className="block rounded-lg bg-[var(--background)]/70 px-3 py-2 ring-1 ring-[var(--border)]">
+                          <span className="flex items-center justify-between gap-3">
+                            <span>
+                              <span className="block text-[0.6875rem] font-medium text-[var(--foreground)]">
+                                Keyframes per Turn
+                              </span>
+                              <span className="block text-[0.575rem] text-[var(--muted-foreground)]">
+                                A soft target; short GM turns are never padded.
+                              </span>
+                            </span>
+                            <span className="text-xs font-semibold tabular-nums text-[var(--primary)]">
+                              {gameStoryboardKeyframeCount}
+                            </span>
+                          </span>
+                          <input
+                            type="range"
+                            min={GAME_STORYBOARD_KEYFRAME_COUNT_MIN}
+                            max={GAME_STORYBOARD_KEYFRAME_COUNT_MAX}
+                            step={1}
+                            value={gameStoryboardKeyframeCount}
+                            onChange={(event) => setGameStoryboardKeyframeCount(Number(event.target.value))}
+                            className="mt-2 w-full accent-[var(--primary)]"
+                            aria-label="Keyframes per Turn"
+                          />
+                        </label>
                         <button
                           type="button"
                           onClick={toggleStoryboardAnimations}

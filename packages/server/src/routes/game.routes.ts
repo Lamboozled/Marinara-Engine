@@ -101,12 +101,13 @@ import {
   generationParametersSchema,
   VIDEO_GENERATION_SETTINGS_KEY,
   VIDEO_DEFAULTS_STORAGE_KEY,
+  GAME_ANIME_VIDEO_PROMPT_TEMPLATE_ID,
+  GAME_STORYBOARD_ANIME_EPISODE_DIRECTOR_PROMPT_TEMPLATE_ID,
   GAME_STORYBOARD_ANIMATION_PROMPT_TEMPLATE_ID,
   GAME_STORYBOARD_ANIMATION_DURATION_SECONDS_DEFAULT,
   GAME_STORYBOARD_ANIMATION_DURATION_SECONDS_MAX,
   GAME_STORYBOARD_ANIMATION_DURATION_SECONDS_MIN,
   GAME_STORYBOARD_BUILT_IN_PROMPT_TEMPLATES,
-  GAME_STORYBOARD_COMIC_NEGATIVE_PROMPT,
   GAME_STORYBOARD_ILLUSTRATION_PROMPT_TEMPLATE_ID,
   GAME_STORYBOARD_KEYFRAME_COUNT_DEFAULT,
   GAME_STORYBOARD_KEYFRAME_COUNT_MAX,
@@ -1485,7 +1486,9 @@ async function buildStoryboardGalleryAnimatePrompt(args: {
     promptOverridesStorage: args.promptOverridesStorage,
     meta: args.meta,
     debugMode: args.debugMode,
-    templateId: args.meta.gameStoryboardVideoPromptTemplateId ?? args.meta.gameVideoPromptTemplateId,
+    templateId:
+      args.meta.gameStoryboardVideoPromptTemplateId ??
+      (isLivingAnime ? GAME_ANIME_VIDEO_PROMPT_TEMPLATE_ID : args.meta.gameVideoPromptTemplateId),
     ctx: {
       sceneTitle: compactVideoPromptText(
         args.plannedFrame.title || sceneTitleFromGalleryImage(args.galleryImage),
@@ -1606,6 +1609,12 @@ const gameSetupConfigSchema = z.object({
   videoConnectionId: z.string().optional(),
   gameStoryboardAutoIllustrationsEnabled: z.boolean().optional(),
   gameStoryboardAutoGenerationEnabled: z.boolean().optional(),
+  gameStoryboardKeyframeCount: z
+    .number()
+    .int()
+    .min(GAME_STORYBOARD_KEYFRAME_COUNT_MIN)
+    .max(GAME_STORYBOARD_KEYFRAME_COUNT_MAX)
+    .optional(),
   artStylePrompt: z.string().max(500).optional(),
   imageStyleProfileId: z.string().nullable().optional(),
   activeLorebookIds: z.array(z.string()).optional(),
@@ -4983,6 +4992,7 @@ function fallbackStoryboardPlan(args: {
   durationSeconds: number;
   aspectRatio: GameSceneVideoAspectRatio;
   generateVideos?: boolean;
+  animePresentation?: boolean;
   allowedCharacterNames?: string[];
   maxVisibleCharacters?: number;
 }): PlannedStoryboard {
@@ -5015,8 +5025,10 @@ function fallbackStoryboardPlan(args: {
       const lastSection = chunk.sections[chunk.sections.length - 1] ?? null;
       const beat = compactStoryboardText(chunk.text, 900);
       const title = `Keyframe ${index + 1}`;
-      const imagePrompt = args.generateVideos
-        ? `Polished colored anime comic page, exactly ${comicPanelCount} stable panels in clear reading order, expressive character acting, concise readable lettering, detailed environment, dramatic lighting. Divide this story beat into one focal action per panel: ${beat}`
+      const imagePrompt = args.animePresentation
+        ? `Polished single-shot anime first frame, one coherent composition, visible cause or beginning of motion before the main action, expressive character acting, detailed environment, dramatic lighting, no text or panels. ${beat}`
+        : args.generateVideos
+          ? `Polished colored anime comic page, exactly ${comicPanelCount} stable panels in clear reading order, expressive character acting, concise readable lettering, detailed environment, dramatic lighting. Divide this story beat into one focal action per panel: ${beat}`
         : `Manga illustration keyframe, cinematic anime panel, expressive character acting, detailed environment, dramatic lighting. ${beat}`;
       const reconciledCharacters = reconcileStoryboardCharactersForFrame({
         value: [],
@@ -5042,14 +5054,14 @@ function fallbackStoryboardPlan(args: {
         videoPrompt: "",
         characters: reconciledCharacters.characters,
         characterPrompts: [],
-        continuityNotes: args.generateVideos
-          ? "Preserve character identity, outfits, equipment, injuries, props, setting geometry, panel layout, borders, and existing lettering."
+        continuityNotes: args.animePresentation
+          ? "Preserve character identity, outfits, equipment, injuries, props, screen direction, and setting geometry."
           : "",
-        cameraMotion: args.generateVideos
-          ? "Move attention through the panels in their established reading order. Use restrained character acting, secondary hair and clothing motion, and subtle environmental movement without deforming the page."
+        cameraMotion: args.animePresentation
+          ? "Start: preserve the exact first-frame pose and composition; Action: complete one continuous subject-led action; Camera: use restrained tracking or a gentle push; Environment: add subtle secondary motion; End: settle on a stable reaction or aftermath pose."
           : "",
-        transitionHint: args.generateVideos
-          ? "Begin on the exact source page, give each panel a clear moment of emphasis, and settle on the final panel's stable reaction or aftermath pose."
+        transitionHint: args.animePresentation
+          ? "Begin on the supplied cause-before-effect frame, emphasize the central action, and end without a cut."
           : "",
         durationSeconds: args.durationSeconds,
         aspectRatio: args.aspectRatio,
@@ -5067,6 +5079,7 @@ function sanitizeStoryboardPlan(
     durationSeconds: number;
     aspectRatio: GameSceneVideoAspectRatio;
     generateVideos: boolean;
+    animePresentation?: boolean;
     allowedCharacterNames?: string[];
     maxVisibleCharacters?: number;
   },
@@ -5267,9 +5280,13 @@ function resolveGameStoryboardPromptTemplateId(args: {
   generateVideos: boolean;
   options: AgentPromptTemplateOption[];
 }): string {
-  const defaultId = args.generateVideos
-    ? GAME_STORYBOARD_ANIMATION_PROMPT_TEMPLATE_ID
-    : GAME_STORYBOARD_ILLUSTRATION_PROMPT_TEMPLATE_ID;
+  const setupConfig = asStoryboardRecord(args.meta.gameSetupConfig);
+  const defaultId =
+    normalizeGameExperienceStyle(setupConfig.experienceStyle) === "living_anime"
+      ? GAME_STORYBOARD_ANIME_EPISODE_DIRECTOR_PROMPT_TEMPLATE_ID
+      : args.generateVideos
+        ? GAME_STORYBOARD_ANIMATION_PROMPT_TEMPLATE_ID
+        : GAME_STORYBOARD_ILLUSTRATION_PROMPT_TEMPLATE_ID;
   const selected = readTrimmedString(
     args.generateVideos
       ? args.meta.gameStoryboardAnimationPromptTemplateId
@@ -5890,6 +5907,8 @@ export async function gameRoutes(app: FastifyInstance) {
     const customHudWidgets = sanitizeGameHudWidgets(parsedCreateGameInput.setupConfig.customHudWidgets);
     const gameSystemPrompt = parsedCreateGameInput.setupConfig.gameSystemPrompt?.trim() || null;
     const gameSpecialInstructions = parsedCreateGameInput.setupConfig.gameSpecialInstructions?.trim() || null;
+    const animePresentationEnabled =
+      normalizeGameExperienceStyle(parsedCreateGameInput.setupConfig.experienceStyle) === "living_anime";
     const storyboardIllustrationsPreference =
       parsedCreateGameInput.setupConfig.gameStoryboardAutoIllustrationsEnabled !== false;
     const visualGenerationEnabled =
@@ -5911,6 +5930,9 @@ export async function gameRoutes(app: FastifyInstance) {
         ? storyboardIllustrationsEnabled
         : parsedCreateGameInput.setupConfig.gameStoryboardAutoIllustrationsEnabled,
       gameStoryboardAutoGenerationEnabled: storyboardAnimationsEnabled || undefined,
+      gameStoryboardKeyframeCount: normalizeStoryboardKeyframeCount(
+        parsedCreateGameInput.setupConfig.gameStoryboardKeyframeCount,
+      ),
       enableCustomWidgets:
         parsedCreateGameInput.setupConfig.enableCustomWidgets !== false || customHudWidgets.length > 0,
       customHudWidgets: customHudWidgets.length > 0 ? customHudWidgets : undefined,
@@ -6001,6 +6023,15 @@ export async function gameRoutes(app: FastifyInstance) {
       gameVideoConnectionId: setupConfig.videoConnectionId || null,
       gameStoryboardAutoIllustrationsEnabled: setupConfig.gameStoryboardAutoIllustrationsEnabled !== false,
       gameStoryboardAutoGenerationEnabled: setupConfig.gameStoryboardAutoGenerationEnabled === true,
+      gameStoryboardKeyframeCount: normalizeStoryboardKeyframeCount(setupConfig.gameStoryboardKeyframeCount),
+      gameStoryboardIllustrationPromptTemplateId: animePresentationEnabled
+        ? GAME_STORYBOARD_ANIME_EPISODE_DIRECTOR_PROMPT_TEMPLATE_ID
+        : null,
+      gameStoryboardAnimationPromptTemplateId: animePresentationEnabled
+        ? GAME_STORYBOARD_ANIME_EPISODE_DIRECTOR_PROMPT_TEMPLATE_ID
+        : null,
+      gameStoryboardVideoPromptTemplateId: animePresentationEnabled ? GAME_ANIME_VIDEO_PROMPT_TEMPLATE_ID : null,
+      gameStoryboardUseDirectScenePrompt: animePresentationEnabled || null,
       gameLastSceneVideoId: null,
       activeLorebookIds: setupConfig.activeLorebookIds || [],
       enableCustomWidgets: setupConfig.enableCustomWidgets !== false,
@@ -6213,6 +6244,8 @@ export async function gameRoutes(app: FastifyInstance) {
         content: buildSetupPrompt({
           rating: setupConfig.rating ?? "sfw",
           experienceStyle: setupConfig.experienceStyle,
+          gameStoryboardKeyframeCount:
+            (meta.gameStoryboardKeyframeCount as number | undefined) ?? setupConfig.gameStoryboardKeyframeCount,
           personaCard: personaCard || null,
           playerName: personaName,
           partyCards: partyCards.length > 0 ? partyCards : undefined,
@@ -10277,6 +10310,7 @@ export async function gameRoutes(app: FastifyInstance) {
         maxVisibleCharacters: storyboardMaxVisibleCharacters,
         structuredCharacterPrompts,
       });
+      const animePresentation = normalizeGameExperienceStyle(setupCfg?.experienceStyle) === "living_anime";
       if (debugLogsEnabled) {
         debugLog(
           "[debug/game/storyboard-illustrator] nativeCharacterPrompts=%s settingEnabled=%s providerSupported=%s",
@@ -10320,6 +10354,7 @@ export async function gameRoutes(app: FastifyInstance) {
           durationSeconds: storyboardDurationSeconds,
           aspectRatio: input.aspectRatio,
           generateVideos: generateStoryboardVideos,
+          animePresentation,
           allowedCharacterNames: storyboardCharacterContext.allowedCharacterNames,
           maxVisibleCharacters: storyboardMaxVisibleCharacters,
         });
@@ -10336,6 +10371,7 @@ export async function gameRoutes(app: FastifyInstance) {
           durationSeconds: storyboardDurationSeconds,
           aspectRatio: input.aspectRatio,
           generateVideos: generateStoryboardVideos,
+          animePresentation,
           allowedCharacterNames: storyboardCharacterContext.allowedCharacterNames,
           maxVisibleCharacters: storyboardMaxVisibleCharacters,
         });
@@ -10579,7 +10615,6 @@ export async function gameRoutes(app: FastifyInstance) {
             setting,
             artStyle,
             imagePromptInstructions,
-            negativePromptOverride: generateStoryboardVideos ? GAME_STORYBOARD_COMIC_NEGATIVE_PROMPT : undefined,
             referenceImages: illustrationAssets.referenceImages,
             characterPrompts: illustration.characterPrompts,
             imgSource,
@@ -10595,7 +10630,9 @@ export async function gameRoutes(app: FastifyInstance) {
             debugLog: debugLogsEnabled ? debugLog : undefined,
             promptOverridesStorage,
             size: backgroundSize,
-            useDirectScenePrompt: meta.gameStoryboardUseDirectScenePrompt === true,
+            useDirectScenePrompt:
+              meta.gameStoryboardUseDirectScenePrompt === true ||
+              normalizeGameExperienceStyle(setupCfg?.experienceStyle) === "living_anime",
             preserveFullScenePrompt: true,
             onCompiledPrompt: (compiled) => {
               sentIllustrationPrompt = compiled.prompt;

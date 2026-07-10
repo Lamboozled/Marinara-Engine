@@ -139,7 +139,7 @@ The same section has an **Animated expression length** setting. That belongs to 
 
 ## Storyboards
 
-Game Mode can also build a storyboard, which is an ordered set of keyframe pictures for one game turn. When storyboard animations are turned on, Marinara animates each keyframe into a clip using your video connection and the **Game Video Prompt**. A keyframe is one still frame in that ordered set.
+Game Mode can also build a storyboard, which is an ordered set of keyframe pictures for one game turn. When storyboard animations are turned on, Marinara animates each keyframe into a clip using your video connection and the separate **Storyboard Motion Prompt**. A keyframe is one still frame in that ordered set. This selector can use **Anime Game Video** without changing the prompt for ordinary scene videos.
 
 Storyboards have their own controls and their own guide. See [Game Mode Storyboards](../game/storyboard.md) for the full setup and workflow.
 

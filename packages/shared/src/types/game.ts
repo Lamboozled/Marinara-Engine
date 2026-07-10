@@ -189,6 +189,8 @@ export interface GameSetupConfig {
   gameStoryboardAutoIllustrationsEnabled?: boolean;
   /** Automatically create storyboard keyframe videos after completed GM turns. */
   gameStoryboardAutoGenerationEnabled?: boolean;
+  /** Target number of storyboard keyframes to create per completed GM turn. */
+  gameStoryboardKeyframeCount?: number;
   /** Unified art style prompt applied to all generated images (auto-generated at setup) */
   artStylePrompt?: string;
   /** Optional image style profile applied to generated images in this game. */

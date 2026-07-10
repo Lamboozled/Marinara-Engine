@@ -20,6 +20,11 @@ import {
   type ChatMLMessage,
   DEFAULT_AGENT_PROMPT_TEMPLATE_ID,
   DEFAULT_AGENT_PROMPTS,
+  ANIME_GAME_PROMPT_TEMPLATE,
+  GAME_ANIME_VIDEO_PROMPT_TEMPLATE,
+  GAME_ANIME_VIDEO_PROMPT_TEMPLATE_ID,
+  GAME_STORYBOARD_ANIME_EPISODE_DIRECTOR_PROMPT_TEMPLATE,
+  GAME_STORYBOARD_ANIME_EPISODE_DIRECTOR_PROMPT_TEMPLATE_ID,
   GAME_STORYBOARD_BUILT_IN_PROMPT_TEMPLATES,
   GAME_STORYBOARD_NOVELAI_PROMPT_TEMPLATE,
   GAME_STORYBOARD_NOVELAI_PROMPT_TEMPLATE_ID,
@@ -36,6 +41,12 @@ import {
 } from "../../packages/server/src/services/agents/agent-executor.js";
 import type { ResolvedAgent } from "../../packages/server/src/services/agents/agent-pipeline.js";
 import { loadGameVideoPrompt } from "../../packages/server/src/services/video/game-video-prompt.js";
+import {
+  buildGmSystemPrompt,
+  buildSetupPrompt,
+  resolveGamePromptMacros,
+  type GmPromptContext,
+} from "../../packages/server/src/services/game/gm-prompts.js";
 import { countUserMessagesAfterSummaryAnchor } from "../../packages/server/src/services/conversation/auto-summary.service.js";
 import { buildLegacyDefaultAgentConfigUpdate } from "../../packages/server/src/services/agents/default-prompt-migration.js";
 import { buildMemoryRecallBlock } from "../../packages/server/src/services/generation/memory-recall-context.js";
@@ -840,6 +851,64 @@ const cases: RegressionCase[] = [
     },
   },
   {
+    name: "Anime Game presentation keeps defaults opt-in and keyframe-aware",
+    run() {
+      const baseContext: GmPromptContext = {
+        gameActiveState: "exploration",
+        storyArc: null,
+        plotTwists: null,
+        map: null,
+        npcs: [],
+        sessionSummaries: [],
+        sessionNumber: 1,
+        partyNames: ["Mira"],
+        playerName: "Ren",
+        gmCharacterCard: null,
+        difficulty: "normal",
+        genre: "fantasy",
+        setting: "a dungeon city",
+        tone: "heroic",
+      };
+
+      const standardSystem = buildGmSystemPrompt(baseContext);
+      const animeSystem = buildGmSystemPrompt({
+        ...baseContext,
+        experienceStyle: "living_anime",
+        gameStoryboardKeyframeCount: 5,
+      });
+      const animeSetup = buildSetupPrompt({
+        experienceStyle: "living_anime",
+        gameStoryboardKeyframeCount: 5,
+        gameSystemPrompt: "Frame target: {{gameStoryboardKeyframeCount}}.",
+      });
+
+      assert.doesNotMatch(standardSystem, /filmable anime scene/i);
+      assert.match(animeSystem, /filmable anime scene/i);
+      assert.match(animeSystem, /up to 5 distinct visual anchors/i);
+      assert.doesNotMatch(animeSystem, /gameStoryboardKeyframeCount/);
+      assert.match(animeSetup, /Frame target: 5\./);
+      assert.equal(resolveGamePromptMacros("{{ gameStoryboardKeyframeCount }}", 3), "3");
+      assert.match(ANIME_GAME_PROMPT_TEMPLATE, /never pad a short turn/i);
+    },
+  },
+  {
+    name: "Anime storyboard and video presets are focused built-ins",
+    run() {
+      const storyboardPreset = GAME_STORYBOARD_BUILT_IN_PROMPT_TEMPLATES.find(
+        (template) => template.id === GAME_STORYBOARD_ANIME_EPISODE_DIRECTOR_PROMPT_TEMPLATE_ID,
+      );
+
+      assert.equal(storyboardPreset?.name, "Anime Episode Director");
+      assert.equal(storyboardPreset?.promptTemplate, GAME_STORYBOARD_ANIME_EPISODE_DIRECTOR_PROMPT_TEMPLATE);
+      assert.match(storyboardPreset?.promptTemplate ?? "", /single-shot first-frame/i);
+      assert.match(storyboardPreset?.promptTemplate ?? "", /Start:.*Action:.*Camera:.*Environment:.*End:/i);
+      assert.match(storyboardPreset?.promptTemplate ?? "", /first frame must preserve causality/i);
+      assert.match(GAME_ANIME_VIDEO_PROMPT_TEMPLATE, /exact supplied composition/i);
+      assert.match(GAME_ANIME_VIDEO_PROMPT_TEMPLATE, /provider-safe cinematic staging/i);
+      assert.equal(GAME_ANIME_VIDEO_PROMPT_TEMPLATE_ID, "anime-game-video");
+    },
+  },
+  {
     name: "Illustrator defaults to Background without overriding an explicit mode",
     run() {
       const executorSource = readFileSync(
@@ -917,6 +986,10 @@ const cases: RegressionCase[] = [
           durationSeconds: 6,
           aspectRatio: "16:9",
           sourceIllustrationLine: "Use image-123 as the first frame/reference image.",
+          experienceStyleLine: "",
+          motionPlanLine: "",
+          continuityLine: "",
+          transitionLine: "",
         },
       });
 

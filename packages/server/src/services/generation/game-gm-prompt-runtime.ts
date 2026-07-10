@@ -295,6 +295,9 @@ export async function injectGameGmPromptRuntime(args: {
     setting: (setupConfig?.setting as string) || "original",
     tone: (setupConfig?.tone as string) || "balanced",
     experienceStyle: normalizeGameExperienceStyle(setupConfig?.experienceStyle),
+    gameStoryboardKeyframeCount:
+      (args.chatMetadata.gameStoryboardKeyframeCount as number | undefined) ??
+      (setupConfig?.gameStoryboardKeyframeCount as number | undefined),
     rating: (setupConfig?.rating as "sfw" | "nsfw") || "sfw",
     campaignPlan: gameBlueprint?.campaignPlan ?? null,
     canGenerateBackgrounds:
