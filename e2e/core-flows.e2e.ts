@@ -588,7 +588,10 @@ test("Noodle reply notifications focus the actionable timeline reply", async ({ 
     await page.locator('[data-tour="noodle-tab"]').click();
 
     const noodle = page.locator('[data-component="NoodleView"]');
-    await noodle.getByRole("button", { name: "Noodle notifications" }).click();
+    const notificationsButton = noodle.getByRole("button", { name: "Noodle notifications" });
+    await expect(notificationsButton.locator('[data-component="NoodleView.NotificationBadge"]')).toBeVisible();
+    await notificationsButton.click();
+    await expect(noodle.locator('[data-component="NoodleView.NotificationBadge"]')).toHaveCount(0);
     await noodle.getByRole("button", { name: "Replies", exact: true }).click();
 
     const notification = noodle.locator(`[data-noodle-notification-target="${reply.id}"]`);
@@ -600,6 +603,23 @@ test("Noodle reply notifications focus the actionable timeline reply", async ({ 
     await expect(focusedReply).toBeFocused();
     await expect(focusedReply.getByTitle(/Like comment|Unlike comment/)).toBeVisible();
     await expect(focusedReply.getByTitle("Reply")).toBeVisible();
+
+    await focusedReply.getByTitle("Reply").click();
+    const nestedComposer = noodle.locator(
+      `[data-component="NoodleView.ReplyComposer"][data-noodle-reply-parent-id="${reply.id}"]`,
+    );
+    await expect(nestedComposer).toBeVisible();
+    await expect(nestedComposer).toContainText("Replying to");
+    const [replyRect, composerRect] = await Promise.all([focusedReply.boundingBox(), nestedComposer.boundingBox()]);
+    expect(replyRect).not.toBeNull();
+    expect(composerRect).not.toBeNull();
+    expect(composerRect!.y).toBeGreaterThanOrEqual(replyRect!.y + replyRect!.height - 1);
+    expect(
+      await nestedComposer.evaluate((composer, interactionId) => {
+        const target = document.querySelector(`[data-noodle-interaction-id="${interactionId}"]`);
+        return Boolean(target && target.compareDocumentPosition(composer) & Node.DOCUMENT_POSITION_FOLLOWING);
+      }, reply.id),
+    ).toBe(true);
 
     expect(errors).toEqual([]);
   } finally {

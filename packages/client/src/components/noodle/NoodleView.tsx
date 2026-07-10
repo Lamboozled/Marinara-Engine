@@ -32,6 +32,7 @@ import {
 } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
+  Fragment,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -105,6 +106,7 @@ const iconButtonClass =
 const NOODLE_BLUE = "#7EA7FF";
 const NOODLE_ICON_SCOPE_CLASS = "[&_svg]:!text-[var(--noodle-blue)]";
 const NOODLE_LOGO_SRC = "/noodle-klusek.png";
+const NOODLE_NOTIFICATIONS_READ_AT_KEY = "notificationsReadAt";
 const NOODLE_INVITE_PAGE_SIZE = 50;
 const NOODLE_PERSONA_SWITCHER_PAGE_SIZE = 5;
 const NOODLE_CARRYOVER_TARGETS: NoodleCarryoverTarget[] = ["conversation", "roleplay", "game"];
@@ -815,6 +817,7 @@ export function NoodleView() {
   const [imageLightbox, setImageLightbox] = useState<ChatImage | null>(null);
   const [notificationFocusTarget, setNotificationFocusTarget] = useState<NoodleNotificationFocusTarget | null>(null);
   const [highlightedInteractionId, setHighlightedInteractionId] = useState<string | null>(null);
+  const [notificationReadOverrides, setNotificationReadOverrides] = useState<Record<string, string>>({});
   const [editingRefreshTime, setEditingRefreshTime] = useState<string | null>(null);
   const [refreshTimeDraft, setRefreshTimeDraft] = useState("");
   const [postMenuId, setPostMenuId] = useState<string | null>(null);
@@ -1559,8 +1562,16 @@ export function NoodleView() {
     return () => window.clearTimeout(timeout);
   }, [highlightedInteractionId]);
 
+  const notificationReadAt = personaAccount
+    ? (notificationReadOverrides[personaAccount.id] ??
+      readAccountSetting(personaAccount, NOODLE_NOTIFICATIONS_READ_AT_KEY))
+    : "";
+  const notificationReadTime = Date.parse(notificationReadAt) || 0;
   const notificationCount =
-    notificationLikes.length + notificationFollowAccounts.length + notificationReplyItems.length;
+    notificationLikes.filter((item) => new Date(item.interaction.createdAt).getTime() > notificationReadTime).length +
+    notificationFollowAccounts.filter((account) => new Date(account.updatedAt).getTime() > notificationReadTime)
+      .length +
+    notificationReplyItems.filter((item) => new Date(item.createdAt).getTime() > notificationReadTime).length;
   const notificationBadgeLabel = notificationCount > 99 ? "99+" : String(notificationCount);
   const followableCharacterAccounts = useMemo(
     () =>
@@ -2001,6 +2012,23 @@ export function NoodleView() {
   };
 
   const openNotifications = () => {
+    if (personaAccount) {
+      const readAt = new Date().toISOString();
+      setNotificationReadOverrides((current) => ({ ...current, [personaAccount.id]: readAt }));
+      updateAccount.mutate(
+        {
+          id: personaAccount.id,
+          settings: {
+            ...personaAccount.settings,
+            [NOODLE_NOTIFICATIONS_READ_AT_KEY]: readAt,
+          },
+        },
+        {
+          onError: (error) =>
+            toast.error(error instanceof Error ? error.message : "Could not mark Noodle notifications as read."),
+        },
+      );
+    }
     setActiveNoodleView("notifications");
     setAccountSwitcherOpen(false);
     setMobileDrawerOpen(false);
@@ -2718,6 +2746,145 @@ export function NoodleView() {
     const postRepostPending = reactionPendingFor(post.id, "repost");
     const postReplyPending = createInteractionPendingFor(post.id, "reply", replyParentInteractionId);
     const pollVotePending = createInteractionPendingFor(post.id, "vote");
+    const renderReplyComposer = (nested: boolean) => (
+      <div
+        data-component="NoodleView.ReplyComposer"
+        data-noodle-reply-parent-id={replyParentInteractionId ?? ""}
+        className={cn("border-[var(--noodle-divider)] py-3", nested ? "ml-10 border-b" : "mt-3 border-y")}
+      >
+        {replyParentInteractionId && replyTargetActor && (
+          <p className="mb-2 text-xs text-[var(--muted-foreground)]">
+            Replying to <span className="font-semibold text-[var(--noodle-blue)]">@{replyTargetActor.handle}</span>
+          </p>
+        )}
+        <textarea
+          value={replyText}
+          onChange={(event) => setReplyText(event.target.value)}
+          className={cn(textareaClass, "min-h-16 resize-none bg-transparent")}
+          placeholder="Leave a comment…"
+        />
+        {replyImageUrl && (
+          <div className="relative mt-2 overflow-hidden rounded-xl border border-[var(--noodle-divider)]">
+            <button
+              type="button"
+              onClick={() => setImageLightbox(createNoodleLightboxImage(`reply-draft-${post.id}`, replyImageUrl))}
+              className="block w-full"
+              title="Open attached image"
+            >
+              <img src={replyImageUrl} alt="Attached reply preview" className="max-h-52 w-full object-cover" />
+            </button>
+            <button
+              type="button"
+              onClick={() => setReplyImageUrl("")}
+              className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-full bg-black/65 text-white transition-colors hover:bg-black/80"
+              title="Remove image"
+              aria-label="Remove reply image"
+            >
+              <X size={14} />
+            </button>
+          </div>
+        )}
+        <div className="mt-2 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1">
+            <div ref={replyImageToolRef} className="relative">
+              <NoodleToolButton
+                title="Attach image"
+                active={activeReplyComposerTool === "image"}
+                onClick={() => setActiveReplyComposerTool((current) => (current === "image" ? null : "image"))}
+              >
+                <ImageIcon size={17} />
+              </NoodleToolButton>
+            </div>
+            <div ref={replyMediaToolRef} className="relative">
+              <NoodleToolButton
+                title="Emoji, GIFs and stickers"
+                active={activeReplyComposerTool === "media"}
+                onClick={() => setActiveReplyComposerTool((current) => (current === "media" ? null : "media"))}
+              >
+                <Smile size={17} />
+              </NoodleToolButton>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={clearReplyComposer}
+              className="h-8 rounded-full px-3 text-xs font-semibold text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="h-8 rounded-full bg-[var(--noodle-blue)] px-4 text-xs font-bold text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={(!replyText.trim() && !replyImageUrl.trim()) || postReplyPending}
+              onClick={() => submitReply(post)}
+            >
+              {postReplyPending ? "Replying…" : "Reply"}
+            </button>
+          </div>
+        </div>
+        {activeReplyComposerTool === "image" && (
+          <NoodleToolPopover
+            title="Attach image"
+            anchorRef={replyImageToolRef}
+            onClose={() => setActiveReplyComposerTool(null)}
+            wide
+          >
+            <div className="space-y-3">
+              <button
+                type="button"
+                onClick={() => replyImageFileRef.current?.click()}
+                disabled={uploadGlobalImages.isPending}
+                className="h-9 w-full rounded-full bg-[var(--noodle-blue)] px-4 text-xs font-bold text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {uploadGlobalImages.isPending ? "Uploading..." : "Upload From Device"}
+              </button>
+              <div className="flex items-center gap-2 text-[0.625rem] font-semibold uppercase tracking-normal text-[var(--muted-foreground)]">
+                <span className="h-px flex-1 bg-[var(--noodle-divider)]" />
+                or
+                <span className="h-px flex-1 bg-[var(--noodle-divider)]" />
+              </div>
+              <label className="block space-y-1.5">
+                <span className={labelClass}>Image URL</span>
+                <input
+                  value={replyImageUrlDraft}
+                  onChange={(event) => setReplyImageUrlDraft(event.target.value)}
+                  placeholder="https://..."
+                  className={fieldClass}
+                />
+              </label>
+              <button
+                type="button"
+                onClick={applyReplyImageUrl}
+                className="h-9 w-full rounded-full border border-[var(--noodle-divider)] px-4 text-xs font-bold text-[var(--noodle-blue)] transition-colors hover:bg-[var(--noodle-blue)]/10"
+              >
+                Attach URL
+              </button>
+            </div>
+          </NoodleToolPopover>
+        )}
+        {activeReplyComposerTool === "media" && (
+          <NoodleAnchoredPopover anchorRef={replyMediaToolRef} wide>
+            <ConversationMediaPickerPanel
+              tabs={NOODLE_MEDIA_PICKER_TABS}
+              activeTab={mediaPickerTab}
+              onActiveTabChange={setMediaPickerTab}
+              onClose={() => setActiveReplyComposerTool(null)}
+              onEmojiSelect={appendToReply}
+              onGifSelect={(gifUrl) => {
+                setReplyImageUrl(gifUrl);
+                setActiveReplyComposerTool(null);
+              }}
+              onStickerSelect={(name) => {
+                appendToReply(`sticker:${name}:`);
+                setActiveReplyComposerTool(null);
+              }}
+              className="w-full !border-[var(--marinara-chat-chrome-panel-border)] !bg-[var(--background)] !text-[var(--foreground)] shadow-2xl shadow-black/35"
+            />
+          </NoodleAnchoredPopover>
+        )}
+      </div>
+    );
     return (
       <article
         key={post.id}
@@ -2888,144 +3055,7 @@ export function NoodleView() {
               </button>
             </div>
 
-            {replyPostId === post.id && (
-              <div className="mt-3 border-y border-[var(--noodle-divider)] py-3">
-                {replyParentInteractionId && replyTargetActor && (
-                  <p className="mb-2 text-xs text-[var(--muted-foreground)]">
-                    Replying to{" "}
-                    <span className="font-semibold text-[var(--noodle-blue)]">@{replyTargetActor.handle}</span>
-                  </p>
-                )}
-                <textarea
-                  value={replyText}
-                  onChange={(event) => setReplyText(event.target.value)}
-                  className={cn(textareaClass, "min-h-16 resize-none bg-transparent")}
-                  placeholder="Leave a comment…"
-                />
-                {replyImageUrl && (
-                  <div className="relative mt-2 overflow-hidden rounded-xl border border-[var(--noodle-divider)]">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setImageLightbox(createNoodleLightboxImage(`reply-draft-${post.id}`, replyImageUrl))
-                      }
-                      className="block w-full"
-                      title="Open attached image"
-                    >
-                      <img src={replyImageUrl} alt="Attached reply preview" className="max-h-52 w-full object-cover" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setReplyImageUrl("")}
-                      className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-full bg-black/65 text-white transition-colors hover:bg-black/80"
-                      title="Remove image"
-                      aria-label="Remove reply image"
-                    >
-                      <X size={14} />
-                    </button>
-                  </div>
-                )}
-                <div className="mt-2 flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-1">
-                    <div ref={replyImageToolRef} className="relative">
-                      <NoodleToolButton
-                        title="Attach image"
-                        active={activeReplyComposerTool === "image"}
-                        onClick={() => setActiveReplyComposerTool((current) => (current === "image" ? null : "image"))}
-                      >
-                        <ImageIcon size={17} />
-                      </NoodleToolButton>
-                    </div>
-                    <div ref={replyMediaToolRef} className="relative">
-                      <NoodleToolButton
-                        title="Emoji, GIFs and stickers"
-                        active={activeReplyComposerTool === "media"}
-                        onClick={() => setActiveReplyComposerTool((current) => (current === "media" ? null : "media"))}
-                      >
-                        <Smile size={17} />
-                      </NoodleToolButton>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={clearReplyComposer}
-                      className="h-8 rounded-full px-3 text-xs font-semibold text-[var(--muted-foreground)] transition-colors hover:bg-[var(--accent)] hover:text-[var(--foreground)]"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="button"
-                      className="h-8 rounded-full bg-[var(--noodle-blue)] px-4 text-xs font-bold text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-                      disabled={(!replyText.trim() && !replyImageUrl.trim()) || postReplyPending}
-                      onClick={() => submitReply(post)}
-                    >
-                      {postReplyPending ? "Replying…" : "Reply"}
-                    </button>
-                  </div>
-                </div>
-                {activeReplyComposerTool === "image" && (
-                  <NoodleToolPopover
-                    title="Attach image"
-                    anchorRef={replyImageToolRef}
-                    onClose={() => setActiveReplyComposerTool(null)}
-                    wide
-                  >
-                    <div className="space-y-3">
-                      <button
-                        type="button"
-                        onClick={() => replyImageFileRef.current?.click()}
-                        disabled={uploadGlobalImages.isPending}
-                        className="h-9 w-full rounded-full bg-[var(--noodle-blue)] px-4 text-xs font-bold text-zinc-950 transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        {uploadGlobalImages.isPending ? "Uploading..." : "Upload From Device"}
-                      </button>
-                      <div className="flex items-center gap-2 text-[0.625rem] font-semibold uppercase tracking-normal text-[var(--muted-foreground)]">
-                        <span className="h-px flex-1 bg-[var(--noodle-divider)]" />
-                        or
-                        <span className="h-px flex-1 bg-[var(--noodle-divider)]" />
-                      </div>
-                      <label className="block space-y-1.5">
-                        <span className={labelClass}>Image URL</span>
-                        <input
-                          value={replyImageUrlDraft}
-                          onChange={(event) => setReplyImageUrlDraft(event.target.value)}
-                          placeholder="https://..."
-                          className={fieldClass}
-                        />
-                      </label>
-                      <button
-                        type="button"
-                        onClick={applyReplyImageUrl}
-                        className="h-9 w-full rounded-full border border-[var(--noodle-divider)] px-4 text-xs font-bold text-[var(--noodle-blue)] transition-colors hover:bg-[var(--noodle-blue)]/10"
-                      >
-                        Attach URL
-                      </button>
-                    </div>
-                  </NoodleToolPopover>
-                )}
-                {activeReplyComposerTool === "media" && (
-                  <NoodleAnchoredPopover anchorRef={replyMediaToolRef} wide>
-                    <ConversationMediaPickerPanel
-                      tabs={NOODLE_MEDIA_PICKER_TABS}
-                      activeTab={mediaPickerTab}
-                      onActiveTabChange={setMediaPickerTab}
-                      onClose={() => setActiveReplyComposerTool(null)}
-                      onEmojiSelect={appendToReply}
-                      onGifSelect={(gifUrl) => {
-                        setReplyImageUrl(gifUrl);
-                        setActiveReplyComposerTool(null);
-                      }}
-                      onStickerSelect={(name) => {
-                        appendToReply(`sticker:${name}:`);
-                        setActiveReplyComposerTool(null);
-                      }}
-                      className="w-full !border-[var(--marinara-chat-chrome-panel-border)] !bg-[var(--background)] !text-[var(--foreground)] shadow-2xl shadow-black/35"
-                    />
-                  </NoodleAnchoredPopover>
-                )}
-              </div>
-            )}
+            {replyPostId === post.id && !replyParentInteractionId && renderReplyComposer(false)}
 
             {replies.length > 0 && (
               <div className="mt-3 border-t border-[var(--noodle-divider)]">
@@ -3045,97 +3075,103 @@ export function NoodleView() {
                     ? replyLikes.some((interaction) => interaction.actorAccountId === personaAccount.id)
                     : false;
                   return (
-                    <div
-                      key={reply.id}
-                      data-noodle-interaction-id={reply.id}
-                      tabIndex={-1}
-                      className={cn(
-                        "grid grid-cols-[2rem_minmax(0,1fr)] items-start gap-2 border-b border-[var(--noodle-divider)] bg-transparent py-3 text-xs outline-none transition-shadow duration-300 last:border-b-0",
-                        highlightedInteractionId === reply.id &&
-                          "rounded-lg ring-1 ring-inset ring-[var(--noodle-blue)]/70",
-                      )}
-                    >
-                      <button
-                        type="button"
-                        onClick={() => openProfile(actorAccount)}
-                        disabled={!actorAccount}
-                        className="h-8 w-8 shrink-0 rounded-full text-left transition-opacity enabled:hover:opacity-80 disabled:cursor-default"
-                        title={actorAccount ? `View @${actorAccount.handle}` : undefined}
+                    <Fragment key={reply.id}>
+                      <div
+                        data-noodle-interaction-id={reply.id}
+                        tabIndex={-1}
+                        className={cn(
+                          "grid grid-cols-[2rem_minmax(0,1fr)] items-start gap-2 border-b border-[var(--noodle-divider)] bg-transparent py-3 text-xs outline-none transition-shadow duration-300 last:border-b-0",
+                          highlightedInteractionId === reply.id &&
+                            "rounded-lg ring-1 ring-inset ring-[var(--noodle-blue)]/70",
+                        )}
                       >
-                        <Avatar
-                          account={{
-                            displayName: actor?.displayName ?? "Noodle User",
-                            avatarUrl: actor?.avatarUrl ?? null,
-                          }}
-                          size="sm"
-                        />
-                      </button>
-                      <div className="min-w-0 bg-transparent">
-                        <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5">
-                          <button
-                            type="button"
-                            onClick={() => openProfile(actorAccount)}
-                            disabled={!actorAccount}
-                            className="max-w-full truncate font-semibold transition-colors enabled:hover:text-[var(--noodle-blue)] disabled:cursor-default"
-                          >
-                            {actor?.displayName ?? "Noodle User"}
-                          </button>
-                          <span className="truncate text-[var(--muted-foreground)]">@{actor?.handle ?? "noodle"}</span>
-                          <span className="text-[var(--muted-foreground)]">· {formatTime(reply.createdAt)}</span>
-                        </div>
-                        {parentActor && (
-                          <p className="mt-0.5 text-[var(--muted-foreground)]">
-                            Replying to <span className="text-[var(--noodle-blue)]">@{parentActor.handle}</span>
-                          </p>
-                        )}
-                        {reply.content && <p className="mt-1 whitespace-pre-wrap text-sm leading-5">{reply.content}</p>}
-                        {reply.imageUrl && (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setImageLightbox(
-                                createNoodleLightboxImage(reply.id, reply.imageUrl!, reply.content ?? ""),
-                              )
-                            }
-                            className="mt-2 block w-full overflow-hidden rounded-xl text-left ring-offset-[var(--background)] transition-opacity hover:opacity-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--noodle-blue)] focus-visible:ring-offset-2"
-                            title="Open image"
-                            aria-label="Open comment image"
-                          >
-                            <img
-                              src={reply.imageUrl}
-                              alt={`Image in ${actor?.displayName ?? "Noodle user"}'s comment`}
-                              className="max-h-72 w-full object-cover"
-                            />
-                          </button>
-                        )}
-                        <div className="mt-1.5 flex items-center gap-3">
-                          <button
-                            type="button"
-                            onClick={() => reactToReply(post, reply, likedReplyByPersona)}
-                            disabled={!personaAccount || reactionPendingFor(post.id, "like", reply.id)}
-                            className={cn(
-                              "inline-flex h-7 items-center gap-1 rounded-full px-2 font-medium text-[var(--noodle-blue)] transition-colors hover:bg-[var(--noodle-blue)]/10 disabled:cursor-not-allowed disabled:opacity-50",
-                              likedReplyByPersona && "bg-[var(--noodle-blue)]/10",
-                            )}
-                            title={likedReplyByPersona ? "Unlike comment" : "Like comment"}
-                            aria-busy={reactionPendingFor(post.id, "like", reply.id)}
-                          >
-                            <Heart size={14} />
-                            {replyLikes.length > 0 && replyLikes.length}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => openReplyComposer(post.id, reply.id)}
-                            disabled={!personaAccount}
-                            className="inline-flex h-7 w-7 items-center justify-center rounded-full text-[var(--noodle-blue)] transition-colors hover:bg-[var(--noodle-blue)]/10 disabled:cursor-not-allowed disabled:opacity-50"
-                            title="Reply"
-                            aria-label="Reply"
-                          >
-                            <MessageCircle size={14} />
-                          </button>
+                        <button
+                          type="button"
+                          onClick={() => openProfile(actorAccount)}
+                          disabled={!actorAccount}
+                          className="h-8 w-8 shrink-0 rounded-full text-left transition-opacity enabled:hover:opacity-80 disabled:cursor-default"
+                          title={actorAccount ? `View @${actorAccount.handle}` : undefined}
+                        >
+                          <Avatar
+                            account={{
+                              displayName: actor?.displayName ?? "Noodle User",
+                              avatarUrl: actor?.avatarUrl ?? null,
+                            }}
+                            size="sm"
+                          />
+                        </button>
+                        <div className="min-w-0 bg-transparent">
+                          <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5">
+                            <button
+                              type="button"
+                              onClick={() => openProfile(actorAccount)}
+                              disabled={!actorAccount}
+                              className="max-w-full truncate font-semibold transition-colors enabled:hover:text-[var(--noodle-blue)] disabled:cursor-default"
+                            >
+                              {actor?.displayName ?? "Noodle User"}
+                            </button>
+                            <span className="truncate text-[var(--muted-foreground)]">
+                              @{actor?.handle ?? "noodle"}
+                            </span>
+                            <span className="text-[var(--muted-foreground)]">· {formatTime(reply.createdAt)}</span>
+                          </div>
+                          {parentActor && (
+                            <p className="mt-0.5 text-[var(--muted-foreground)]">
+                              Replying to <span className="text-[var(--noodle-blue)]">@{parentActor.handle}</span>
+                            </p>
+                          )}
+                          {reply.content && (
+                            <p className="mt-1 whitespace-pre-wrap text-sm leading-5">{reply.content}</p>
+                          )}
+                          {reply.imageUrl && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setImageLightbox(
+                                  createNoodleLightboxImage(reply.id, reply.imageUrl!, reply.content ?? ""),
+                                )
+                              }
+                              className="mt-2 block w-full overflow-hidden rounded-xl text-left ring-offset-[var(--background)] transition-opacity hover:opacity-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--noodle-blue)] focus-visible:ring-offset-2"
+                              title="Open image"
+                              aria-label="Open comment image"
+                            >
+                              <img
+                                src={reply.imageUrl}
+                                alt={`Image in ${actor?.displayName ?? "Noodle user"}'s comment`}
+                                className="max-h-72 w-full object-cover"
+                              />
+                            </button>
+                          )}
+                          <div className="mt-1.5 flex items-center gap-3">
+                            <button
+                              type="button"
+                              onClick={() => reactToReply(post, reply, likedReplyByPersona)}
+                              disabled={!personaAccount || reactionPendingFor(post.id, "like", reply.id)}
+                              className={cn(
+                                "inline-flex h-7 items-center gap-1 rounded-full px-2 font-medium text-[var(--noodle-blue)] transition-colors hover:bg-[var(--noodle-blue)]/10 disabled:cursor-not-allowed disabled:opacity-50",
+                                likedReplyByPersona && "bg-[var(--noodle-blue)]/10",
+                              )}
+                              title={likedReplyByPersona ? "Unlike comment" : "Like comment"}
+                              aria-busy={reactionPendingFor(post.id, "like", reply.id)}
+                            >
+                              <Heart size={14} />
+                              {replyLikes.length > 0 && replyLikes.length}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => openReplyComposer(post.id, reply.id)}
+                              disabled={!personaAccount}
+                              className="inline-flex h-7 w-7 items-center justify-center rounded-full text-[var(--noodle-blue)] transition-colors hover:bg-[var(--noodle-blue)]/10 disabled:cursor-not-allowed disabled:opacity-50"
+                              title="Reply"
+                              aria-label="Reply"
+                            >
+                              <MessageCircle size={14} />
+                            </button>
+                          </div>
                         </div>
                       </div>
-                    </div>
+                      {replyPostId === post.id && replyParentInteractionId === reply.id && renderReplyComposer(true)}
+                    </Fragment>
                   );
                 })}
               </div>
@@ -3784,7 +3820,10 @@ export function NoodleView() {
                   <span className="relative flex h-6 w-6 shrink-0 items-center justify-center">
                     <Bell size={22} className="!text-[var(--noodle-blue)]" />
                     {notificationCount > 0 && (
-                      <span className="absolute -right-2 -top-2 min-w-4 rounded-full bg-[var(--noodle-blue)] px-1 text-center text-[0.58rem] font-black leading-4 text-zinc-950 ring-2 ring-[var(--background)]">
+                      <span
+                        data-component="NoodleView.NotificationBadge"
+                        className="absolute -right-2 -top-2 min-w-4 rounded-full bg-[var(--noodle-blue)] px-1 text-center text-[0.58rem] font-black leading-4 text-zinc-950 ring-2 ring-[var(--background)]"
+                      >
                         {notificationBadgeLabel}
                       </span>
                     )}
@@ -4530,7 +4569,10 @@ export function NoodleView() {
             <span className="relative flex h-6 w-6 items-center justify-center">
               <Bell size={22} strokeWidth={activeNoodleView === "notifications" ? 2.8 : 2} />
               {notificationCount > 0 && (
-                <span className="absolute -right-2 -top-2 min-w-4 rounded-full bg-[var(--noodle-blue)] px-1 text-center text-[0.58rem] font-black leading-4 text-zinc-950 ring-2 ring-[var(--background)]">
+                <span
+                  data-component="NoodleView.NotificationBadge"
+                  className="absolute -right-2 -top-2 min-w-4 rounded-full bg-[var(--noodle-blue)] px-1 text-center text-[0.58rem] font-black leading-4 text-zinc-950 ring-2 ring-[var(--background)]"
+                >
                   {notificationBadgeLabel}
                 </span>
               )}

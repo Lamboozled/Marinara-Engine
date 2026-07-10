@@ -221,11 +221,25 @@ export const noodleGeneratedPostSchema = z.object({
 export const noodleGeneratedInteractionSchema = z
   .object({
     actorEntityId: z.string().min(1),
-    targetTempId: z.string().min(1).optional(),
-    targetPostId: z.string().min(1).optional(),
+    targetTempId: z
+      .string()
+      .min(1)
+      .nullish()
+      .transform((value) => value ?? undefined),
+    targetPostId: z
+      .string()
+      .min(1)
+      .nullish()
+      .transform((value) => value ?? undefined),
     type: noodleInteractionTypeSchema,
     content: z.string().max(2000).nullable().optional(),
-    pollOptionIndex: z.number().int().min(0).max(3).optional(),
+    pollOptionIndex: z
+      .number()
+      .int()
+      .min(0)
+      .max(3)
+      .nullish()
+      .transform((value) => value ?? undefined),
   })
   .superRefine((interaction, ctx) => {
     if (interaction.type === "vote" && interaction.pollOptionIndex === undefined) {

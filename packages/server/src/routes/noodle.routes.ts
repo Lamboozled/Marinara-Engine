@@ -656,6 +656,8 @@ async function buildRefreshPrompt(input: {
     "- Random user accounts are not characters. Treat them as ordinary fictional Noodle profiles that may follow, like, reply, repost, gossip, or casually join public drama.",
     "- Structured actions are limited to posts, polls, follows, likes, reposts, replies, and poll votes.",
     "- Generated interactions may target existing posts included in this prompt or posts you create in this response.",
+    "- For each interaction, set either targetTempId or targetPostId. The unused target field may be omitted or null.",
+    "- pollOptionIndex is required only for votes and must be a zero-based integer. For other interactions, omit it or use null.",
     "- An exact @handle in post or reply text tags that active account. Preserve the @handle exactly when mentioning someone.",
     ...noodleTimelineFeatureInstructions(input.settings),
     "- Return JSON only. No prose outside the JSON object.",
