@@ -9049,7 +9049,7 @@ export async function gameRoutes(app: FastifyInstance) {
 
   // ── POST /game/party-turn ──
   // Generates the party's response to the latest GM narration.
-  // Uses the character connection (or falls back to GM connection).
+  // Uses the explicit override, else the chat/GM connection (there is no character-connection tier).
   // Returns parsed PartyDialogueLine[] and the raw response text.
   const partyTurnSchema = z.object({
     chatId: z.string().min(1),
