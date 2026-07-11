@@ -66,6 +66,7 @@ import { GenerationReplayDetailsModal, hasGenerationReplayDetails } from "./Gene
 import type { ChatImage } from "../../hooks/use-gallery";
 import { ChatImageLightbox } from "./ChatImageLightbox";
 import { SwipeJumpControl } from "./SwipeJumpControl";
+import { toast } from "sonner";
 import {
   NEUTRAL_PANEL_HEADER,
   NEUTRAL_PANEL_SCROLL_AREA,
@@ -1314,6 +1315,8 @@ export const ChatMessage = memo(function ChatMessage({
         updated?.content ?? targetContent,
         updated?.activeSwipeIndex ?? message.activeSwipeIndex ?? null,
       );
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not switch message versions.");
     } finally {
       setSwitchingRewriteVersion(false);
       qc.invalidateQueries({ queryKey: msgKey });

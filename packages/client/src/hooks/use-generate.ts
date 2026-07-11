@@ -1355,7 +1355,11 @@ export function useGenerate() {
         pageWasHiddenDuringStream = true;
       };
       const recordBackgroundedStream = () => {
-        if (document.visibilityState !== "visible") markPageHidden();
+        if (document.visibilityState === "visible") return;
+        markPageHidden();
+        // Browsers pause requestAnimationFrame in background tabs. Finish the
+        // queued text immediately so post-processing cannot wait indefinitely.
+        if (pendingText.length > 0 || typingActive) flushTypewriterBuffer();
       };
       if (canInspectPageFocus) {
         document.addEventListener("visibilitychange", recordBackgroundedStream);
@@ -1364,6 +1368,10 @@ export function useGenerate() {
 
       const waitForTypewriterDrain = async () => {
         if (!streamingEnabled || !shouldDisplayRawStream || (pendingText.length === 0 && !typingActive)) return;
+        if (canInspectPageFocus && document.visibilityState !== "visible") {
+          recordBackgroundedStream();
+          return;
+        }
         await new Promise<void>((resolve) => {
           if (pendingText.length === 0 && !typingActive) {
             resolve();
@@ -1756,16 +1764,7 @@ export function useGenerate() {
               if (turn.index > 0) {
                 flushLeadingSpeakerPrefix();
                 // Drain typewriter for the previous character (only if streaming)
-                if (streamingEnabled && (pendingText.length > 0 || typingActive)) {
-                  await new Promise<void>((resolve) => {
-                    if (pendingText.length === 0 && !typingActive) {
-                      resolve();
-                      return;
-                    }
-                    typewriterDone = resolve;
-                    startTypewriter();
-                  });
-                }
+                await waitForTypewriterDrain();
                 const previousGroupMessage = latestAssistantMessage(persistedMessages.values());
 
                 // Pick up the just-saved message from the previous character
@@ -2469,14 +2468,7 @@ export function useGenerate() {
         flushThinkingStreamFilter();
         flushLeadingSpeakerPrefix();
         if (streamingEnabled && shouldDisplayRawStream && isActiveChat() && (pendingText.length > 0 || typingActive)) {
-          await new Promise<void>((resolve) => {
-            if (pendingText.length === 0 && !typingActive) {
-              resolve();
-              return;
-            }
-            typewriterDone = resolve;
-            startTypewriter();
-          });
+          await waitForTypewriterDrain();
         }
         // Final flush — ensure full content is set (only for the viewed chat)
         if (streamingEnabled && shouldDisplayRawStream) {

@@ -174,6 +174,14 @@ test("rewrite shield switches repeatedly between original and rewritten message 
     await page.getByTitle("Show rewritten version").click();
     await expect(page.getByText(rewrittenText, { exact: true })).toBeVisible();
     await expect(page.getByTitle("Show original before rewrite")).toBeAttached();
+
+    await page.getByText(rewrittenText, { exact: true }).hover();
+    await page.getByTitle("Show original before rewrite").click();
+    await expect(page.getByText(originalText, { exact: true })).toBeVisible();
+
+    await page.getByText(originalText, { exact: true }).hover();
+    await page.getByTitle("Show rewritten version").click();
+    await expect(page.getByText(rewrittenText, { exact: true })).toBeVisible();
   } finally {
     await page.request.delete(`/api/chats/${chat.id}`);
   }
@@ -435,7 +443,7 @@ test("Lorebook Save keeps Overview stable while the updated detail cache settles
 
     await page.getByRole("button", { name: "Save", exact: true }).click();
     await expect(page.getByText("Lorebook saved")).toBeVisible();
-    await page.waitForTimeout(150);
+    await page.waitForTimeout(900);
     await expect(disabledGlobalSwitch).toBeVisible();
     await expect(disabledGlobalSwitch).not.toBeChecked();
 
