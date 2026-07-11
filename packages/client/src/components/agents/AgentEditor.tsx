@@ -3570,7 +3570,7 @@ export function AgentEditor() {
                   ))}
                 </div>
                 <p className="mt-2 text-[0.625rem] text-[var(--muted-foreground)]">
-                  Tool-use must also be enabled per chat via Chat Settings → "Enable Function Calling".
+                  Tool-use must also be enabled per chat via Chat Settings → Function Calling → "Enable Tool Use".
                 </p>
               </>
             )}
