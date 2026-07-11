@@ -1251,6 +1251,102 @@ test("Noodle reply notifications focus the actionable timeline reply", async ({ 
   }
 });
 
+test("Noodle only bumps posts when another account replies to the persona's comment", async ({ page }, testInfo) => {
+  test.skip(!testInfo.project.name.includes("desktop"), "Timeline bump ordering is covered on desktop.");
+
+  const errors = collectUnexpectedErrors(page);
+  const activePersonaResponse = await page.request.get("/api/characters/personas/active");
+  const activePersona = activePersonaResponse.ok()
+    ? ((await activePersonaResponse.json()) as { id?: string } | null)
+    : null;
+  let personaId = activePersona?.id ?? null;
+  let createdPersonaId: string | null = null;
+  if (!personaId) {
+    const personaResponse = await page.request.post("/api/characters/personas", {
+      data: { name: "Noodle Bump Regression", description: "Temporary browser regression persona." },
+    });
+    expect(personaResponse.ok()).toBe(true);
+    const createdPersona = (await personaResponse.json()) as { id: string };
+    personaId = createdPersona.id;
+    createdPersonaId = createdPersona.id;
+    const activateResponse = await page.request.put(`/api/characters/personas/${createdPersona.id}/activate`);
+    expect(activateResponse.ok()).toBe(true);
+  }
+
+  await page.request.get("/api/noodle");
+  const olderPostResponse = await page.request.post("/api/noodle/posts", {
+    data: {
+      authorKind: "character",
+      authorEntityId: "__professor_mari__",
+      content: `Older timeline bump regression ${Date.now()}`,
+    },
+  });
+  expect(olderPostResponse.ok()).toBe(true);
+  const olderPost = (await olderPostResponse.json()) as { id: string };
+  await page.waitForTimeout(10);
+  const newerPostResponse = await page.request.post("/api/noodle/posts", {
+    data: {
+      authorKind: "character",
+      authorEntityId: "__professor_mari__",
+      content: `Newer timeline bump regression ${Date.now()}`,
+    },
+  });
+  expect(newerPostResponse.ok()).toBe(true);
+  const newerPost = (await newerPostResponse.json()) as { id: string };
+
+  try {
+    const personaReplyResponse = await page.request.post(`/api/noodle/posts/${olderPost.id}/interactions`, {
+      data: {
+        actorKind: "persona",
+        actorEntityId: personaId,
+        type: "reply",
+        content: "My comment should not bump this post.",
+      },
+    });
+    expect(personaReplyResponse.ok()).toBe(true);
+    const personaReply = (await personaReplyResponse.json()) as { id: string };
+
+    const readRegressionOrder = async () =>
+      page.locator("[data-noodle-post-id]").evaluateAll(
+        (elements, postIds) =>
+          elements
+            .map((element) => element.getAttribute("data-noodle-post-id"))
+            .filter((postId): postId is string => Boolean(postId) && postIds.includes(postId)),
+        [olderPost.id, newerPost.id],
+      );
+
+    await page.goto("/");
+    await page.locator('[data-tour="noodle-tab"]').click();
+    await expect(page.locator(`[data-noodle-post-id="${olderPost.id}"]`)).toBeVisible();
+    await expect.poll(readRegressionOrder).toEqual([newerPost.id, olderPost.id]);
+
+    const characterReplyResponse = await page.request.post(`/api/noodle/posts/${olderPost.id}/interactions`, {
+      data: {
+        actorKind: "character",
+        actorEntityId: "__professor_mari__",
+        type: "reply",
+        content: "Professor Mari directly replied to the persona comment.",
+        parentInteractionId: personaReply.id,
+      },
+    });
+    expect(characterReplyResponse.ok()).toBe(true);
+
+    await page.reload();
+    await page.locator('[data-tour="noodle-tab"]').click();
+    await expect(page.locator(`[data-noodle-post-id="${olderPost.id}"]`)).toBeVisible();
+    await expect.poll(readRegressionOrder).toEqual([olderPost.id, newerPost.id]);
+    expect(errors).toEqual([]);
+  } finally {
+    await page.request.delete(`/api/noodle/posts/${olderPost.id}`, { timeout: 5_000 }).catch(() => undefined);
+    await page.request.delete(`/api/noodle/posts/${newerPost.id}`, { timeout: 5_000 }).catch(() => undefined);
+    if (createdPersonaId) {
+      await page.request
+        .delete(`/api/characters/personas/${createdPersonaId}`, { timeout: 5_000 })
+        .catch(() => undefined);
+    }
+  }
+});
+
 test("Noodle mobile shell keeps navigation usable across every view", async ({ page }, testInfo) => {
   test.skip(!testInfo.project.name.includes("mobile"), "The responsive Noodle shell is covered on mobile.");
 

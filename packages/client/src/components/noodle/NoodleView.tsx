@@ -1522,30 +1522,42 @@ export function NoodleView() {
       ),
     [accounts, folderInvitedCharacterIds, followedAccountIds],
   );
-  const latestReplyAtByPostId = useMemo(() => {
+  const latestExternalReplyToPersonaCommentAtByPostId = useMemo(() => {
     const latest = new Map<string, number>();
+    if (!personaAccount) return latest;
     for (const interaction of interactions) {
-      if (interaction.type !== "reply") continue;
+      if (
+        interaction.type !== "reply" ||
+        interaction.actorAccountId === personaAccount.id ||
+        !interaction.parentInteractionId
+      ) {
+        continue;
+      }
+      const parentComment = interactionById.get(interaction.parentInteractionId);
+      if (parentComment?.type !== "reply" || parentComment.actorAccountId !== personaAccount.id) continue;
       const createdAt = new Date(interaction.createdAt).getTime();
       if (!Number.isFinite(createdAt)) continue;
       latest.set(interaction.postId, Math.max(latest.get(interaction.postId) ?? 0, createdAt));
     }
     return latest;
-  }, [interactions]);
+  }, [interactionById, interactions, personaAccount]);
   const baseTimelinePosts = useMemo(() => {
     const visiblePosts =
       timelineTab === "following"
         ? posts.filter((post) => followedCharacterAccountIds.has(post.authorAccountId))
         : posts;
     return visiblePosts.slice().sort((left, right) => {
-      const leftActivityAt = Math.max(new Date(left.createdAt).getTime() || 0, latestReplyAtByPostId.get(left.id) ?? 0);
+      const leftActivityAt = Math.max(
+        new Date(left.createdAt).getTime() || 0,
+        latestExternalReplyToPersonaCommentAtByPostId.get(left.id) ?? 0,
+      );
       const rightActivityAt = Math.max(
         new Date(right.createdAt).getTime() || 0,
-        latestReplyAtByPostId.get(right.id) ?? 0,
+        latestExternalReplyToPersonaCommentAtByPostId.get(right.id) ?? 0,
       );
       return rightActivityAt - leftActivityAt;
     });
-  }, [followedCharacterAccountIds, latestReplyAtByPostId, posts, timelineTab]);
+  }, [followedCharacterAccountIds, latestExternalReplyToPersonaCommentAtByPostId, posts, timelineTab]);
   const timelinePosts = useMemo(() => {
     if (!normalizedPostSearch || isAccountSearch) return baseTimelinePosts;
     return baseTimelinePosts.filter((post) => {
@@ -2961,12 +2973,12 @@ export function NoodleView() {
                     onChange={(checked) => saveSettings({ imageGenerationIncludeDescriptions: checked })}
                   />
                   <NumberSetting
-                    label="Images/day"
-                    help="Maximum number of generated post images Noodle may create across today's timeline posts."
-                    value={settings.maxImagePromptsPerDay}
+                    label="Images/refresh"
+                    help="Maximum number of generated post images Noodle may create during each manual or automatic timeline refresh."
+                    value={settings.maxImagesPerRefresh}
                     min={0}
                     max={50}
-                    onCommit={(value) => saveSettings({ maxImagePromptsPerDay: value })}
+                    onCommit={(value) => saveSettings({ maxImagesPerRefresh: value })}
                   />
                 </>
               )}
