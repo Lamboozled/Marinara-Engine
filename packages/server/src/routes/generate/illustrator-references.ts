@@ -33,6 +33,8 @@ export type IllustratorChatCharacterReference = {
 };
 
 export type IllustratorReferenceResolution = {
+  characterIds: string[];
+  personaId: string | null;
   referenceImages: string[];
   referenceNames: string[];
   referenceLine: string | null;
@@ -182,6 +184,7 @@ export async function resolveIllustratorCharacterReferences(args: {
   promptText: string;
   fallbackToChatCharacters?: boolean;
   maxReferences?: number;
+  includeReferenceImages?: boolean;
 }): Promise<IllustratorReferenceResolution> {
   const maxReferences = Math.max(1, Math.min(args.maxReferences ?? MAX_ILLUSTRATOR_REFERENCE_IMAGES, 12));
   const allRows = await args.charactersStore.list().catch(() => []);
@@ -265,13 +268,19 @@ export async function resolveIllustratorCharacterReferences(args: {
   }
 
   for (const source of orderedSources) {
+    if (args.includeReferenceImages === false) continue;
     const b64 = readBestReferenceImage(source.id, source.avatarPath);
     if (!b64) continue;
     referenceImages.push(b64);
     referenceNames.push(source.name);
   }
 
-  if (args.persona && personaRequested && referenceImages.length < maxReferences) {
+  if (
+    args.includeReferenceImages !== false &&
+    args.persona &&
+    personaRequested &&
+    referenceImages.length < maxReferences
+  ) {
     const b64 = readBestReferenceImage(args.persona.id, args.persona.avatarPath ?? null);
     if (b64) {
       referenceImages.push(b64);
@@ -283,6 +292,8 @@ export async function resolveIllustratorCharacterReferences(args: {
   }
 
   return {
+    characterIds: orderedSources.map((source) => source.id),
+    personaId: args.persona && personaRequested ? args.persona.id : null,
     referenceImages,
     referenceNames,
     referenceLine:

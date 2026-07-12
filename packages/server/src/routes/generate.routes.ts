@@ -86,6 +86,7 @@ import { resolveConnectionImageDefaults } from "../services/image/image-generati
 import { loadImageGenerationUserSettings } from "../services/image/image-generation-settings.js";
 import { textRewriteDropsProtectedMarkup } from "../services/generation/text-rewrite-safety.js";
 import { compileImagePrompt } from "../services/image/image-prompt-compiler.js";
+import { persistGeneratedImageToEntityGalleries } from "../services/image/generated-image-entity-gallery.js";
 import { extractLeadingThinkingBlocks } from "../services/llm/inline-thinking.js";
 import { buildSpotifyDjConstraints } from "../services/spotify/spotify-dj-constraints.js";
 import {
@@ -7668,49 +7669,48 @@ export async function generateRoutes(app: FastifyInstance) {
                           ? chatMeta.illustratorIncludeCharacterAppearance
                           : illustratorAgent?.settings?.includeCharacterAppearance === true;
                       let illustratorRefImages: string[] | undefined;
-                      if (useAvatarRefs || includeCharacterAppearance) {
-                        const referenceResolution = await resolveIllustratorCharacterReferences({
-                          charactersStore: chars,
-                          chatCharacters: charInfo.map((character) => ({
-                            id: character.id,
-                            name: character.name,
-                            avatarPath: character.avatarPath,
-                            appearance: character.appearance,
-                          })),
-                          persona: persona
-                            ? {
-                                id: personaId,
-                                name: personaName,
-                                avatarPath: persona.avatarPath as string | null,
-                                appearance: personaFields.appearance,
-                              }
-                            : null,
-                          requestedNames: illCharacters.filter((name): name is string => typeof name === "string"),
-                          promptText: [
-                            imagePrompt,
-                            style,
-                            typeof illData.reason === "string" ? illData.reason : "",
-                            combinedResponse,
-                          ].join("\n"),
-                          fallbackToChatCharacters: false,
-                        });
-                        if (includeCharacterAppearance && referenceResolution.appearanceBlock) {
-                          fullPrompt += `\n\n${referenceResolution.appearanceBlock}`;
-                          logger.debug(
-                            "[illustrator] Added character appearance notes for: %s",
-                            referenceResolution.appearanceNames.join(", "),
-                          );
-                        }
-                        if (useAvatarRefs && referenceResolution.referenceImages.length > 0) {
-                          illustratorRefImages = referenceResolution.referenceImages;
-                          if (referenceResolution.referenceLine && !suppressReferencePromptLine)
-                            fullPrompt += `\n\n${referenceResolution.referenceLine}`;
-                          logger.debug(
-                            "[illustrator] Sending %d character reference(s) for: %s",
-                            referenceResolution.referenceImages.length,
-                            referenceResolution.referenceNames.join(", "),
-                          );
-                        }
+                      const referenceResolution = await resolveIllustratorCharacterReferences({
+                        charactersStore: chars,
+                        chatCharacters: charInfo.map((character) => ({
+                          id: character.id,
+                          name: character.name,
+                          avatarPath: character.avatarPath,
+                          appearance: character.appearance,
+                        })),
+                        persona: persona
+                          ? {
+                              id: personaId,
+                              name: personaName,
+                              avatarPath: persona.avatarPath as string | null,
+                              appearance: personaFields.appearance,
+                            }
+                          : null,
+                        requestedNames: illCharacters.filter((name): name is string => typeof name === "string"),
+                        promptText: [
+                          imagePrompt,
+                          style,
+                          typeof illData.reason === "string" ? illData.reason : "",
+                          combinedResponse,
+                        ].join("\n"),
+                        fallbackToChatCharacters: false,
+                        includeReferenceImages: useAvatarRefs,
+                      });
+                      if (includeCharacterAppearance && referenceResolution.appearanceBlock) {
+                        fullPrompt += `\n\n${referenceResolution.appearanceBlock}`;
+                        logger.debug(
+                          "[illustrator] Added character appearance notes for: %s",
+                          referenceResolution.appearanceNames.join(", "),
+                        );
+                      }
+                      if (useAvatarRefs && referenceResolution.referenceImages.length > 0) {
+                        illustratorRefImages = referenceResolution.referenceImages;
+                        if (referenceResolution.referenceLine && !suppressReferencePromptLine)
+                          fullPrompt += `\n\n${referenceResolution.referenceLine}`;
+                        logger.debug(
+                          "[illustrator] Sending %d character reference(s) for: %s",
+                          referenceResolution.referenceImages.length,
+                          referenceResolution.referenceNames.join(", "),
+                        );
                       }
 
                       const compiledPrompt = compileImagePrompt({
@@ -7749,6 +7749,18 @@ export async function generateRoutes(app: FastifyInstance) {
                         filePath,
                         prompt: fullPrompt,
                         provider: "image_generation",
+                        model: imgModel || "unknown",
+                        width: imgWidth,
+                        height: imgHeight,
+                      });
+                      await persistGeneratedImageToEntityGalleries({
+                        sourceFilePath: filePath,
+                        characterIds: referenceResolution.characterIds,
+                        personaIds: referenceResolution.personaId ? [referenceResolution.personaId] : [],
+                        characterGallery,
+                        personaGallery,
+                        prompt: fullPrompt,
+                        provider: imgConnFull.provider ?? "image_generation",
                         model: imgModel || "unknown",
                         width: imgWidth,
                         height: imgHeight,

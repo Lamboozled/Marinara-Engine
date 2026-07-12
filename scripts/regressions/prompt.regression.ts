@@ -124,6 +124,7 @@ import { resolveCharacterAdvancedPromptIds } from "../../packages/server/src/ser
 import {
   illustratorPromptRequestsRenderedText,
   mergeIllustratorNegativePrompt,
+  resolveIllustratorCharacterReferences,
 } from "../../packages/server/src/routes/generate/illustrator-references.js";
 
 type RegressionCase = {
@@ -1124,6 +1125,32 @@ const cases: RegressionCase[] = [
         false,
       );
       assert.equal(illustratorPromptRequestsRenderedText('shopfront sign reading "OPEN ALL NIGHT"'), true);
+    },
+  },
+  {
+    name: "Illustrator resolves depicted character and persona gallery targets without loading references",
+    async run() {
+      const resolution = await resolveIllustratorCharacterReferences({
+        charactersStore: {
+          list: async () => [
+            {
+              id: "character-maukie",
+              data: { name: "Maukie", extensions: { appearance: "Wet brown hair." } },
+              avatarPath: null,
+            },
+          ],
+        },
+        chatCharacters: [
+          { id: "character-maukie", name: "Maukie", avatarPath: null, appearance: "Wet brown hair." },
+        ],
+        persona: { id: "persona-mari", name: "Mari", avatarPath: null, appearance: "Chubby woman." },
+        requestedNames: ["Maukie", "Mari"],
+        promptText: "Maukie carries Mari through the reeds.",
+        includeReferenceImages: false,
+      });
+      assert.deepEqual(resolution.characterIds, ["character-maukie"]);
+      assert.equal(resolution.personaId, "persona-mari");
+      assert.deepEqual(resolution.referenceImages, []);
     },
   },
   {
