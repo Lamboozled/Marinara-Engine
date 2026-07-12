@@ -72,7 +72,7 @@ import {
 import {
   getTextRewritePendingState,
   mergePairedBuiltInRewriteAgents,
-  shouldHoldForProseGuardianRewrite,
+  shouldHoldForTextRewrite,
   TEXT_REWRITE_PENDING_MESSAGE,
 } from "../../packages/server/src/services/generation/prose-guardian-settings.js";
 import type { DB } from "../../packages/server/src/db/connection.js";
@@ -2135,7 +2135,7 @@ Use HTML sparingly and diegetically. Do not replace normal prose/dialogue unless
       assert.match(merged[0]?.promptTemplate ?? "", /<style_editor>/);
       assert.match(merged[0]?.promptTemplate ?? "", /<continuity_editor>/);
       assert.match(merged[0]?.promptTemplate ?? "", /<immersive_html_editor>/);
-      assert.equal(shouldHoldForProseGuardianRewrite(rewriteAgents), true);
+      assert.equal(shouldHoldForTextRewrite(rewriteAgents), true);
       assert.deepEqual(getTextRewritePendingState(rewriteAgents), {
         agentType: "text-rewrite",
         message: TEXT_REWRITE_PENDING_MESSAGE,
