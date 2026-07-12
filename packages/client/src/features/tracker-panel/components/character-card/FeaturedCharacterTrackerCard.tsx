@@ -5,6 +5,7 @@ import {
   characterStatTrackerLockKey,
   characterTrackerLockKey,
   isTrackerFieldLocked,
+  removeTrackerFieldLockPrefix,
   renameTrackerFieldLockPrefix,
   type PresentCharacter,
 } from "@marinara-engine/shared";
@@ -29,7 +30,7 @@ import {
 } from "../../lib/tracker-profile-layout";
 import { getFeaturedCharacterStatDensity, trackerStatStackHeight } from "../../lib/tracker-stat-layout";
 import { getCharacterAmbienceStyle, type TrackerProfileColors } from "../../lib/tracker-profile-style";
-import { InlineEdit } from "../controls/InlineControls";
+import { InlineAddRow, InlineEdit } from "../controls/InlineControls";
 import {
   TRACKER_PROFILE_BODY_BOTTOM_RULE_CLASS,
   TRACKER_PROFILE_BODY_TONE_OVERLAY_CLASS,
@@ -69,6 +70,17 @@ const FEATURED_CUSTOM_FIELD_LIST_CLASS =
   "relative z-[1] mx-1 mb-1 mt-1 grid gap-px border-t border-[var(--tracker-profile-rule)] pt-0.5 text-[0.625rem]";
 const FEATURED_CUSTOM_FIELD_ROW_CLASS =
   "grid min-w-0 grid-cols-[minmax(3rem,0.42fr)_minmax(0,1fr)] items-center gap-1 border-b border-[var(--tracker-profile-rule)] px-0.5 py-px last:border-b-0";
+
+function makeUniqueCharacterCustomFieldName(customFields: Record<string, string> | null | undefined) {
+  const existing = new Set(Object.keys(customFields ?? {}).map((name) => name.trim().toLowerCase()));
+  let index = 1;
+  let name = "New Field";
+  while (existing.has(name.toLowerCase())) {
+    index += 1;
+    name = `New Field ${index}`;
+  }
+  return name;
+}
 
 export function FeaturedCharacterTrackerCard({
   character,
@@ -117,6 +129,7 @@ export function FeaturedCharacterTrackerCard({
   const customFields = Object.entries(character.customFields ?? {});
   const characterStats = Array.isArray(character.stats) ? character.stats : [];
   const hasEditableStatAdd = !!onUpdate && addMode;
+  const hasEditableCustomFieldAdd = !!onUpdate && addMode;
   const featuredStatColumnHeightRem =
     trackerPanelSizeProfile === "expanded"
       ? FEATURED_CHARACTER_PORTRAIT_ROOMY_STAGE_REM
@@ -192,6 +205,23 @@ export function FeaturedCharacterTrackerCard({
       ...character,
       stats: [...characterStats, { name: "New Stat", value: 0, max: 100, color: "var(--primary)" }],
     });
+  };
+  const addCustomField = () => {
+    if (!onUpdate) return;
+    const name = makeUniqueCharacterCustomFieldName(character.customFields);
+    onUpdate({ ...character, customFields: { ...(character.customFields ?? {}), [name]: "" } });
+  };
+  const removeCustomField = (name: string) => {
+    if (!onUpdate) return;
+    const nextFields = { ...(character.customFields ?? {}) };
+    delete nextFields[name];
+    onUpdateFieldLocks?.((locks) =>
+      removeTrackerFieldLockPrefix(
+        locks,
+        characterCustomFieldTrackerLockKey(character, characterIndex, name, "name").replace(/\.name$/, ""),
+      ),
+    );
+    onUpdate({ ...character, customFields: nextFields });
   };
   const updateCustomField = (oldName: string, nextName: string, nextValue: string) => {
     if (!onUpdate) return;
@@ -346,10 +376,16 @@ export function FeaturedCharacterTrackerCard({
         />
       )}
 
-      {customFields.length > 0 && (
+      {(customFields.length > 0 || hasEditableCustomFieldAdd) && (
         <div className={FEATURED_CUSTOM_FIELD_LIST_CLASS}>
           {customFields.map(([name, value]) => (
-            <div key={name} className={FEATURED_CUSTOM_FIELD_ROW_CLASS}>
+            <div
+              key={name}
+              className={cn(
+                FEATURED_CUSTOM_FIELD_ROW_CLASS,
+                deleteMode && "grid-cols-[minmax(3rem,0.38fr)_minmax(0,1fr)_1.25rem]",
+              )}
+            >
               {onUpdate ? (
                 <InlineEdit
                   value={name}
@@ -396,8 +432,22 @@ export function FeaturedCharacterTrackerCard({
               ) : (
                 <span className="min-w-0 truncate text-[color:var(--tracker-profile-text)]">{value}</span>
               )}
+              {deleteMode && onUpdate && (
+                <button
+                  type="button"
+                  onClick={() => removeCustomField(name)}
+                  title={`Remove ${name}`}
+                  aria-label={`Remove ${name}`}
+                  className="flex h-4 w-4 items-center justify-center justify-self-end rounded text-[var(--destructive)] transition-all hover:bg-[var(--destructive)]/10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--border)] active:scale-90"
+                >
+                  <X size="0.625rem" />
+                </button>
+              )}
             </div>
           ))}
+          {hasEditableCustomFieldAdd && (
+            <InlineAddRow title="Add custom field" onClick={addCustomField} className="col-span-full" />
+          )}
         </div>
       )}
     </article>

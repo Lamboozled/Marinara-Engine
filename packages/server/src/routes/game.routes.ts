@@ -118,6 +118,7 @@ import {
   scoreAmbient,
   serializeResolvedSkillCheckTag,
   applyTrackerFieldLocksToGameStatePatch,
+  normalizeWorldCustomFields,
   parseTrackerFieldLocks,
   normalizeRpgStatPools,
   type RPGStatsConfig,
@@ -6645,6 +6646,9 @@ export async function gameRoutes(app: FastifyInstance) {
       const stateStore = createGameStateStorage(app.db);
       const previousState = await stateStore.getLatest(latestSession.id);
       const previousPresentCharacters = parseJsonField<any[]>(previousState?.presentCharacters, []);
+      const previousWorldCustomFields = normalizeWorldCustomFields(
+        parseJsonField<any[]>(previousState?.worldCustomFields, []),
+      );
       const previousRecentEvents = parseJsonField<string[]>(previousState?.recentEvents, []);
       const previousPlayerStats = parseJsonField<Record<string, unknown> | null>(previousState?.playerStats, null);
       const previousPersonaStats = parseJsonField<any[] | null>(previousState?.personaStats, null);
@@ -6766,6 +6770,7 @@ export async function gameRoutes(app: FastifyInstance) {
             location: previousState.location,
             weather: previousState.weather,
             temperature: previousState.temperature,
+            worldCustomFields: previousWorldCustomFields,
             presentCharacters: previousPresentCharacters,
             recentEvents: previousRecentEvents,
             playerStats: previousPlayerStats as any,
@@ -11618,6 +11623,7 @@ export async function gameRoutes(app: FastifyInstance) {
         location: snapshot.location,
         weather: snapshot.weather,
         temperature: snapshot.temperature,
+        worldCustomFields: normalizeWorldCustomFields(parseJsonField(snapshot.worldCustomFields, [])),
         presentCharacters: parseJsonField(snapshot.presentCharacters, []),
         recentEvents: parseJsonField(snapshot.recentEvents, []),
         playerStats: parseJsonField(snapshot.playerStats, null),

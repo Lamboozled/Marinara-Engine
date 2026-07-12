@@ -26,6 +26,7 @@ import {
   normalizeAgentPromptTemplateSelectionMap,
   normalizeThinkingTagPairs,
   applyTrackerFieldLocksToGameStatePatch,
+  normalizeWorldCustomFields,
   normalizeTrackerFieldLocksForState,
   trackerFieldLocksAreEmpty,
   customAgentHasCapability,
@@ -6784,11 +6785,18 @@ export async function generateRoutes(app: FastifyInstance) {
                 // (character-tracker, persona-stats, quest, custom-tracker) will update
                 // them with authoritative data in their own handler blocks below.
                 const snapshotChars = parseJsonField<any[]>(prevSnap?.presentCharacters, []);
+                const snapshotWorldCustomFields = normalizeWorldCustomFields(
+                  parseJsonField<any[]>(prevSnap?.worldCustomFields, []),
+                );
                 const snapshotPersonaStats = parseJsonField<any[] | null>(prevSnap?.personaStats, null);
                 const snapshotPlayerStats = parseJsonField<PlayerStats | null>(prevSnap?.playerStats, null);
                 const currentGameStateForLocks = prevSnap
                   ? parseGameStateRow(prevSnap as Record<string, unknown>)
                   : null;
+                const nextWorldCustomFields =
+                  gs.worldCustomFields !== undefined
+                    ? normalizeWorldCustomFields(gs.worldCustomFields)
+                    : snapshotWorldCustomFields;
                 const lockedWorldStatePatch = applyTrackerFieldLocksToGameStatePatch(
                   {
                     date: newDate,
@@ -6796,6 +6804,7 @@ export async function generateRoutes(app: FastifyInstance) {
                     location: newLocation,
                     weather: newWeather,
                     temperature: newTemperature,
+                    worldCustomFields: nextWorldCustomFields,
                   },
                   currentGameStateForLocks,
                 );
@@ -6804,6 +6813,7 @@ export async function generateRoutes(app: FastifyInstance) {
                 newLocation = coerceGameStateTextValue(lockedWorldStatePatch.location);
                 newWeather = coerceGameStateTextValue(lockedWorldStatePatch.weather);
                 newTemperature = coerceGameStateTextValue(lockedWorldStatePatch.temperature);
+                const newWorldCustomFields = normalizeWorldCustomFields(lockedWorldStatePatch.worldCustomFields);
                 logger.info(
                   `[generate] world-state snapshot: chars=${snapshotChars.length} (prev), personaStats=${snapshotPersonaStats ? "present" : "null"} (prev)`,
                 );
@@ -6817,6 +6827,7 @@ export async function generateRoutes(app: FastifyInstance) {
                     location: newLocation,
                     weather: newWeather,
                     temperature: newTemperature,
+                    worldCustomFields: newWorldCustomFields,
                     presentCharacters: snapshotChars,
                     recentEvents: (gs.recentEvents as string[]) ?? [],
                     playerStats: snapshotPlayerStats,
@@ -6838,6 +6849,7 @@ export async function generateRoutes(app: FastifyInstance) {
                   location: newLocation,
                   weather: newWeather,
                   temperature: newTemperature,
+                  ...(gs.worldCustomFields !== undefined ? { worldCustomFields: newWorldCustomFields } : {}),
                 };
                 logger.debug("[game_state_patch] world-state: %j", worldStatePatch);
                 reply.raw.write(`data: ${JSON.stringify({ type: "game_state_patch", data: worldStatePatch })}\n\n`);

@@ -5,6 +5,7 @@ import {
   characterStatTrackerLockKey,
   characterTrackerLockKey,
   isTrackerFieldLocked,
+  removeTrackerFieldLockPrefix,
   renameTrackerFieldLockPrefix,
   type PresentCharacter,
 } from "@marinara-engine/shared";
@@ -16,7 +17,7 @@ import type {
 import { cn } from "../../../../lib/utils";
 import { visibleText } from "../../lib/tracker-display";
 import { getCharacterAmbienceStyle, type TrackerProfileColors } from "../../lib/tracker-profile-style";
-import { FittedText, InlineEdit } from "../controls/InlineControls";
+import { FittedText, InlineAddRow, InlineEdit } from "../controls/InlineControls";
 import {
   TrackerProfileDisplayWash,
   TrackerProfileEdgeHighlight,
@@ -73,6 +74,17 @@ const CHARACTER_CUSTOM_FIELD_LIST_CLASS =
   "relative z-[1] mt-1 grid gap-px border-t border-[color-mix(in_srgb,var(--tracker-profile-rule)_34%,transparent)] pt-1 text-[0.5625rem] @min-[176px]:text-[0.625rem]";
 const CHARACTER_CUSTOM_FIELD_ROW_CLASS =
   "grid min-w-0 grid-cols-[minmax(2.05rem,0.42fr)_minmax(0,1fr)] items-center gap-0.5 @min-[176px]:grid-cols-[minmax(2.35rem,0.42fr)_minmax(0,1fr)] @min-[176px]:gap-1";
+
+function makeUniqueCharacterCustomFieldName(customFields: Record<string, string> | null | undefined) {
+  const existing = new Set(Object.keys(customFields ?? {}).map((name) => name.trim().toLowerCase()));
+  let index = 1;
+  let name = "New Field";
+  while (existing.has(name.toLowerCase())) {
+    index += 1;
+    name = `New Field ${index}`;
+  }
+  return name;
+}
 
 function CompactCharacterNameplate({ children }: { children: ReactNode }) {
   return (
@@ -194,12 +206,13 @@ export function CharacterTrackerCard({
   const hasDeleteAction = !!onRemove && deleteMode;
   const avatarMedia = characterPicture ?? character.avatarPath ?? null;
   const compactAvatarUpload = characterPicture ? undefined : onUploadAvatar;
+  const hasEditableCustomFieldAdd = !!onUpdate && addMode;
   const showAppearance = !!(character.appearance || onUpdate);
   const showOutfit = !!(character.outfit || onUpdate);
   const showMood = !!(character.mood || onUpdate);
   const showThoughts = !!(character.thoughts || onUpdate);
   const hasDetailRows = showMood || showAppearance || showOutfit;
-  const hasDenseContent = characterStats.length > 0 || customFields.length > 0;
+  const hasDenseContent = characterStats.length > 0 || customFields.length > 0 || hasEditableCustomFieldAdd;
   const readableDetailRows = hasDenseContent;
   const readableCustomFields = trackerPanelSizeProfile === "expanded";
   const emojiLockKey = characterTrackerLockKey(character, characterIndex, "emoji");
@@ -233,6 +246,23 @@ export function CharacterTrackerCard({
       ...character,
       stats: [...characterStats, { name: "New Stat", value: 0, max: 100, color: "var(--primary)" }],
     });
+  };
+  const addCustomField = () => {
+    if (!onUpdate) return;
+    const name = makeUniqueCharacterCustomFieldName(character.customFields);
+    onUpdate({ ...character, customFields: { ...(character.customFields ?? {}), [name]: "" } });
+  };
+  const removeCustomField = (name: string) => {
+    if (!onUpdate) return;
+    const nextFields = { ...(character.customFields ?? {}) };
+    delete nextFields[name];
+    onUpdateFieldLocks?.((locks) =>
+      removeTrackerFieldLockPrefix(
+        locks,
+        characterCustomFieldTrackerLockKey(character, characterIndex, name, "name").replace(/\.name$/, ""),
+      ),
+    );
+    onUpdate({ ...character, customFields: nextFields });
   };
   return (
     <article className={CHARACTER_CARD_CLASS} style={getCharacterAmbienceStyle(character, profileColors)}>
@@ -381,10 +411,17 @@ export function CharacterTrackerCard({
         </div>
       )}
 
-      {customFields.length > 0 && (
+      {(customFields.length > 0 || hasEditableCustomFieldAdd) && (
         <div className={CHARACTER_CUSTOM_FIELD_LIST_CLASS}>
           {customFields.map(([name, value]) => (
-            <div key={name} className={CHARACTER_CUSTOM_FIELD_ROW_CLASS}>
+            <div
+              key={name}
+              className={cn(
+                CHARACTER_CUSTOM_FIELD_ROW_CLASS,
+                deleteMode &&
+                  "grid-cols-[minmax(2.05rem,0.38fr)_minmax(0,1fr)_1.25rem] @min-[176px]:grid-cols-[minmax(2.35rem,0.38fr)_minmax(0,1fr)_1.25rem]",
+              )}
+            >
               {onUpdate ? (
                 <InlineEdit
                   value={name}
@@ -440,8 +477,22 @@ export function CharacterTrackerCard({
                   {value}
                 </span>
               )}
+              {deleteMode && onUpdate && (
+                <button
+                  type="button"
+                  onClick={() => removeCustomField(name)}
+                  title={`Remove ${name}`}
+                  aria-label={`Remove ${name}`}
+                  className="flex h-4 w-4 items-center justify-center justify-self-end rounded text-[var(--destructive)] transition-all hover:bg-[var(--destructive)]/10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--border)] active:scale-90"
+                >
+                  <X size="0.625rem" />
+                </button>
+              )}
             </div>
           ))}
+          {hasEditableCustomFieldAdd && (
+            <InlineAddRow title="Add custom field" onClick={addCustomField} className="col-span-full" />
+          )}
         </div>
       )}
     </article>

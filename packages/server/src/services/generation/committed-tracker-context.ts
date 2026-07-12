@@ -15,6 +15,7 @@ type GameStateSnapshotLike = {
   location?: string | null;
   weather?: string | null;
   temperature?: string | null;
+  worldCustomFields?: unknown;
   presentCharacters?: unknown;
   personaStats?: unknown;
   playerStats?: unknown;
@@ -62,6 +63,13 @@ function formatStatSummary(stat: any): string | null {
   return `${name}: ${formatStatValue(stat?.value, stat?.max)}`;
 }
 
+function formatNamedValueLine(field: any): string | null {
+  const name = asText(field?.name);
+  if (!name) return null;
+  const value = asText(field?.value);
+  return value ? `${name}: ${value}` : null;
+}
+
 function formatCharacterLine(character: any): string | null {
   if (typeof character === "string") {
     const name = asText(character);
@@ -75,6 +83,13 @@ function formatCharacterLine(character: any): string | null {
   if (character.appearance) details.push(`appearance: ${character.appearance}`);
   if (character.outfit) details.push(`outfit: ${character.outfit}`);
   if (character.thoughts) details.push(`thoughts: ${character.thoughts}`);
+  if (character.customFields && typeof character.customFields === "object" && !Array.isArray(character.customFields)) {
+    for (const [fieldName, fieldValue] of Object.entries(character.customFields)) {
+      const name = asText(fieldName);
+      const value = asText(fieldValue);
+      if (name && value) details.push(`${name}: ${value}`);
+    }
+  }
   if (Array.isArray(character.stats) && character.stats.length > 0) {
     const statStr = (character.stats as unknown[]).map(formatStatSummary).filter(isNonEmptyLine).join(", ");
     if (statStr) details.push(`stats: ${statStr}`);
@@ -91,9 +106,9 @@ function formatQuestLine(quest: any): string | null {
   const objectives = Array.isArray(quest.objectives)
     ? quest.objectives
         .map((objective: any) => {
-      const text = asText(objective?.text);
-      return text ? `  ${objective.completed ? "[x]" : "[ ]"} ${text}` : null;
-    })
+          const text = asText(objective?.text);
+          return text ? `  ${objective.completed ? "[x]" : "[ ]"} ${text}` : null;
+        })
         .filter(isNonEmptyLine)
         .join("\n")
     : "";
@@ -137,6 +152,10 @@ export function buildCommittedTrackerContextBlock(args: {
     if (snap.location) wsParts.push(`Location: ${snap.location}`);
     if (snap.weather) wsParts.push(`Weather: ${snap.weather}`);
     if (snap.temperature) wsParts.push(`Temperature: ${snap.temperature}`);
+    const worldCustomFields = parseMaybeJson(snap.worldCustomFields);
+    if (Array.isArray(worldCustomFields)) {
+      wsParts.push(...worldCustomFields.map(formatNamedValueLine).filter(isNonEmptyLine));
+    }
     if (wsParts.length > 0) trackerParts.push(wrapContent(wsParts.join("\n"), "World", args.wrapFormat));
   }
 

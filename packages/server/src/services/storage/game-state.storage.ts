@@ -7,6 +7,7 @@ import { gameStateSnapshots } from "../../db/schema/index.js";
 import { newId, now } from "../../utils/id-generator.js";
 import {
   coerceGameStateTextValue,
+  normalizeWorldCustomFields,
   normalizeTrackerFieldLocks,
   normalizeTrackerFieldLocksForState,
   parseTrackerFieldLocks,
@@ -27,6 +28,7 @@ type GameStateUpdateFields = Partial<
     | "location"
     | "weather"
     | "temperature"
+    | "worldCustomFields"
     | "presentCharacters"
     | "playerStats"
     | "personaStats"
@@ -44,6 +46,7 @@ type LockMigrationStateSource = {
   location?: unknown;
   weather?: unknown;
   temperature?: unknown;
+  worldCustomFields?: unknown;
   presentCharacters?: unknown;
   recentEvents?: unknown;
   playerStats?: unknown;
@@ -108,6 +111,7 @@ function buildLockMigrationState(row: LockMigrationStateSource): GameState {
     location: coerceGameStateTextValue(row.location),
     weather: coerceGameStateTextValue(row.weather),
     temperature: coerceGameStateTextValue(row.temperature),
+    worldCustomFields: normalizeWorldCustomFields(parseSnapshotJson(row.worldCustomFields, [])),
     presentCharacters: parseSnapshotJson(row.presentCharacters, []),
     recentEvents: parseSnapshotJson(row.recentEvents, []),
     playerStats: parseSnapshotJson(row.playerStats, null),
@@ -314,6 +318,7 @@ export function createGameStateStorage(db: DB) {
         messageId: state.messageId,
         swipeIndex: state.swipeIndex,
         ...coerceSnapshotTextFields(state),
+        worldCustomFields: JSON.stringify(normalizeWorldCustomFields(state.worldCustomFields)),
         presentCharacters: JSON.stringify(state.presentCharacters),
         recentEvents: JSON.stringify(state.recentEvents),
         playerStats: state.playerStats ? JSON.stringify(state.playerStats) : null,
@@ -380,6 +385,13 @@ export function createGameStateStorage(db: DB) {
         location: coerceGameStateTextValue(latest?.location),
         weather: coerceGameStateTextValue(latest?.weather),
         temperature: coerceGameStateTextValue(latest?.temperature),
+        worldCustomFields: normalizeWorldCustomFields(
+          latest?.worldCustomFields
+            ? typeof latest.worldCustomFields === "string"
+              ? JSON.parse(latest.worldCustomFields)
+              : latest.worldCustomFields
+            : [],
+        ),
         presentCharacters: latest?.presentCharacters
           ? typeof latest.presentCharacters === "string"
             ? JSON.parse(latest.presentCharacters)
@@ -413,6 +425,8 @@ export function createGameStateStorage(db: DB) {
       if (fields.location !== undefined) baseState.location = coerceGameStateTextValue(fields.location);
       if (fields.weather !== undefined) baseState.weather = coerceGameStateTextValue(fields.weather);
       if (fields.temperature !== undefined) baseState.temperature = coerceGameStateTextValue(fields.temperature);
+      if (fields.worldCustomFields !== undefined)
+        baseState.worldCustomFields = normalizeWorldCustomFields(fields.worldCustomFields);
       if (fields.presentCharacters !== undefined) baseState.presentCharacters = fields.presentCharacters as any;
       if (fields.playerStats !== undefined) baseState.playerStats = fields.playerStats as any;
       if (fields.personaStats !== undefined) baseState.personaStats = fields.personaStats as any;
@@ -446,6 +460,8 @@ export function createGameStateStorage(db: DB) {
       if (fields.location !== undefined) updates.location = coerceGameStateTextValue(fields.location);
       if (fields.weather !== undefined) updates.weather = coerceGameStateTextValue(fields.weather);
       if (fields.temperature !== undefined) updates.temperature = coerceGameStateTextValue(fields.temperature);
+      if (fields.worldCustomFields !== undefined)
+        updates.worldCustomFields = JSON.stringify(normalizeWorldCustomFields(fields.worldCustomFields));
       if (fields.presentCharacters !== undefined) updates.presentCharacters = JSON.stringify(fields.presentCharacters);
       if (fields.playerStats !== undefined)
         updates.playerStats = fields.playerStats ? JSON.stringify(fields.playerStats) : null;
@@ -473,6 +489,9 @@ export function createGameStateStorage(db: DB) {
       if (fields.fieldLocks !== undefined) {
         const incomingLockMigrationState = buildLockMigrationState({
           ...row,
+          ...(fields.worldCustomFields !== undefined
+            ? { worldCustomFields: normalizeWorldCustomFields(fields.worldCustomFields) }
+            : {}),
           ...(fields.presentCharacters !== undefined ? { presentCharacters: fields.presentCharacters } : {}),
           ...(fields.playerStats !== undefined ? { playerStats: fields.playerStats } : {}),
           ...(fields.personaStats !== undefined ? { personaStats: fields.personaStats } : {}),
