@@ -2,6 +2,12 @@
 
 This file is the release-notes source of truth for Marinara Engine. Reuse these entries when publishing GitHub Releases for tags in the `vX.Y.Z` format.
 
+## [Unreleased]
+
+### Added
+
+- Documentation search in the in-app docs viewer now highlights what you searched for: every occurrence of the query lights up in the opened guide (live while the search is active), sidebar result titles and snippet lines highlight the matched term, and opening a guide from a search result scrolls to the first highlighted match.
+
 ## [2.2.0]
 
 ### Added
