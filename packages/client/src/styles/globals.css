@@ -3287,8 +3287,9 @@ strong {
 }
 
 .pastel-gradient {
-  background: linear-gradient(90deg, #ff69b4, #ff8c42, #ff6b9d, #ff6f61, #ff69b4, #ff8c42, #ff6b9d, #ff6f61, #ff69b4) 0
-    0 / 400% 100%;
+  background-image: var(--marinara-app-accent-gradient);
+  background-position: 0;
+  background-size: 400% 100%;
   animation: pastel-gradient-cycle 25s linear infinite;
 }
 
@@ -3403,7 +3404,7 @@ strong {
 }
 
 .os-window-btn.close {
-  background: linear-gradient(135deg, #ff6b9d, #ff8fab);
+  background: var(--destructive);
 }
 .os-window-btn.minimize {
   background: linear-gradient(135deg, #ffd88a, #ffe4a8);
