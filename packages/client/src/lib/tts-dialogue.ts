@@ -36,13 +36,6 @@ export function normalizeTTSCharacterBaseName(value?: string | null): string {
   return base && base.length > 0 ? base : normalized;
 }
 
-export function ttsConfigMatchesSpeaker(
-  _config: Pick<TTSConfig, "dialogueScope" | "dialogueCharacterName">,
-  _speaker?: string | null,
-) {
-  return true;
-}
-
 export function isTTSNarratorSpeaker(value?: string | null): boolean {
   const normalized = normalizeTTSCharacterName(value);
   return normalized === "narrator" || normalized === "gm" || normalized === "game master" || normalized === "system";
@@ -362,7 +355,7 @@ export function splitTTSChunks(value: string): string[] {
 export function buildTTSMessageText(text: string, config: TTSConfig, fallbackSpeaker?: string | null): string {
   const normalized = decodeEncodedSpeakerTags(text);
   if (!config.dialogueOnly) return cleanTTSInputText(normalized);
-  return extractDialogueUtterances(normalized, config, fallbackSpeaker)
+  return extractDialogueUtterances(normalized, fallbackSpeaker)
     .map((utterance) => utterance.text)
     .join("\n");
 }
@@ -379,9 +372,9 @@ export function buildTTSVoiceRequests(
   const shouldExtractUtterances = config.dialogueOnly || hasSpeakerTags;
   const utterances =
     hasSpeakerTags && !config.dialogueOnly
-      ? extractSpeakerTaggedUtterances(normalized, config, fallbackSpeaker, true)
+      ? extractSpeakerTaggedUtterances(normalized, fallbackSpeaker, true)
       : shouldExtractUtterances
-        ? extractDialogueUtterances(normalized, config, fallbackSpeaker)
+        ? extractDialogueUtterances(normalized, fallbackSpeaker)
         : [{ text: cleanTTSInputText(normalized), speaker: fallbackSpeaker || undefined } satisfies TTSUtterance];
 
   const fallbackSpeakerKey = normalizeTTSCharacterName(fallbackSpeaker);
@@ -418,14 +411,13 @@ function isLikelyTTSVNSpeaker(value: string): boolean {
 
 export function extractDialogueUtterances(
   text: string,
-  config: Pick<TTSConfig, "dialogueScope" | "dialogueCharacterName">,
   fallbackSpeaker?: string | null,
 ): TTSUtterance[] {
   // Remove ordinary HTML before looking for quoted dialogue. Otherwise quote
   // marks inside style/class attributes are mistaken for spoken lines.
   const speechText = stripTTSMarkup(text, true);
   const utterances: TTSUtterance[] = [];
-  utterances.push(...extractSpeakerTaggedUtterances(speechText, config, fallbackSpeaker, false));
+  utterances.push(...extractSpeakerTaggedUtterances(speechText, fallbackSpeaker, false));
   const untaggedSpeechText = speechText.replace(/<speaker="[^"]*">[\s\S]*?<\/speaker>/gi, " ");
 
   const vnLineRe = /^\s*(?:Dialogue\s*)?\[([^\]]+)\]\s*(?:\[([^\]]+)\])?\s*(?:\[([^\]]+)\])?\s*:\s*(.+)$/i;
@@ -443,7 +435,7 @@ export function extractDialogueUtterances(
       secondTag ||
       (firstTag && !/^(main|side|extra|thought|action|whisper(?::.+)?)$/i.test(firstTag) ? firstTag : undefined);
     const spoken = cleanTTSInputText(stripSurroundingDialogueQuotes((match[4] ?? "").trim()));
-    if (spoken && ttsConfigMatchesSpeaker(config, speaker)) {
+    if (spoken) {
       utterances.push({ text: spoken, speaker, tone });
     }
   }
@@ -454,7 +446,7 @@ export function extractDialogueUtterances(
     const spoken = cleanTTSInputText(
       quoteMatch.slice(1).find((group) => typeof group === "string" && group.length > 0) ?? "",
     );
-    if (spoken && ttsConfigMatchesSpeaker(config, fallbackSpeaker)) {
+    if (spoken) {
       utterances.push({ text: spoken, speaker: fallbackSpeaker || undefined });
     }
   }
@@ -464,7 +456,6 @@ export function extractDialogueUtterances(
 
 function extractSpeakerTaggedUtterances(
   text: string,
-  config: Pick<TTSConfig, "dialogueScope" | "dialogueCharacterName">,
   fallbackSpeaker?: string | null,
   includeNarration = false,
 ): TTSUtterance[] {
@@ -484,7 +475,7 @@ function extractSpeakerTaggedUtterances(
 
     const speaker = speakerTagMatch[1]?.trim() || fallbackSpeaker || undefined;
     const spoken = cleanTTSInputText(stripSurroundingDialogueQuotes((speakerTagMatch[2] ?? "").trim()));
-    if (spoken && ttsConfigMatchesSpeaker(config, speaker)) {
+    if (spoken) {
       utterances.push({ text: spoken, speaker });
     }
     lastIndex = speakerTagRe.lastIndex;

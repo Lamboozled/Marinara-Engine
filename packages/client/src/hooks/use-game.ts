@@ -178,7 +178,6 @@ export function useCreateGame() {
       preferences?: string;
       shareLabels?: GameInitialSetupLabels;
       connectionId?: string;
-      characterConnectionId?: string;
       promptPresetId?: string;
       chatId?: string;
     }) => api.post<CreateGameResponse>("/game/create", data),

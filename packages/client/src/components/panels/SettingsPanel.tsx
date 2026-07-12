@@ -7308,7 +7308,6 @@ function AdvancedSettings() {
         channel: selectedUpdateChannelId,
         currentVersion: updateCheck.data?.currentVersion ?? health.data?.version ?? APP_VERSION,
         currentCommit: updateCheck.data?.currentCommit ?? health.data?.commit ?? null,
-        currentBuild: updateCheck.data?.currentBuild ?? health.data?.build ?? null,
         targetRef: updateCheck.data?.targetRef,
         targetCommit: updateCheck.data?.targetCommit,
       }),
