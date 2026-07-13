@@ -67,6 +67,11 @@ import { loadImageGenerationUserSettings } from "../../services/image/image-gene
 import { compileImagePrompt } from "../../services/image/image-prompt-compiler.js";
 import { persistGeneratedImageToEntityGalleries } from "../../services/image/generated-image-entity-gallery.js";
 import { runImageGenerationRequest } from "../../services/image/image-generation-queue.js";
+import {
+  parseIllustratorPromptReviewOverride,
+  resolveIllustratorPromptSubmission,
+  type IllustratorPromptReviewOverride,
+} from "../../services/image/illustrator-prompt-review.js";
 import { createGameStateStorage } from "../../services/storage/game-state.storage.js";
 import { createLorebooksStorage } from "../../services/storage/lorebooks.storage.js";
 import { syncGameMapMetaPartyPosition } from "../../services/game/map-position.service.js";
@@ -2418,6 +2423,8 @@ async function applyRetryResultEffects(args: {
   chars: ReturnType<typeof createCharactersStorage>;
   resolvedAgents: ResolvedRetryAgent[];
   queueImageGenerationRequests: boolean;
+  reviewImagePromptsBeforeSend: boolean;
+  illustratorPromptReviewOverride: IllustratorPromptReviewOverride | null;
   secretPlotRerollMode?: "full" | "turn_only";
 }) {
   const {
@@ -2436,6 +2443,8 @@ async function applyRetryResultEffects(args: {
     chars,
     resolvedAgents,
     queueImageGenerationRequests,
+    reviewImagePromptsBeforeSend,
+    illustratorPromptReviewOverride,
     secretPlotRerollMode,
   } = args;
   const sortedResults = [...results].sort(
@@ -2951,9 +2960,7 @@ async function applyRetryResultEffects(args: {
               imagePrompt,
               imagePositivePrompt,
             });
-            const requestedNegativePrompt = [negativePrompt, savedNegativePrompt]
-              .filter(Boolean)
-              .join(", ");
+            const requestedNegativePrompt = [negativePrompt, savedNegativePrompt].filter(Boolean).join(", ");
 
             // Collect optional character visual context. Prefer avatar portraits
             // for references, then fall back to full-body sprites.
@@ -3025,6 +3032,31 @@ async function applyRetryResultEffects(args: {
               compiledPrompt.prompt,
               compiledPrompt.negativePrompt,
             );
+            const promptSubmission = resolveIllustratorPromptSubmission({
+              generatedPrompt: compiledPrompt.prompt,
+              generatedNegativePrompt: finalNegativePrompt,
+              reviewOverride: illustratorPromptReviewOverride,
+            });
+
+            if (reviewImagePromptsBeforeSend && !illustratorPromptReviewOverride) {
+              sendSseEvent(reply, {
+                type: "image_prompt_review",
+                data: {
+                  chatId,
+                  item: {
+                    id: "roleplay-scene-illustration",
+                    kind: "illustration",
+                    title: "Scene illustration",
+                    prompt: promptSubmission.prompt,
+                    ...(promptSubmission.negativePrompt ? { negativePrompt: promptSubmission.negativePrompt } : {}),
+                    width: imgWidth,
+                    height: imgHeight,
+                  },
+                  resultData: illData,
+                },
+              });
+              continue;
+            }
 
             const imageConnectionQueueKey = imgConnFull.id?.trim() || `${imgServiceHint}:${imgBaseUrl}:${imgModel}`;
             logger.debug(
@@ -3038,8 +3070,8 @@ async function applyRetryResultEffects(args: {
               signal: agentContext.signal,
               task: () =>
                 generateImage(imgModel, imgBaseUrl, imgApiKey, imgServiceHint, {
-                  prompt: compiledPrompt.prompt,
-                  negativePrompt: finalNegativePrompt || undefined,
+                  prompt: promptSubmission.prompt,
+                  negativePrompt: promptSubmission.negativePrompt || undefined,
                   model: imgModel,
                   width: imgWidth,
                   height: imgHeight,
@@ -3055,7 +3087,7 @@ async function applyRetryResultEffects(args: {
             const galleryEntry = await galleryStore.create({
               chatId,
               filePath,
-              prompt: compiledPrompt.prompt,
+              prompt: promptSubmission.prompt,
               provider: "image_generation",
               model: imgModel || "unknown",
               width: imgWidth,
@@ -3067,7 +3099,7 @@ async function applyRetryResultEffects(args: {
               personaIds: referenceResolution.personaId ? [referenceResolution.personaId] : [],
               characterGallery: createCharacterGalleryStorage(app.db),
               personaGallery: createPersonaGalleryStorage(app.db),
-              prompt: compiledPrompt.prompt,
+              prompt: promptSubmission.prompt,
               provider: imgConnFull.provider ?? "image_generation",
               model: imgModel || "unknown",
               width: imgWidth,
@@ -3084,7 +3116,7 @@ async function applyRetryResultEffects(args: {
                 type: "image",
                 url: imageUrl,
                 filename: `illustration.${imageResult.ext}`,
-                prompt: compiledPrompt.prompt,
+                prompt: promptSubmission.prompt,
                 galleryId: (galleryEntry as any)?.id,
               };
               await chatsDb.appendSwipeAttachment(retryMessageId, retrySwipeIndex, attachment);
@@ -3096,7 +3128,7 @@ async function applyRetryResultEffects(args: {
               data: {
                 messageId: retryMessageId,
                 imageUrl,
-                prompt: compiledPrompt.prompt,
+                prompt: promptSubmission.prompt,
                 reason: illData.reason,
                 galleryId: (galleryEntry as any)?.id,
               },
@@ -3202,6 +3234,10 @@ export async function registerRetryAgentsRoute(app: FastifyInstance) {
       debugMode?: boolean;
       /** Serialize Roleplay Illustrator provider calls when enabled. */
       queueImageGenerationRequests?: boolean;
+      /** Pause a manual Illustrator retry after prompt compilation so the client can review it. */
+      reviewImagePromptsBeforeSend?: boolean;
+      /** Resume a reviewed Illustrator retry without running the Illustrator LLM a second time. */
+      illustratorPromptReviewOverride?: unknown;
       lorebookKeeperBackfill?: boolean;
       /** When set, scope history and game state to this assistant message (as at original generation), not the latest turn. */
       forMessageId?: string;
@@ -3217,14 +3253,22 @@ export async function registerRetryAgentsRoute(app: FastifyInstance) {
       streaming = true,
       debugMode = false,
       queueImageGenerationRequests = true,
+      reviewImagePromptsBeforeSend = false,
+      illustratorPromptReviewOverride: rawIllustratorPromptReviewOverride,
       lorebookKeeperBackfill = false,
       forMessageId,
       musicPlayerSource = "spotify",
       musicPlayerEnabled = true,
       secretPlotRerollMode,
     } = request.body;
+    const illustratorPromptReviewOverride = rawIllustratorPromptReviewOverride
+      ? parseIllustratorPromptReviewOverride(rawIllustratorPromptReviewOverride)
+      : null;
     if (!chatId || !agentTypes?.length) {
       return reply.status(400).send({ error: "chatId and agentTypes are required" });
+    }
+    if (rawIllustratorPromptReviewOverride && !illustratorPromptReviewOverride) {
+      return reply.status(400).send({ error: "Invalid Illustrator prompt review override" });
     }
 
     startSseReply(reply, { "X-Accel-Buffering": "no" });
@@ -3430,11 +3474,29 @@ export async function registerRetryAgentsRoute(app: FastifyInstance) {
       }
       const lorebookKeeperAgent = resolvedAgents.find((entry) => entry.resolved.type === "lorebook-keeper") ?? null;
       const nonLorebookAgents = resolvedAgents.filter((entry) => entry.resolved.type !== "lorebook-keeper");
+      if (
+        illustratorPromptReviewOverride &&
+        (nonLorebookAgents.length !== 1 || nonLorebookAgents[0]?.resolved.type !== "illustrator")
+      ) {
+        throw new Error("Illustrator prompt review can only resume a single Illustrator retry");
+      }
       if (cyoaAgentWillRun) {
         logger.info("[retry-agents] CYOA re-roll chatId=%s assistantMessageId=%s", chatId, lastAssistant?.id ?? "none");
       }
-      const rawResults =
-        nonLorebookAgents.length > 0
+      const rawResults = illustratorPromptReviewOverride
+        ? [
+            {
+              agentId: nonLorebookAgents[0]!.resolved.id,
+              agentType: "illustrator",
+              type: "image_prompt",
+              data: { ...illustratorPromptReviewOverride.resultData, shouldGenerate: true },
+              tokensUsed: 0,
+              durationMs: 0,
+              success: true,
+              error: null,
+            } satisfies AgentResult,
+          ]
+        : nonLorebookAgents.length > 0
           ? await executeRetryBatches(agentContext, nonLorebookAgents, preGenerationAgentContext)
           : [];
       const results = rawResults
@@ -3613,6 +3675,8 @@ export async function registerRetryAgentsRoute(app: FastifyInstance) {
         chars,
         resolvedAgents: nonLorebookAgents,
         queueImageGenerationRequests,
+        reviewImagePromptsBeforeSend,
+        illustratorPromptReviewOverride,
         secretPlotRerollMode,
       });
 

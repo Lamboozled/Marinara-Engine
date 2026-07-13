@@ -53,6 +53,11 @@ import { unoEngine } from "../../packages/shared/src/features/turn-games/uno/eng
 import { DEFAULT_UNO_CONFIG, type UnoState } from "../../packages/shared/src/features/turn-games/uno/types.js";
 import { persistGeneratedImageToEntityGalleries } from "../../packages/server/src/services/image/generated-image-entity-gallery.js";
 import { runImageGenerationRequest } from "../../packages/server/src/services/image/image-generation-queue.js";
+import {
+  parseIllustratorPromptReviewOverride,
+  resolveIllustratorPromptSubmission,
+} from "../../packages/server/src/services/image/illustrator-prompt-review.js";
+import { resolveSceneVideoPrompt } from "../../packages/server/src/services/video/scene-video-prompt-review.js";
 
 assert.equal(resolveInitialGameGmConnectionId(undefined, "chat-connection"), "chat-connection");
 assert.equal(resolveInitialGameGmConnectionId("explicit-connection", "chat-connection"), "explicit-connection");
@@ -244,6 +249,56 @@ const replaySessionChats = [
 assert.equal(findReplayableGameSessionChat(replaySessionChats, 1)?.id, "canonical");
 assert.equal(findReplayableGameSessionChat(replaySessionChats, 2)?.id, "legacy-only-branch");
 assert.equal(findReplayableGameSessionChat(replaySessionChats, 3), null);
+
+assert.equal(
+  resolveSceneVideoPrompt({
+    generatedPrompt: "Generated Gallery animation prompt",
+    promptOverride: "  Reviewed Gallery animation prompt  ",
+    maxPromptLength: null,
+  }),
+  "Reviewed Gallery animation prompt",
+);
+assert.equal(
+  resolveSceneVideoPrompt({
+    generatedPrompt: "Generated Gallery animation prompt",
+    maxPromptLength: null,
+  }),
+  "Generated Gallery animation prompt",
+);
+assert.throws(
+  () =>
+    resolveSceneVideoPrompt({
+      generatedPrompt: "Generated prompt",
+      promptOverride: "Reviewed prompt exceeds provider limit",
+      maxPromptLength: 12,
+    }),
+  /at most 12 characters/u,
+);
+assert.deepEqual(
+  resolveIllustratorPromptSubmission({
+    generatedPrompt: "Generated compiled illustration prompt",
+    generatedNegativePrompt: "Generated negative prompt",
+    reviewOverride: {
+      prompt: "  Reviewed illustration prompt  ",
+      negativePrompt: "  Reviewed negative prompt  ",
+    },
+  }),
+  {
+    prompt: "Reviewed illustration prompt",
+    negativePrompt: "Reviewed negative prompt",
+  },
+);
+assert.deepEqual(
+  parseIllustratorPromptReviewOverride({
+    resultData: { shouldGenerate: true, prompt: "Agent prompt" },
+    prompt: " Reviewed provider prompt ",
+  }),
+  {
+    resultData: { shouldGenerate: true, prompt: "Agent prompt" },
+    prompt: "Reviewed provider prompt",
+  },
+);
+assert.equal(parseIllustratorPromptReviewOverride({ resultData: {}, prompt: "   " }), null);
 
 const sharedGameSetup = formatGameSetupShareText({
   gameName: "Tower Run",

@@ -684,9 +684,9 @@ const SETTINGS_SEARCHABLE_CONTROLS: readonly SettingsSearchableControlMeta[] = [
   {
     id: "image-prompt-review",
     sectionId: "image-generation",
-    label: "Expose image prompts before sending",
-    description: "Review generated image prompts before sending.",
-    aliases: ["image", "prompt", "review"],
+    label: "Expose media prompts before sending",
+    description: "Review generated image and Gallery video prompts before sending.",
+    aliases: ["image", "video", "media", "prompt", "review"],
     kind: "Toggle",
   },
   {
@@ -2992,10 +2992,10 @@ function ImageGenerationSettings() {
         />
         <ToggleSetting
           anchorId={getSettingsControlAnchorId("image-prompt-review")}
-          label="Expose image prompts before sending"
+          label="Expose media prompts before sending"
           checked={reviewImagePromptsBeforeSend}
           onChange={setReviewImagePromptsBeforeSend}
-          help="Pauses supported user-started image generation so you can review and edit the final positive and negative prompts before provider submission. This applies across Game and Roleplay scenes, manual Noodle refreshes, avatars, portraits, sprites, and animated expressions. Unattended automatic generations continue without waiting for a modal."
+          help="Pauses supported user-started media generation so you can review and edit the final prompt before provider submission. This applies across Game and Roleplay images, Conversation Gallery selfies, Gallery Video and Animate actions, manual Noodle refreshes, avatars, portraits, sprites, and animated expressions. Unattended automatic generations continue without waiting for a modal."
         />
 
         <ImageDimensionRow

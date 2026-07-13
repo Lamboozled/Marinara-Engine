@@ -218,6 +218,23 @@ type GameAssetGenerationPayload = {
   promptOverrides?: GameImagePromptOverride[];
 };
 
+type GameSceneVideoPayload = {
+  chatId: string;
+  illustrationTag?: string;
+  galleryImageId?: string;
+  promptOverride?: string;
+  previewOnly?: boolean;
+  debugMode: boolean;
+};
+
+type GameSceneVideoPromptPreview = {
+  prompt: string;
+  durationSeconds: number;
+  aspectRatio: "16:9" | "9:16";
+  resolution: string | null;
+  maxPromptLength: number | null;
+};
+
 type GameAssetGenerationResult = {
   generatedBackground: string | null;
   fallbackBackground?: string | null;
@@ -2847,6 +2864,7 @@ function GameSurfaceComponent({
   const [failedNpcAvatarNames, setFailedNpcAvatarNames] = useState<Set<string>>(() => new Set());
   const [imagePromptReviewItems, setImagePromptReviewItems] = useState<GameImagePromptReviewItem[]>([]);
   const [imagePromptReviewSubmitting, setImagePromptReviewSubmitting] = useState(false);
+  const [imagePromptReviewMediaType, setImagePromptReviewMediaType] = useState<"image" | "video">("image");
   const imagePromptReviewResolveRef = useRef<((overrides: GameImagePromptOverride[] | null) => void) | null>(null);
   const [volumePopoverOpen, setVolumePopoverOpen] = useState(false);
   const [gameAssetsPanelOpen, setGameAssetsPanelOpen] = useState(false);
@@ -4965,18 +4983,23 @@ function GameSurfaceComponent({
     [activeChatId, fetchManifest, queryClient],
   );
 
-  const openImagePromptReview = useCallback((items: GameImagePromptReviewItem[]) => {
-    return new Promise<GameImagePromptOverride[] | null>((resolve) => {
-      imagePromptReviewResolveRef.current = resolve;
-      setImagePromptReviewSubmitting(false);
-      setImagePromptReviewItems(items);
-    });
-  }, []);
+  const openImagePromptReview = useCallback(
+    (items: GameImagePromptReviewItem[], mediaType: "image" | "video" = "image") => {
+      return new Promise<GameImagePromptOverride[] | null>((resolve) => {
+        imagePromptReviewResolveRef.current = resolve;
+        setImagePromptReviewSubmitting(false);
+        setImagePromptReviewMediaType(mediaType);
+        setImagePromptReviewItems(items);
+      });
+    },
+    [],
+  );
 
   const closeImagePromptReview = useCallback((overrides: GameImagePromptOverride[] | null) => {
     const resolve = imagePromptReviewResolveRef.current;
     imagePromptReviewResolveRef.current = null;
     setImagePromptReviewSubmitting(false);
+    setImagePromptReviewMediaType("image");
     setImagePromptReviewItems([]);
     resolve?.(overrides);
   }, []);
@@ -4994,6 +5017,7 @@ function GameSurfaceComponent({
       open={imagePromptReviewItems.length > 0}
       items={imagePromptReviewItems}
       isSubmitting={imagePromptReviewSubmitting}
+      mediaType={imagePromptReviewMediaType}
       onCancel={() => closeImagePromptReview(null)}
       onConfirm={(overrides) => closeImagePromptReview(overrides)}
     />
@@ -5634,17 +5658,46 @@ function GameSurfaceComponent({
       setSceneVideoGenerating(true);
       setSceneVideoFailed(false);
       try {
-        const result = await withTimeout(
-          (signal) =>
-            api.post<{ video: GeneratedSceneVideo }>(
-              "/game/generate-scene-video",
+        const payload: GameSceneVideoPayload = {
+          chatId: activeChatId,
+          ...(galleryImageId ? { galleryImageId } : { illustrationTag }),
+          debugMode: useUIStore.getState().debugMode,
+        };
+        if (useUIStore.getState().reviewImagePromptsBeforeSend) {
+          const preview = await withTimeout(
+            (signal) =>
+              api.post<GameSceneVideoPromptPreview>(
+                "/game/generate-scene-video",
+                { ...payload, previewOnly: true },
+                { signal },
+              ),
+            GAME_ASSET_PREVIEW_TIMEOUT_MS,
+          );
+          const details = [`${preview.durationSeconds}s`, preview.aspectRatio, preview.resolution].filter(
+            (value): value is string => Boolean(value),
+          );
+          const overrides = await openImagePromptReview(
+            [
               {
-                chatId: activeChatId,
-                ...(galleryImageId ? { galleryImageId } : { illustrationTag }),
-                debugMode: useUIStore.getState().debugMode,
+                id: "game-scene-video",
+                kind: "video",
+                title: galleryImageId ? "Animate selected illustration" : "Animate latest illustration",
+                prompt: preview.prompt,
+                details: details.join(" | "),
+                maxLength: preview.maxPromptLength ?? undefined,
               },
-              { signal },
-            ),
+            ],
+            "video",
+          );
+          if (!overrides) return;
+          const reviewedPrompt = overrides[0]?.prompt.trim();
+          if (!reviewedPrompt) return;
+          setImagePromptReviewSubmitting(true);
+          payload.promptOverride = reviewedPrompt;
+        }
+
+        const result = await withTimeout(
+          (signal) => api.post<{ video: GeneratedSceneVideo }>("/game/generate-scene-video", payload, { signal }),
           SCENE_VIDEO_GENERATION_TIMEOUT_MS,
         );
         const galleryStore = useGalleryStore.getState();
@@ -5658,6 +5711,7 @@ function GameSurfaceComponent({
         setSceneVideoFailed(true);
         toast.error(error instanceof Error ? error.message : "Scene video generation failed.");
       } finally {
+        setImagePromptReviewSubmitting(false);
         setSceneVideoGenerating(false);
       }
     },
@@ -5665,6 +5719,7 @@ function GameSurfaceComponent({
       activeChatId,
       chatMeta.gameLastIllustrationTag,
       gameVideoGenerationEnabled,
+      openImagePromptReview,
       queryClient,
       sceneVideoGenerating,
       sceneVideosQuery,
