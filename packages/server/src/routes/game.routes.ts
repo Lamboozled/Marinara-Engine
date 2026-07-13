@@ -209,6 +209,7 @@ import {
   type SceneVideoPromptLimits,
 } from "../services/video/prompt-context.js";
 import { loadGameVideoPrompt } from "../services/video/game-video-prompt.js";
+import { resolveSceneVideoPrompt, SceneVideoPromptReviewError } from "../services/video/scene-video-prompt-review.js";
 import { now } from "../utils/id-generator.js";
 import { DATA_DIR } from "../utils/data-dir.js";
 import { assertInsideDir } from "../utils/security.js";
@@ -9856,6 +9857,8 @@ export async function gameRoutes(app: FastifyInstance) {
     galleryImageId: z.string().max(200).optional(),
     durationSeconds: z.number().int().min(1).max(60).optional(),
     aspectRatio: z.enum(["16:9", "9:16"]).optional(),
+    promptOverride: z.string().trim().min(1).max(20_000).optional(),
+    previewOnly: z.boolean().optional().default(false),
     debugMode: z.boolean().optional().default(false),
   });
 
@@ -10607,11 +10610,6 @@ export async function gameRoutes(app: FastifyInstance) {
 
   app.post("/generate-scene-video", async (req, reply) => {
     const input = generateSceneVideoSchema.parse(req.body);
-    const sceneVideoAbortSignal = createResponseAbortSignal(
-      reply,
-      GAME_SCENE_VIDEO_GENERATION_TIMEOUT_MS,
-      "Game scene video generation",
-    );
     const requestDebug = input.debugMode === true;
     const debugOverrideEnabled = requestDebug || isDebugAgentsEnabled();
     const debugLogsEnabled = debugOverrideEnabled || logger.isLevelEnabled("debug");
@@ -10750,7 +10748,35 @@ export async function gameRoutes(app: FastifyInstance) {
         sourceIllustrationLine: `Use ${sourceDescription} as the first frame/reference image.`,
       },
     });
-    const prompt = limitSceneVideoPromptForProvider(promptDraft, promptLimits.finalPrompt);
+    let prompt: string;
+    try {
+      prompt = resolveSceneVideoPrompt({
+        generatedPrompt: promptDraft,
+        promptOverride: input.promptOverride,
+        maxPromptLength: promptLimits.finalPrompt,
+      });
+    } catch (err) {
+      if (err instanceof SceneVideoPromptReviewError) {
+        return reply.status(err.statusCode).send({ error: err.message });
+      }
+      throw err;
+    }
+
+    if (input.previewOnly) {
+      return {
+        prompt,
+        durationSeconds,
+        aspectRatio,
+        resolution: resolution ?? null,
+        maxPromptLength: promptLimits.finalPrompt,
+      };
+    }
+
+    const sceneVideoAbortSignal = createResponseAbortSignal(
+      reply,
+      GAME_SCENE_VIDEO_GENERATION_TIMEOUT_MS,
+      "Game scene video generation",
+    );
 
     logger.info(
       "[game/generate-scene-video] request: chatId=%s connection=%s source=%s model=%s duration=%d aspect=%s illustration=%s",
