@@ -6,6 +6,7 @@ import {
   noodleGeneratedRefreshSchema,
   type NoodleGeneratedRefresh,
 } from "@marinara-engine/shared";
+import { normalizeNoodleHandle } from "./noodle-handle.js";
 
 type RefreshCollection = keyof NoodleGeneratedRefresh;
 
@@ -14,10 +15,6 @@ export type RejectedNoodleGeneratedRefreshItem = {
   index: number;
   issueCount: number;
 };
-
-function normalizeGeneratedHandle(handle: string): string {
-  return handle.trim().replace(/^@/u, "").toLowerCase();
-}
 
 /**
  * Require a refresh to contain usable activity attributed to the exact cast
@@ -34,12 +31,12 @@ export function validateNoodleGeneratedRefresh(
   if (!hasActivity) return "the response contained no timeline activity";
 
   const hasUsableAttribution =
-    refresh.posts.some((post) => allowedActorHandles.has(normalizeGeneratedHandle(post.authorHandle))) ||
-    refresh.interactions.some((interaction) => allowedActorHandles.has(normalizeGeneratedHandle(interaction.actorHandle))) ||
+    refresh.posts.some((post) => allowedActorHandles.has(normalizeNoodleHandle(post.authorHandle))) ||
+    refresh.interactions.some((interaction) => allowedActorHandles.has(normalizeNoodleHandle(interaction.actorHandle))) ||
     refresh.follows.some(
       (follow) =>
-        allowedActorHandles.has(normalizeGeneratedHandle(follow.actorHandle)) &&
-        knownHandles.has(normalizeGeneratedHandle(follow.targetHandle)),
+        allowedActorHandles.has(normalizeNoodleHandle(follow.actorHandle)) &&
+        knownHandles.has(normalizeNoodleHandle(follow.targetHandle)),
     );
   return hasUsableAttribution ? null : "the response used no selected participant handle";
 }

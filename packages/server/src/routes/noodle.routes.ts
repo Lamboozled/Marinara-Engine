@@ -97,6 +97,7 @@ import {
   validateNoodleGeneratedRefresh,
 } from "../services/noodle/noodle-generated-refresh.js";
 import { normalizeNoodleImagePrompt } from "../services/noodle/noodle-image-prompt.js";
+import { normalizeNoodleHandle } from "../services/noodle/noodle-handle.js";
 
 const NOODLE_ROUTE_DIR = dirname(fileURLToPath(import.meta.url));
 const CLIENT_PUBLIC_DIR = resolve(NOODLE_ROUTE_DIR, "../../../client/public");
@@ -150,10 +151,6 @@ function parseStringArray(value: unknown): string[] {
 
 function escapePromptAttribute(value: string) {
   return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
-
-function normalizeNoodleHandle(value: string): string {
-  return value.trim().replace(/^@/u, "").toLowerCase();
 }
 
 /**
@@ -1881,8 +1878,8 @@ export async function noodleRoutes(app: FastifyInstance) {
       let content = result.content ?? "";
       let parsedGenerated: ReturnType<typeof parseNoodleGeneratedRefresh> | null = null;
       let retryReason: string | null = null;
-      const allowedActorHandles = new Set(selectedParticipants.map((account) => account.handle.toLowerCase()));
-      const knownHandles = new Set(activeAccounts.map((account) => account.handle.toLowerCase()));
+      const allowedActorHandles = new Set(selectedParticipants.map((account) => normalizeNoodleHandle(account.handle)));
+      const knownHandles = new Set(activeAccounts.map((account) => normalizeNoodleHandle(account.handle)));
       try {
         parsedGenerated = parseNoodleGeneratedRefresh(parseGameJsonish(content));
         retryReason = validateNoodleGeneratedRefresh(parsedGenerated.refresh, allowedActorHandles, knownHandles);
@@ -1925,7 +1922,12 @@ export async function noodleRoutes(app: FastifyInstance) {
           rejected.issueCount === 1 ? "" : "s",
         );
       }
-      const handleToAccount = new Map(activeAccounts.map((account) => [account.handle.toLowerCase(), account]));
+      const handleToAccount = new Map(
+        [...(personaAccount ? [personaAccount] : []), ...selectedParticipants].map((account) => [
+          normalizeNoodleHandle(account.handle),
+          account,
+        ]),
+      );
       const mutableAccountSettings = new Map(
         activeAccounts.map((account) => [account.id, { ...account.settings }] as const),
       );
