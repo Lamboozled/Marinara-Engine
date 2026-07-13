@@ -560,6 +560,7 @@ export async function galleryRoutes(app: FastifyInstance) {
       promptOverride: input.promptOverride,
       maxPromptLength: videoRuntime.promptLimits.finalPrompt,
     });
+    const videoFallback = await resolveVideoConnectionFallback(connections, videoConnectionId);
 
     return {
       videoConnectionId,
@@ -568,6 +569,7 @@ export async function galleryRoutes(app: FastifyInstance) {
       durationSeconds,
       aspectRatio,
       prompt,
+      videoFallback,
     };
   }
 
@@ -789,7 +791,8 @@ export async function galleryRoutes(app: FastifyInstance) {
       logDebugOverride(debugOverrideEnabled, message, ...args);
     };
     const sceneVideos = createGameSceneVideosStorage(app.db);
-    const { videoConnectionId, galleryImage, videoRuntime, durationSeconds, aspectRatio, prompt } = prepared;
+    const { videoConnectionId, galleryImage, videoRuntime, durationSeconds, aspectRatio, prompt, videoFallback } =
+      prepared;
     const { source, serviceHint, baseUrl, apiKey, model, resolution, publicReferenceUpload } = videoRuntime;
 
     const galleryImagePath = resolveGalleryImagePath(galleryImage);
@@ -822,7 +825,6 @@ export async function galleryRoutes(app: FastifyInstance) {
     let savedFilePath: string | null = null;
     let metadataSaved = false;
     try {
-      const videoFallback = await resolveVideoConnectionFallback(connections, videoConnectionId);
       const generated = await generateVideo(source, baseUrl, apiKey, serviceHint, {
         prompt,
         model,

@@ -26,6 +26,7 @@ export async function resolveImageConnectionFallback(
   return {
     connectionId: connection.id,
     connectionName: String(connection.name ?? "").trim() || connection.id,
+    provider: String(connection.provider ?? "image_generation"),
     source: model || source,
     baseUrl,
     apiKey: connection.apiKey || "",

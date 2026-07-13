@@ -112,6 +112,7 @@ export function createConnectionsStorage(db: DB) {
     async create(input: CreateConnectionInput) {
       const id = newId();
       const timestamp = now();
+      const providerCategory = defaultCategoryForProvider(input.provider);
       const values = {
         id,
         name: input.name,
@@ -122,7 +123,7 @@ export function createConnectionsStorage(db: DB) {
         imagePath: input.imagePath ?? null,
         maxContext: input.maxContext ?? 128000,
         isDefault: String(input.isDefault ?? false),
-        fallbackForMain: String(input.fallbackForMain ?? false),
+        fallbackForMain: String(providerCategory === "language" && (input.fallbackForMain ?? false)),
         useForRandom: String(input.useForRandom ?? false),
         defaultForAgents: String(input.defaultForAgents ?? false),
         fallbackForAgents: String(input.fallbackForAgents ?? false),
@@ -153,7 +154,7 @@ export function createConnectionsStorage(db: DB) {
           await tx.update(apiConnections).set({ isDefault: "false" });
           values.fallbackForMain = "false";
         }
-        if (input.fallbackForMain) {
+        if (providerCategory === "language" && input.fallbackForMain) {
           await tx.update(apiConnections).set({ fallbackForMain: "false" });
           values.isDefault = "false";
         }
@@ -211,9 +212,10 @@ export function createConnectionsStorage(db: DB) {
       if (!existing) return null;
 
       const effectiveProvider = data.provider ?? existing.provider;
+      const effectiveProviderCategory = defaultCategoryForProvider(effectiveProvider);
       const updateFields: Record<string, unknown> = { updatedAt: now() };
       const shouldClearDefault = data.isDefault === true;
-      const shouldClearMainFallback = data.fallbackForMain === true;
+      const shouldClearMainFallback = effectiveProviderCategory === "language" && data.fallbackForMain === true;
       const shouldClearAgentDefaults =
         data.defaultForAgents === true ||
         (data.defaultForAgents === undefined && data.provider !== undefined && existing.defaultForAgents === "true");
@@ -231,7 +233,10 @@ export function createConnectionsStorage(db: DB) {
         updateFields.isDefault = String(data.isDefault);
       }
       if (data.fallbackForMain !== undefined) {
-        updateFields.fallbackForMain = String(data.fallbackForMain);
+        updateFields.fallbackForMain = String(effectiveProviderCategory === "language" && data.fallbackForMain);
+      }
+      if (data.provider !== undefined && effectiveProviderCategory !== "language") {
+        updateFields.fallbackForMain = "false";
       }
       if (data.useForRandom !== undefined) {
         updateFields.useForRandom = String(data.useForRandom);

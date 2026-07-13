@@ -146,6 +146,12 @@ async function generateSelfie(
   const selfiePromptTemplate = typeof args.chatMeta.selfiePrompt === "string" ? args.chatMeta.selfiePrompt.trim() : "";
 
   const promptFallbackConnection = await args.connections.getFallbackForAgents();
+  const reportFallback = (notice: {
+    category: "main" | "agents" | "illustrator" | "video";
+    connectionId: string;
+    connectionName: string;
+    model: string;
+  }) => args.sendEvent({ type: "fallback_used", data: notice });
   const promptBuilder = withConnectionFallbackProvider({
     primary: createLLMProvider(
       args.promptConnection.provider,
@@ -159,6 +165,7 @@ async function generateSelfie(
     fallbackConnection: promptFallbackConnection,
     fallbackBaseUrl: promptFallbackConnection ? resolveBaseUrl(promptFallbackConnection) : "",
     category: "agents",
+    onFallback: reportFallback,
   });
   const selfieSystemPrompt = await resolveConversationSelfieSystemPrompt({
     promptOverridesStorage: createPromptOverridesStorage(args.db),
@@ -265,15 +272,19 @@ async function generateSelfie(
     imageDefaults,
     referenceImages: selfieReferenceImages,
     fallback: imageFallback,
+    onFallback: reportFallback,
   });
 
   const filePath = saveImageToDisk(args.chatId, imageResult.base64, imageResult.ext);
+  const effectiveImageProvider =
+    imageResult.effectiveConnection?.provider ?? imgConnFull.provider ?? "image_generation";
+  const effectiveImageModel = imageResult.effectiveConnection?.model || imgModel || "unknown";
   const galleryEntry = await galleryStore.create({
     chatId: args.chatId,
     filePath,
     prompt: compiledSelfiePrompt.prompt,
-    provider: imgConnFull.provider ?? "image_generation",
-    model: imgModel || "unknown",
+    provider: effectiveImageProvider,
+    model: effectiveImageModel,
     width: selfieW || imageSettings.selfie.width,
     height: selfieH || imageSettings.selfie.height,
   });
@@ -283,8 +294,8 @@ async function generateSelfie(
     characterGallery: createCharacterGalleryStorage(args.db),
     personaGallery: createPersonaGalleryStorage(args.db),
     prompt: compiledSelfiePrompt.prompt,
-    provider: imgConnFull.provider ?? "image_generation",
-    model: imgModel || "unknown",
+    provider: effectiveImageProvider,
+    model: effectiveImageModel,
     width: selfieW || imageSettings.selfie.width,
     height: selfieH || imageSettings.selfie.height,
   });

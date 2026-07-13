@@ -15,6 +15,29 @@ export type RejectedNoodleGeneratedRefreshItem = {
   issueCount: number;
 };
 
+/**
+ * Require a refresh to contain usable activity attributed to the exact cast
+ * selected for this run. The persona may be a follow target, but generations
+ * must never author posts or interactions on the user's behalf.
+ */
+export function validateNoodleGeneratedRefresh(
+  refresh: NoodleGeneratedRefresh,
+  allowedActorEntityIds: ReadonlySet<string>,
+  knownEntityIds: ReadonlySet<string>,
+): string | null {
+  const hasActivity =
+    refresh.posts.length + refresh.interactions.length + refresh.follows.length + refresh.digests.length > 0;
+  if (!hasActivity) return "the response contained no timeline activity";
+
+  const hasUsableAttribution =
+    refresh.posts.some((post) => allowedActorEntityIds.has(post.authorEntityId)) ||
+    refresh.interactions.some((interaction) => allowedActorEntityIds.has(interaction.actorEntityId)) ||
+    refresh.follows.some(
+      (follow) => allowedActorEntityIds.has(follow.actorEntityId) && knownEntityIds.has(follow.targetEntityId),
+    );
+  return hasUsableAttribution ? null : "the response used no selected participant entityId";
+}
+
 const collectionSchemas = {
   posts: noodleGeneratedPostSchema,
   interactions: noodleGeneratedInteractionSchema,

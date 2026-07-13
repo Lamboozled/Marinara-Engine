@@ -21,6 +21,7 @@ export function normalizeNoodleImagePrompt(value: string | null | undefined): st
           return normalizeNoodleImagePrompt(nested);
         }
       }
+      return null;
     } catch {
       // Keep the original text when it only happens to begin with a brace.
     }

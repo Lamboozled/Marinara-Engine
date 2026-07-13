@@ -102,7 +102,7 @@ export class ConnectionFallbackProvider extends BaseLLMProvider {
     super("", "", primary.maxContextValue ?? undefined, null, primary.maxTokensOverrideValue);
   }
 
-  private logFallback(error: unknown): void {
+  private async logFallback(error: unknown): Promise<void> {
     logger.warn(
       error,
       "[%s-fallback] Primary generation failed before producing usable output; retrying with %s (%s)",
@@ -110,18 +110,31 @@ export class ConnectionFallbackProvider extends BaseLLMProvider {
       this.connection.name?.trim() || this.connection.id,
       this.connection.model,
     );
-    (this.onFallback ?? notifyGenerationFallback)({
-      category: this.category,
-      connectionId: this.connection.id,
-      connectionName: this.connection.name?.trim() || this.connection.id,
-      model: this.connection.model,
-    });
+    try {
+      await (this.onFallback ?? notifyGenerationFallback)({
+        category: this.category,
+        connectionId: this.connection.id,
+        connectionName: this.connection.name?.trim() || this.connection.id,
+        model: this.connection.model,
+      });
+    } catch (noticeError) {
+      logger.warn(noticeError, "[%s-fallback] Failed to report fallback activation", this.category);
+    }
   }
 
   async *chat(messages: ChatMessage[], options: ChatOptions): AsyncGenerator<string, LLMUsage | void, unknown> {
     let emittedOutput = false;
     try {
-      const generation = this.primary.chat(messages, options);
+      const primaryOptions = options.onToken
+        ? {
+            ...options,
+            onToken: async (chunk: string) => {
+              emittedOutput ||= chunk.length > 0;
+              await options.onToken?.(chunk);
+            },
+          }
+        : options;
+      const generation = this.primary.chat(messages, primaryOptions);
       let result = await generation.next();
       while (!result.done) {
         emittedOutput ||= result.value.length > 0;
@@ -131,7 +144,7 @@ export class ConnectionFallbackProvider extends BaseLLMProvider {
       return result.value;
     } catch (error) {
       if (emittedOutput || isAbortFailure(error, options.signal)) throw error;
-      this.logFallback(error);
+      await this.logFallback(error);
       return yield* this.fallback.chat(messages, fallbackOptions(options, this.connection));
     }
   }
@@ -141,10 +154,10 @@ export class ConnectionFallbackProvider extends BaseLLMProvider {
       const result = await this.primary.chatComplete(messages, options);
       const hasUsableOutput = Boolean(result.content) || result.toolCalls.length > 0;
       if (result.finishReason !== "error" || hasUsableOutput || options.signal?.aborted) return result;
-      this.logFallback(new Error("Primary provider returned an empty error completion"));
+      await this.logFallback(new Error("Primary provider returned an empty error completion"));
     } catch (error) {
       if (isAbortFailure(error, options.signal)) throw error;
-      this.logFallback(error);
+      await this.logFallback(error);
     }
     return this.fallback.chatComplete(messages, fallbackOptions(options, this.connection));
   }

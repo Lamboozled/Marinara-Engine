@@ -15,6 +15,9 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 
 ### Fixed
 
+- Hardened generation fallbacks so output already emitted through streaming callbacks is never replaced, failed toast delivery cannot cancel a working fallback, Roleplay background generation participates in Illustrator fallback routing, and Conversation selfie galleries record the connection and model that actually produced the image.
+- Fixed image and video connections retaining or claiming the language-only **Fallback for Main** role after creation or provider changes.
+- Fixed corrected Noodle refreshes bypassing the same activity and authorship validation as the first attempt, empty refreshes being accepted without retry, persona IDs being offered as generated authors, and JSON-shaped image prompts without a usable prompt field being sent verbatim to image providers.
 - Fixed Android/Termux updates repeatedly forcing the entire dependency store to reinstall for the same stale build. The launcher now performs one rebuild, prunes unreferenced packages left by older releases, avoids irrelevant cross-platform binary downloads, and accepts the current Node 26 Termux runtime (#3540).
 - Fixed one malformed generated Noodle post, interaction, follow, or digest rejecting an otherwise valid refresh. Rows are now validated independently, while wholly malformed JSON or batches containing only invented account IDs receive one constrained retry with the exact active IDs (#3547, #3553).
 - Fixed XML agent prompt-template overrides escaping literal contract tags such as `<chat_summary>` and `<existing_entries>` while continuing to escape values inserted through macros (#3548).

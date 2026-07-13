@@ -107,6 +107,7 @@ export interface ImageGenRequest {
   fallback?: {
     connectionId: string;
     connectionName: string;
+    provider: string;
     source: string;
     baseUrl: string;
     apiKey: string;
@@ -125,6 +126,13 @@ export interface ImageGenResult {
   mimeType: string;
   /** File extension without dot */
   ext: string;
+  /** Present when a configured fallback connection produced the image. */
+  effectiveConnection?: {
+    connectionId: string;
+    connectionName: string;
+    provider: string;
+    model: string;
+  };
 }
 
 const EXPLICIT_IMAGE_SOURCES = new Set([
@@ -245,13 +253,17 @@ export async function generateImage(
       fallback.connectionId,
       fallback.model,
     );
-    (request.onFallback ?? notifyGenerationFallback)({
-      category: "illustrator",
-      connectionId: fallback.connectionId,
-      connectionName: fallback.connectionName,
-      model: fallback.model,
-    });
-    return generateImage(fallback.source, fallback.baseUrl, fallback.apiKey, fallback.serviceHint, {
+    try {
+      await (request.onFallback ?? notifyGenerationFallback)({
+        category: "illustrator",
+        connectionId: fallback.connectionId,
+        connectionName: fallback.connectionName,
+        model: fallback.model,
+      });
+    } catch (noticeError) {
+      logger.warn(noticeError, "[illustrator-fallback] Failed to report fallback activation");
+    }
+    const result = await generateImage(fallback.source, fallback.baseUrl, fallback.apiKey, fallback.serviceHint, {
       ...request,
       fallback: undefined,
       model: fallback.model,
@@ -260,6 +272,15 @@ export async function generateImage(
       imageDefaults: fallback.imageDefaults,
       allowLocalUrls: undefined,
     });
+    return {
+      ...result,
+      effectiveConnection: {
+        connectionId: fallback.connectionId,
+        connectionName: fallback.connectionName,
+        provider: fallback.provider,
+        model: fallback.model,
+      },
+    };
   }
 }
 

@@ -132,12 +132,16 @@ export async function generateVideo(
       fallback.connectionId,
       fallback.model,
     );
-    (request.onFallback ?? notifyGenerationFallback)({
-      category: "video",
-      connectionId: fallback.connectionId,
-      connectionName: fallback.connectionName,
-      model: fallback.model,
-    });
+    try {
+      await (request.onFallback ?? notifyGenerationFallback)({
+        category: "video",
+        connectionId: fallback.connectionId,
+        connectionName: fallback.connectionName,
+        model: fallback.model,
+      });
+    } catch (noticeError) {
+      logger.warn(noticeError, "[video-fallback] Failed to report fallback activation");
+    }
     return generateVideo(fallback.source, fallback.baseUrl, fallback.apiKey, fallback.serviceHint, {
       ...request,
       fallback: undefined,

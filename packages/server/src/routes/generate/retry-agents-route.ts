@@ -40,7 +40,7 @@ import {
   type ResolvedAgent,
 } from "../../services/agents/agent-pipeline.js";
 import { executeAgent, executeAgentBatch, normalizeAgentContextSize } from "../../services/agents/agent-executor.js";
-import type { LLMToolDefinition } from "../../services/llm/base-provider.js";
+import type { BaseLLMProvider, LLMToolDefinition } from "../../services/llm/base-provider.js";
 import { getLocalSidecarProvider, LOCAL_SIDECAR_MODEL } from "../../services/llm/local-sidecar.js";
 import { createLLMProvider } from "../../services/llm/provider-registry.js";
 import { withConnectionFallbackProvider } from "../../services/llm/connection-fallback-provider.js";
@@ -1057,6 +1057,15 @@ async function resolveRetryAgents(args: {
     typeof setupConfig.sceneConnectionId === "string" ? setupConfig.sceneConnectionId.trim() : "";
   const defaultAgentConn = await conns.getDefaultForAgents();
   const fallbackAgentConn = await conns.getFallbackForAgents();
+  const wrapRetryAgentProvider = (primary: BaseLLMProvider, primaryConnectionId: string) =>
+    withConnectionFallbackProvider({
+      primary,
+      primaryConnectionId,
+      fallbackConnection: fallbackAgentConn,
+      fallbackBaseUrl: fallbackAgentConn ? resolveBaseUrl(fallbackAgentConn) : "",
+      category: "agents",
+      onFallback,
+    });
   type RetryAgentConnectionResolution = {
     entry: {
       connectionId: string | null;
@@ -1104,14 +1113,7 @@ async function resolveRetryAgents(args: {
     return {
       entry: {
         connectionId,
-        provider: withConnectionFallbackProvider({
-          primary: primaryProvider,
-          primaryConnectionId: connectionId ?? storedConn.id,
-          fallbackConnection: fallbackAgentConn,
-          fallbackBaseUrl: fallbackAgentConn ? resolveBaseUrl(fallbackAgentConn) : "",
-          category: "agents",
-          onFallback,
-        }),
+        provider: wrapRetryAgentProvider(primaryProvider, connectionId ?? storedConn.id),
         model,
         customParameters: parseStoredGenerationParameters(storedConn.defaultParameters)?.customParameters ?? {},
         maxOutputTokens: knownModel?.maxOutput && knownModel.maxOutput > 0 ? Math.floor(knownModel.maxOutput) : null,
@@ -1191,14 +1193,7 @@ async function resolveRetryAgents(args: {
       return {
         entry: {
           connectionId,
-          provider: withConnectionFallbackProvider({
-            primary: primaryProvider,
-            primaryConnectionId: connectionId,
-            fallbackConnection: fallbackAgentConn,
-            fallbackBaseUrl: fallbackAgentConn ? resolveBaseUrl(fallbackAgentConn) : "",
-            category: "agents",
-            onFallback,
-          }),
+          provider: wrapRetryAgentProvider(primaryProvider, connectionId),
           model: LOCAL_SIDECAR_MODEL,
           customParameters: {},
           maxOutputTokens: null,

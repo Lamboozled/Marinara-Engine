@@ -92,7 +92,10 @@ import {
 import { chooseNoodleParticipantAccounts } from "../services/noodle/noodle-participant-selection.js";
 import { canCreateGeneratedNoodleInteraction } from "../services/noodle/noodle-interaction-policy.js";
 import { parseNoodleGeneratedProfiles } from "../services/noodle/noodle-generated-profiles.js";
-import { parseNoodleGeneratedRefresh } from "../services/noodle/noodle-generated-refresh.js";
+import {
+  parseNoodleGeneratedRefresh,
+  validateNoodleGeneratedRefresh,
+} from "../services/noodle/noodle-generated-refresh.js";
 import { normalizeNoodleImagePrompt } from "../services/noodle/noodle-image-prompt.js";
 
 const NOODLE_ROUTE_DIR = dirname(fileURLToPath(import.meta.url));
@@ -171,24 +174,6 @@ function parseConversationCharacterStatuses(metadata: unknown): Record<string, {
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function generatedRefreshHasUsableAttribution(
-  generated: ReturnType<typeof parseNoodleGeneratedRefresh>["refresh"],
-  allowedActorEntityIds: ReadonlySet<string>,
-  knownEntityIds: ReadonlySet<string>,
-): boolean {
-  return (
-    generated.posts.some((post) => allowedActorEntityIds.has(post.authorEntityId)) ||
-    generated.interactions.some((interaction) => allowedActorEntityIds.has(interaction.actorEntityId)) ||
-    generated.follows.some(
-      (follow) => allowedActorEntityIds.has(follow.actorEntityId) && knownEntityIds.has(follow.targetEntityId),
-    )
-  );
-}
-
-function generatedRefreshHasActivity(generated: ReturnType<typeof parseNoodleGeneratedRefresh>["refresh"]): boolean {
-  return generated.posts.length + generated.interactions.length + generated.follows.length + generated.digests.length > 0;
 }
 
 const NOODLE_ADULT_PLATFORM_POLICY =
@@ -1357,6 +1342,7 @@ export async function noodleRoutes(app: FastifyInstance) {
         parsed.data.displayName !== undefined ||
         parsed.data.bio !== undefined ||
         parsed.data.avatarUrl !== undefined ||
+        parsed.data.settings?.avatarCrop !== undefined ||
         parsed.data.settings?.bannerUrl !== undefined ||
         parsed.data.settings?.location !== undefined);
     const updated = await noodle.updateAccount(id, {
@@ -1891,32 +1877,37 @@ export async function noodleRoutes(app: FastifyInstance) {
       let content = result.content ?? "";
       let parsedGenerated: ReturnType<typeof parseNoodleGeneratedRefresh> | null = null;
       let retryReason: string | null = null;
+      const allowedActorEntityIds = new Set(selectedParticipants.map((account) => account.entityId));
+      const knownEntityIds = new Set(activeAccounts.map((account) => account.entityId));
       try {
         parsedGenerated = parseNoodleGeneratedRefresh(parseGameJsonish(content));
-        const allowedActorEntityIds = new Set(selectedParticipants.map((account) => account.entityId));
-        const knownEntityIds = new Set(activeAccounts.map((account) => account.entityId));
-        if (
-          generatedRefreshHasActivity(parsedGenerated.refresh) &&
-          !generatedRefreshHasUsableAttribution(parsedGenerated.refresh, allowedActorEntityIds, knownEntityIds)
-        ) {
-          retryReason = "the response used no active account entityId";
-        }
+        retryReason = validateNoodleGeneratedRefresh(parsedGenerated.refresh, allowedActorEntityIds, knownEntityIds);
       } catch (error) {
         retryReason = `the response was not valid timeline JSON (${getErrorMessage(error).slice(0, 180)})`;
       }
 
       if (retryReason) {
-        const allowedEntityIds = activeAccounts.map((account) => account.entityId);
+        const allowedActorIds = selectedParticipants.map((account) => account.entityId);
+        const knownTargetIds = activeAccounts.map((account) => account.entityId);
         logger.warn("[noodle] Retrying timeline generation because %s", retryReason);
         const correction = [
           "Your previous timeline response could not be used.",
           `Reason: ${retryReason}.`,
-          `Regenerate the complete JSON object now. Use only these exact entityId values: ${allowedEntityIds.join(", ")}.`,
-          "Do not invent, rename, or omit the entityId field for an author or actor. Return JSON only.",
+          `Regenerate the complete JSON object now. Authors and actors must use only these selected participant entityId values: ${allowedActorIds.join(", ")}.`,
+          `Follow targets may additionally use these known entityId values: ${knownTargetIds.join(", ")}.`,
+          "Do not invent, rename, or omit an authorEntityId, actorEntityId, or targetEntityId. Return JSON only.",
         ].join("\n");
         result = await provider.chatComplete([...requestMessages, { role: "user", content: correction }], completionOptions);
         content = result.content ?? "";
         parsedGenerated = parseNoodleGeneratedRefresh(parseGameJsonish(content));
+        const correctedRetryReason = validateNoodleGeneratedRefresh(
+          parsedGenerated.refresh,
+          allowedActorEntityIds,
+          knownEntityIds,
+        );
+        if (correctedRetryReason) {
+          throw new Error(`Noodle timeline correction could not be used because ${correctedRetryReason}.`);
+        }
       }
 
       if (!parsedGenerated) throw new Error("Noodle timeline generation returned no usable response.");

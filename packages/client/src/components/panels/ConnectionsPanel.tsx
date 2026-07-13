@@ -823,7 +823,7 @@ function ConnectionDefaultsSection({ connectionsList }: { connectionsList: Conne
         <div className="min-w-0 flex-1">
           <div className="text-sm font-medium text-[var(--foreground)]">Defaults</div>
           <div className="text-[0.6875rem] text-[var(--muted-foreground)]">
-            Main, Agents, Illustrator, and Video  defaults and fallbacks
+            Main, Agents, Illustrator, and Videos defaults and fallbacks
           </div>
         </div>
         <button

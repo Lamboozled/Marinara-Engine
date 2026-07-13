@@ -1815,12 +1815,14 @@ async function applyCallSelfieCommand(input: {
   );
 
   const filePath = saveImageToDisk(input.chat.id, imageResult.base64, imageResult.ext);
+  const effectiveImageProvider = imageResult.effectiveConnection?.provider ?? imageConn.provider ?? "image_generation";
+  const effectiveImageModel = imageResult.effectiveConnection?.model ?? imageConn.model ?? "unknown";
   const galleryEntry = await createGalleryStorage(input.app.db).create({
     chatId: input.chat.id,
     filePath,
     prompt: compiledPrompt.prompt,
-    provider: imageConn.provider ?? "image_generation",
-    model: imageConn.model || "unknown",
+    provider: effectiveImageProvider,
+    model: effectiveImageModel,
     width: selfieW || imageSettings.selfie.width,
     height: selfieH || imageSettings.selfie.height,
   });
@@ -1830,8 +1832,8 @@ async function applyCallSelfieCommand(input: {
     characterGallery: createCharacterGalleryStorage(input.app.db),
     personaGallery: createPersonaGalleryStorage(input.app.db),
     prompt: compiledPrompt.prompt,
-    provider: imageConn.provider ?? "image_generation",
-    model: imageConn.model || "unknown",
+    provider: effectiveImageProvider,
+    model: effectiveImageModel,
     width: selfieW || imageSettings.selfie.width,
     height: selfieH || imageSettings.selfie.height,
   });

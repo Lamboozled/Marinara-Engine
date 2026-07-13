@@ -28,7 +28,10 @@ import {
 import { chooseNoodleParticipantAccounts } from "../../packages/server/src/services/noodle/noodle-participant-selection.js";
 import { canCreateGeneratedNoodleInteraction } from "../../packages/server/src/services/noodle/noodle-interaction-policy.js";
 import { parseNoodleGeneratedProfiles } from "../../packages/server/src/services/noodle/noodle-generated-profiles.js";
-import { parseNoodleGeneratedRefresh } from "../../packages/server/src/services/noodle/noodle-generated-refresh.js";
+import {
+  parseNoodleGeneratedRefresh,
+  validateNoodleGeneratedRefresh,
+} from "../../packages/server/src/services/noodle/noodle-generated-refresh.js";
 import { normalizeNoodleImagePrompt } from "../../packages/server/src/services/noodle/noodle-image-prompt.js";
 import { NOODLE_IMAGE_POST } from "../../packages/server/src/services/prompt-overrides/registry/noodle.js";
 import { collectNoodlePriorityAccountIds } from "../../packages/server/src/routes/noodle.routes.js";
@@ -404,6 +407,40 @@ const resilientRefresh = parseNoodleGeneratedRefresh({
 assert.equal(resilientRefresh.refresh.posts.length, 1);
 assert.equal(resilientRefresh.refresh.interactions.length, 0);
 assert.deepEqual(resilientRefresh.rejected, [{ collection: "interactions", index: 0, issueCount: 1 }]);
+assert.equal(
+  validateNoodleGeneratedRefresh(
+    { posts: [], interactions: [], follows: [], digests: [] },
+    new Set(["entity-alpha"]),
+    new Set(["entity-alpha", "persona"]),
+  ),
+  "the response contained no timeline activity",
+);
+assert.equal(
+  validateNoodleGeneratedRefresh(
+    {
+      posts: [{ authorEntityId: "persona", content: "The model must not post as the user.", attachGalleryImage: false }],
+      interactions: [],
+      follows: [],
+      digests: [],
+    },
+    new Set(["entity-alpha"]),
+    new Set(["entity-alpha", "persona"]),
+  ),
+  "the response used no selected participant entityId",
+);
+assert.equal(
+  validateNoodleGeneratedRefresh(
+    {
+      posts: [{ authorEntityId: "entity-alpha", content: "A valid cast post.", attachGalleryImage: false }],
+      interactions: [],
+      follows: [],
+      digests: [],
+    },
+    new Set(["entity-alpha"]),
+    new Set(["entity-alpha", "persona"]),
+  ),
+  null,
+);
 
 assert.equal(
   normalizeNoodleImagePrompt(
@@ -415,6 +452,7 @@ assert.equal(
   normalizeNoodleImagePrompt('{"imagePrompt":"moonlit laboratory portrait","content":"do not send me"}'),
   "moonlit laboratory portrait",
 );
+assert.equal(normalizeNoodleImagePrompt('{"content":"do not send this JSON to an image model"}'), null);
 const defaultNoodleImagePrompt = NOODLE_IMAGE_POST.defaultBuilder({
   authorName: "Dottore",
   postContent: "This entire post must not be sent to ComfyUI.",

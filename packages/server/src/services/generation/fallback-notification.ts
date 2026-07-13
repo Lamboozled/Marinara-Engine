@@ -9,7 +9,7 @@ export type GenerationFallbackNotice = {
   model: string;
 };
 
-export type GenerationFallbackNotifier = (notice: GenerationFallbackNotice) => void;
+export type GenerationFallbackNotifier = (notice: GenerationFallbackNotice) => void | Promise<void>;
 
 export const GENERATION_FALLBACK_HEADER = "X-Marinara-Fallback-Used";
 
@@ -19,8 +19,8 @@ export function runWithGenerationFallbackNotifier<T>(notifier: GenerationFallbac
   return fallbackNotifierContext.run(notifier, callback);
 }
 
-export function notifyGenerationFallback(notice: GenerationFallbackNotice): void {
-  fallbackNotifierContext.getStore()?.(notice);
+export async function notifyGenerationFallback(notice: GenerationFallbackNotice): Promise<void> {
+  await fallbackNotifierContext.getStore()?.(notice);
 }
 
 export function encodeGenerationFallbackNotice(notice: GenerationFallbackNotice): string {

@@ -49,6 +49,20 @@ class RegressionProvider extends BaseLLMProvider {
   }
 }
 
+class TokenCallbackFailureProvider extends BaseLLMProvider {
+  calls = 0;
+
+  constructor() {
+    super("", "");
+  }
+
+  async *chat(_messages: ChatMessage[], options: ChatOptions): AsyncGenerator<string, LLMUsage | void, unknown> {
+    this.calls += 1;
+    await options.onToken?.("visible callback output");
+    throw new Error("stream interrupted after callback output");
+  }
+}
+
 async function collectProviderOutput(provider: BaseLLMProvider, options: ChatOptions): Promise<string> {
   let output = "";
   for await (const chunk of provider.chat([{ role: "user", content: "test" }], options)) output += chunk;
@@ -218,6 +232,42 @@ await assert.rejects(
   /stream interrupted/,
 );
 assert.equal(unusedFallback.calls, 0, "a fallback must not be appended after visible primary output");
+
+const callbackPrimary = new TokenCallbackFailureProvider();
+const callbackFallback = new RegressionProvider(["must not replace visible callback output"]);
+let callbackOutput = "";
+await assert.rejects(
+  collectProviderOutput(
+    new ConnectionFallbackProvider(callbackPrimary, callbackFallback, fallbackConnection, "main"),
+    {
+      model: "primary-model",
+      onToken: (chunk) => {
+        callbackOutput += chunk;
+      },
+    },
+  ),
+  /stream interrupted after callback output/,
+);
+assert.equal(callbackOutput, "visible callback output");
+assert.equal(callbackFallback.calls, 0, "a fallback must not replace output already emitted through onToken");
+
+const rejectedNoticeFallback = new RegressionProvider(["fallback survives notification failure"]);
+assert.equal(
+  await collectProviderOutput(
+    new ConnectionFallbackProvider(
+      new RegressionProvider([], new Error("primary unavailable")),
+      rejectedNoticeFallback,
+      fallbackConnection,
+      "main",
+      async () => {
+        throw new Error("toast transport unavailable");
+      },
+    ),
+    { model: "primary-model" },
+  ),
+  "fallback survives notification failure",
+);
+assert.equal(rejectedNoticeFallback.calls, 1, "notification failures must not cancel fallback generation");
 
 const abortController = new AbortController();
 abortController.abort();

@@ -6579,6 +6579,7 @@ export async function generateRoutes(app: FastifyInstance) {
                       if (!imgConnFull) throw new Error("Cannot resolve Background agent image connection");
 
                       const imageDefaults = resolveConnectionImageDefaults(imgConnFull);
+                      const imageFallback = await resolveImageConnectionFallback(connections, imgConnFull.id);
                       const imageSettings = await loadImageGenerationUserSettings(app.db);
                       const promptOverridesStorage = createPromptOverridesStorage(app.db);
                       const setupConfigForImage =
@@ -6614,6 +6615,7 @@ export async function generateRoutes(app: FastifyInstance) {
                         imgEndpointId: imgConnFull.imageEndpointId || undefined,
                         imgComfyWorkflow: imgConnFull.comfyuiWorkflow || undefined,
                         imgDefaults: imageDefaults,
+                        imgFallback: imageFallback,
                         styleProfiles: imageSettings.styleProfiles,
                         styleProfileId,
                         promptOverridesStorage,

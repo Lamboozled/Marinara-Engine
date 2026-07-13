@@ -120,7 +120,7 @@ export async function buildApp(https?: { cert: Buffer; key: Buffer }) {
   // Keep fallback reporting attached to the originating request even when
   // generation passes through nested services. Streamed routes emit an SSE
   // event; ordinary requests expose a response header consumed by the client.
-  app.addHook("onRequest", (_request, reply, done) => {
+  app.addHook("preHandler", (_request, reply, done) => {
     runWithGenerationFallbackNotifier(createReplyFallbackNotifier(reply), done);
   });
 
