@@ -41,6 +41,7 @@ import { createCharacterGalleryStorage } from "../services/storage/character-gal
 import { createNoodleStorage, parseNoodleAvatarCrop } from "../services/storage/noodle.storage.js";
 import { createPromptOverridesStorage } from "../services/storage/prompt-overrides.storage.js";
 import { createLLMProvider } from "../services/llm/provider-registry.js";
+import { withConnectionFallbackProvider } from "../services/llm/connection-fallback-provider.js";
 import { generateImage, saveImageToDisk } from "../services/image/image-generation.js";
 import { resolveConnectionImageDefaults } from "../services/image/image-generation-defaults.js";
 import { loadImageGenerationUserSettings } from "../services/image/image-generation-settings.js";
@@ -51,6 +52,7 @@ import { resolveIllustratorCharacterReferences } from "./generate/illustrator-re
 import { resolveBaseUrl } from "./generate/generate-route-utils.js";
 import { logger, logDebugOverride } from "../lib/logger.js";
 import { clampGenerationMaxOutputTokens } from "../services/generation/output-token-limits.js";
+import { resolveImageConnectionFallback } from "../services/generation/media-connection-fallback.js";
 import {
   noodleRefreshSchedulerStatus,
   rescheduleNoodleRefreshTime,
@@ -1031,6 +1033,10 @@ async function generateNoodlePostImage(input: {
   const imageBaseUrl = input.imageConnection.baseUrl || "https://image.pollinations.ai";
   const imageSource = input.imageConnection.imageGenerationSource || imageModel;
   const imageServiceHint = input.imageConnection.imageService || imageSource;
+  const imageFallback = await resolveImageConnectionFallback(
+    createConnectionsStorage(input.app.db),
+    input.imageConnection.id,
+  );
   let characterDescription = "";
   let referenceImages: string[] | undefined;
 
@@ -1135,6 +1141,7 @@ async function generateNoodlePostImage(input: {
         comfyWorkflow: input.imageConnection.comfyuiWorkflow || undefined,
         imageDefaults,
         referenceImages,
+        fallback: imageFallback,
       }),
     (error, attempt, maxAttempts) => {
       logger.warn(
@@ -1458,7 +1465,7 @@ export async function noodleRoutes(app: FastifyInstance) {
     const [post, accounts] = await Promise.all([noodle.getPostById(postId), noodle.listAccounts()]);
     if (post && interactionActor) {
       const directReplyTarget = updated.parentInteractionId
-        ? (await noodle.getInteractionById(updated.parentInteractionId))
+        ? await noodle.getInteractionById(updated.parentInteractionId)
         : null;
       const mentionedAccounts = mentionedCharacterAccounts(accounts, updated.content ?? "");
       await noodle.createDigest({
@@ -1611,7 +1618,7 @@ export async function noodleRoutes(app: FastifyInstance) {
 
     try {
       const baseUrl = resolveBaseUrl(conn);
-      const provider = createLLMProvider(
+      const primaryProvider = createLLMProvider(
         conn.provider,
         baseUrl,
         conn.apiKey,
@@ -1621,6 +1628,14 @@ export async function noodleRoutes(app: FastifyInstance) {
         conn.claudeFastMode === "true",
         conn.treatAsLocalEndpoint === "true",
       );
+      const fallbackConnection = await connections.getFallbackForMain();
+      const provider = withConnectionFallbackProvider({
+        primary: primaryProvider,
+        primaryConnectionId: conn.id,
+        fallbackConnection,
+        fallbackBaseUrl: fallbackConnection ? resolveBaseUrl(fallbackConnection) : "",
+        category: "main",
+      });
       await ensurePersonaAccounts(noodle, characters);
       await ensureProfessorMariAccount(noodle, characters);
       const personaAccount = await resolvePersonaAccount(noodle, characters, parsed.data.personaId);

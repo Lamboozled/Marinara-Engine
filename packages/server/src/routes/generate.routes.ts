@@ -87,6 +87,7 @@ import { loadImageGenerationUserSettings } from "../services/image/image-generat
 import { textRewriteDropsProtectedMarkup } from "../services/generation/text-rewrite-safety.js";
 import { compileImagePrompt } from "../services/image/image-prompt-compiler.js";
 import { persistGeneratedImageToEntityGalleries } from "../services/image/generated-image-entity-gallery.js";
+import { resolveImageConnectionFallback } from "../services/generation/media-connection-fallback.js";
 import { extractLeadingThinkingBlocks } from "../services/llm/inline-thinking.js";
 import { buildSpotifyDjConstraints } from "../services/spotify/spotify-dj-constraints.js";
 import {
@@ -418,6 +419,7 @@ import {
   resolveCustomWritableLorebookIds,
 } from "../services/generation/agent-prompt-runtime.js";
 import { resolveAgentPipelineAgents } from "../services/generation/agent-resolution.js";
+import { createReplyFallbackNotifier } from "./generate/fallback-notification.js";
 import { resolveGenerationTools } from "../services/generation/tool-resolution-runtime.js";
 import {
   buildCharacterMacroProfilesById,
@@ -848,6 +850,8 @@ export async function generateRoutes(app: FastifyInstance) {
       releaseActiveGeneration();
       return reply.status(400).send({ error: "No base URL configured for this connection" });
     }
+    const mainFallbackConnection = await connections.getFallbackForMain().catch(releaseActiveGenerationAndRethrow);
+    const mainFallbackBaseUrl = mainFallbackConnection ? resolveBaseUrl(mainFallbackConnection) : "";
     let chatMeta = parseExtra(chat.metadata) as Record<string, unknown>;
     const promptTimeZone =
       normalizePromptTimeZone(chatMeta.promptTimeZone) ?? normalizePromptTimeZone(input.userTimeZone);
@@ -887,6 +891,7 @@ export async function generateRoutes(app: FastifyInstance) {
 
     // Set up SSE headers
     startSseReply(reply, { "X-Accel-Buffering": "no" });
+    const onFallback = createReplyFallbackNotifier(reply);
 
     let generationComplete = false;
     let clientDisconnected = false;
@@ -1446,11 +1451,7 @@ export async function generateRoutes(app: FastifyInstance) {
             ? input.forCharacterId
             : null;
         const promptCharacterIds = resolvePromptCharacterIdsForTarget(characterIds, promptTargetCharacterId);
-        const characterAdvancedPromptIds = resolveCharacterAdvancedPromptIds(
-          promptCharacterIds,
-          chatMode,
-          chatMeta,
-        );
+        const characterAdvancedPromptIds = resolveCharacterAdvancedPromptIds(promptCharacterIds, chatMode, chatMeta);
         const deferCharacterMacros =
           characterIds.length > 1 &&
           promptGroupChatMode === "individual" &&
@@ -1857,6 +1858,7 @@ export async function generateRoutes(app: FastifyInstance) {
           const { convoCharInfo, convoCharNames, charNameList, isGroup } = presenceRuntime;
 
           const nowInstant = new Date();
+          const conversationSummaryFallback = await connections.getFallbackForAgents();
           const preparedHistory = await prepareConversationPromptHistory({
             finalMessages,
             chatMessages,
@@ -1882,7 +1884,10 @@ export async function generateRoutes(app: FastifyInstance) {
               openrouterProvider: conn.openrouterProvider,
               maxTokensOverride: conn.maxTokensOverride,
             },
+            connectionId: conn.id,
             baseUrl,
+            fallbackConnection: conversationSummaryFallback,
+            fallbackBaseUrl: conversationSummaryFallback ? resolveBaseUrl(conversationSummaryFallback) : "",
           });
           finalMessages = preparedHistory.finalMessages;
 
@@ -2324,6 +2329,9 @@ export async function generateRoutes(app: FastifyInstance) {
           connectionId: connId ?? "",
           connection: conn,
           baseUrl,
+          fallbackConnection: mainFallbackConnection,
+          fallbackBaseUrl: mainFallbackBaseUrl,
+          onFallback,
           chatMode,
           isSceneChat,
           chatParameters: chatMeta.chatParameters,
@@ -2355,6 +2363,7 @@ export async function generateRoutes(app: FastifyInstance) {
           enableThinking,
           isClaudeNoSampling,
           providerTopK,
+          primaryProvider: agentChatProvider,
           provider,
         } = providerRuntime;
         ({
@@ -2391,7 +2400,8 @@ export async function generateRoutes(app: FastifyInstance) {
           hasPerChatAgentList,
           perChatAgentSet,
           agentPromptTemplateSelections,
-          chatProvider: provider,
+          chatProvider: agentChatProvider,
+          chatConnectionId: connId ?? "",
           chatModel: conn.model,
           chatCustomParameters: connectionParams?.customParameters ?? {},
           chatMaxOutputTokens: chatConnectionMaxOutputTokens,
@@ -2401,6 +2411,7 @@ export async function generateRoutes(app: FastifyInstance) {
           chatCachingAtDepth: conn.cachingAtDepth ?? 5,
           activeMusicPlayerSource,
           chatMetadata: chatMeta,
+          onFallback,
           resolveBaseUrl,
         });
 
@@ -7021,6 +7032,7 @@ export async function generateRoutes(app: FastifyInstance) {
                         const imgSource = (imgConnFull as any).imageGenerationSource || imgModel;
                         const imgServiceHint = imgConnFull.imageService || imgSource;
                         const imageDefaults = resolveConnectionImageDefaults(imgConnFull);
+                        const imageFallback = await resolveImageConnectionFallback(connections, imgConnFull.id);
                         const imageSettings = await loadImageGenerationUserSettings(app.db);
                         const styleProfileId =
                           ((chatMeta.gameSetupConfig as Record<string, unknown> | undefined)?.imageStyleProfileId as
@@ -7061,6 +7073,8 @@ export async function generateRoutes(app: FastifyInstance) {
                               imageEndpointId: imgConnFull.imageEndpointId || undefined,
                               comfyWorkflow: imgConnFull.comfyuiWorkflow || undefined,
                               imageDefaults,
+                              fallback: imageFallback,
+                              onFallback,
                             });
 
                             // Save to NPC avatars directory
@@ -7636,6 +7650,7 @@ export async function generateRoutes(app: FastifyInstance) {
                         imageGenerationSource: imgSource,
                       });
                       const imageDefaults = resolveConnectionImageDefaults(imgConnFull);
+                      const imageFallback = await resolveImageConnectionFallback(connections, imgConnFull.id);
                       const imageSettings = await loadImageGenerationUserSettings(app.db);
                       const styleProfileId =
                         ((chatMeta.gameSetupConfig as Record<string, unknown> | undefined)?.imageStyleProfileId as
@@ -7652,9 +7667,7 @@ export async function generateRoutes(app: FastifyInstance) {
                       if (imagePositivePrompt) {
                         fullPrompt = `${fullPrompt}, ${imagePositivePrompt}`;
                       }
-                      const requestedNegativePrompt = [negativePrompt, savedNegativePrompt]
-                        .filter(Boolean)
-                        .join(", ");
+                      const requestedNegativePrompt = [negativePrompt, savedNegativePrompt].filter(Boolean).join(", ");
 
                       logger.debug(`[illustrator] Starting image generation (${imgWidth}x${imgHeight})...`);
 
@@ -7738,6 +7751,8 @@ export async function generateRoutes(app: FastifyInstance) {
                         comfyWorkflow: imgConnFull.comfyuiWorkflow || undefined,
                         imageDefaults,
                         referenceImages: illustratorRefImages,
+                        fallback: imageFallback,
+                        onFallback,
                       });
 
                       // Save to disk
@@ -8061,6 +8076,7 @@ export async function generateRoutes(app: FastifyInstance) {
                       }
                     : null,
                   promptConnection: conn,
+                  promptConnectionId: conn.id,
                   baseUrl,
                   suppressModelParameters,
                   serviceTier,

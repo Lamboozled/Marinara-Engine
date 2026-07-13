@@ -35,7 +35,12 @@ import { resolveConnectionImageDefaults } from "../services/image/image-generati
 import { loadImageGenerationUserSettings } from "../services/image/image-generation-settings.js";
 import { compileImagePrompt } from "../services/image/image-prompt-compiler.js";
 import { persistGeneratedImageToEntityGalleries } from "../services/image/generated-image-entity-gallery.js";
+import {
+  resolveImageConnectionFallback,
+  resolveVideoConnectionFallback,
+} from "../services/generation/media-connection-fallback.js";
 import { createLLMProvider } from "../services/llm/provider-registry.js";
+import { withConnectionFallbackProvider } from "../services/llm/connection-fallback-provider.js";
 import { getLocalSidecarProvider, LOCAL_SIDECAR_MODEL } from "../services/llm/local-sidecar.js";
 import { resolveConversationSelfieSystemPrompt } from "../services/conversation/selfie-prompt.js";
 import { isNovelAiImageConnection, resolveIllustratorCharacterReferences } from "./generate/illustrator-references.js";
@@ -762,6 +767,7 @@ export async function galleryRoutes(app: FastifyInstance) {
     let savedFilePath: string | null = null;
     let metadataSaved = false;
     try {
+      const videoFallback = await resolveVideoConnectionFallback(connections, videoConn.id);
       const generated = await generateVideo(source, baseUrl, videoConn.apiKey || "", serviceHint, {
         prompt,
         model,
@@ -771,6 +777,7 @@ export async function galleryRoutes(app: FastifyInstance) {
         referenceImage,
         publicReferenceUpload,
         signal: sceneVideoAbortSignal,
+        fallback: videoFallback,
       });
       const filePath = await saveVideoToDisk(input.chatId, generated.base64);
       savedFilePath = filePath;
@@ -873,7 +880,8 @@ export async function galleryRoutes(app: FastifyInstance) {
     });
 
     const selfieAbortSignal = createResponseAbortSignal(reply, SCENE_VIDEO_GENERATION_TIMEOUT_MS, "Selfie generation");
-    const promptBuilder = useLocalSidecar
+    const promptFallbackConnection = await connections.getFallbackForAgents();
+    const primaryPromptBuilder = useLocalSidecar
       ? getLocalSidecarProvider()
       : createLLMProvider(
           chatConn!.provider,
@@ -885,6 +893,13 @@ export async function galleryRoutes(app: FastifyInstance) {
           chatConn!.claudeFastMode === "true",
           chatConn!.treatAsLocalEndpoint === "true",
         );
+    const promptBuilder = withConnectionFallbackProvider({
+      primary: primaryPromptBuilder,
+      primaryConnectionId: useLocalSidecar ? LOCAL_SIDECAR_CONNECTION_ID : chatConn!.id,
+      fallbackConnection: promptFallbackConnection,
+      fallbackBaseUrl: promptFallbackConnection ? resolveBaseUrl(promptFallbackConnection) : "",
+      category: "agents",
+    });
     const promptContext = input.context?.trim()
       ? `Context for the selfie: ${input.context.trim()}`
       : `Generate a casual selfie of ${characterName} based on the current conversation context.`;
@@ -1002,6 +1017,7 @@ export async function galleryRoutes(app: FastifyInstance) {
     }
 
     try {
+      const imageFallback = await resolveImageConnectionFallback(connections, imageConn.id);
       const imageResult = await generateImage(imageSource, imageBaseUrl, imageConn.apiKey || "", imageServiceHint, {
         prompt: compiledPrompt.prompt,
         negativePrompt: compiledPrompt.negativePrompt || undefined,
@@ -1013,6 +1029,7 @@ export async function galleryRoutes(app: FastifyInstance) {
         imageDefaults,
         referenceImages,
         signal: selfieAbortSignal,
+        fallback: imageFallback,
       });
       const filePath = saveImageToDisk(chatId, imageResult.base64, imageResult.ext);
       const image = await storage.create({

@@ -19,6 +19,7 @@ import { createGameStateStorage } from "../services/storage/game-state.storage.j
 import { createLorebooksStorage } from "../services/storage/lorebooks.storage.js";
 import { createAgentsStorage } from "../services/storage/agents.storage.js";
 import { createLLMProvider } from "../services/llm/provider-registry.js";
+import { withConnectionFallbackProvider } from "../services/llm/connection-fallback-provider.js";
 import { extractLeadingThinkingBlocks } from "../services/llm/inline-thinking.js";
 import { type ChatCompletionResult, type ChatMessage, type ChatOptions } from "../services/llm/base-provider.js";
 import { isDiceNotation, rollDice } from "../services/game/dice.service.js";
@@ -124,7 +125,7 @@ import {
   normalizeRpgStatPools,
   type RPGStatsConfig,
 } from "@marinara-engine/shared";
-import { mergeCustomParameters, parseGameStateRow } from "./generate/generate-route-utils.js";
+import { mergeCustomParameters, parseGameStateRow, resolveBaseUrl } from "./generate/generate-route-utils.js";
 import {
   fitMessagesToModelAccessContext,
   mergeModelContextLimit,
@@ -183,6 +184,10 @@ import {
 } from "../services/video/video-generation.js";
 import { resolveGameVideoRuntime, type GameVideoRuntime } from "../services/video/game-video-runtime.js";
 import { resolveConnectionImageDefaults } from "../services/image/image-generation-defaults.js";
+import {
+  resolveImageConnectionFallback,
+  resolveVideoConnectionFallback,
+} from "../services/generation/media-connection-fallback.js";
 import {
   loadImageGenerationUserSettings,
   type ImageGenerationSize,
@@ -911,14 +916,7 @@ async function summarizeIllustrationFromNarration(args: {
       args.chat.connectionId,
     );
     const parameters = resolveStoredGameGenerationParameters(args.meta, defaultGenerationParameters);
-    const provider = createLLMProvider(
-      conn.provider,
-      baseUrl,
-      conn.apiKey!,
-      conn.maxContext,
-      conn.openrouterProvider,
-      conn.maxTokensOverride,
-    );
+    const provider = await createGameMainProvider(args.connections, conn, baseUrl);
     const messages = await buildIllustrationNarrationSummaryMessages({
       promptOverridesStorage: args.promptOverridesStorage,
       illustration: args.illustration,
@@ -1146,14 +1144,7 @@ async function createDynamicGameImagePromptGenerator(args: {
       args.chat.connectionId,
     );
     const parameters = resolveStoredGameGenerationParameters(args.meta, defaultGenerationParameters);
-    const provider = createLLMProvider(
-      conn.provider,
-      baseUrl,
-      conn.apiKey!,
-      conn.maxContext,
-      conn.openrouterProvider,
-      conn.maxTokensOverride,
-    );
+    const provider = await createGameMainProvider(args.connections, conn, baseUrl);
 
     return async (request) => {
       const messages = await buildDynamicGameImagePromptMessages({
@@ -2597,6 +2588,32 @@ async function resolveConnection(
   return { conn, baseUrl, defaultGenerationParameters: parseStoredGenerationParameters(conn.defaultParameters) };
 }
 
+async function createGameMainProvider(
+  connections: ReturnType<typeof createConnectionsStorage>,
+  conn: Awaited<ReturnType<ReturnType<typeof createConnectionsStorage>["getWithKey"]>>,
+  baseUrl: string,
+) {
+  if (!conn) throw new Error("API connection not found");
+  const primary = createLLMProvider(
+    conn.provider,
+    baseUrl,
+    conn.apiKey,
+    conn.maxContext,
+    conn.openrouterProvider,
+    conn.maxTokensOverride,
+    conn.claudeFastMode === "true",
+    conn.treatAsLocalEndpoint === "true",
+  );
+  const fallbackConnection = await connections.getFallbackForMain();
+  return withConnectionFallbackProvider({
+    primary,
+    primaryConnectionId: conn.id,
+    fallbackConnection,
+    fallbackBaseUrl: fallbackConnection ? resolveBaseUrl(fallbackConnection) : "",
+    category: "main",
+  });
+}
+
 type StoredGenerationParameters = Partial<GenerationParameters>;
 
 type InitialSetupConnectionRow = {
@@ -3722,14 +3739,7 @@ async function runGameLorebookKeeperAfterConclusion(args: {
       chat.connectionId,
     );
     const generationParameters = resolveStoredGameGenerationParameters(meta, defaultGenerationParameters);
-    const provider = createLLMProvider(
-      conn.provider,
-      baseUrl,
-      conn.apiKey!,
-      conn.maxContext,
-      conn.openrouterProvider,
-      conn.maxTokensOverride,
-    );
+    const provider = await createGameMainProvider(connections, conn, baseUrl);
     const streaming = args.streaming ?? true;
     const options = gameGenOptions(
       conn.model,
@@ -6051,14 +6061,7 @@ export async function gameRoutes(app: FastifyInstance) {
       connectionId,
       chat.connectionId,
     );
-    const provider = createLLMProvider(
-      conn.provider,
-      baseUrl,
-      conn.apiKey!,
-      conn.maxContext,
-      conn.openrouterProvider,
-      conn.maxTokensOverride,
-    );
+    const provider = await createGameMainProvider(connections, conn, baseUrl);
     const setupGenerationParameters = resolveStoredGameGenerationParameters(meta, defaultGenerationParameters);
 
     let gmCharacterCard: string | null = null;
@@ -6701,14 +6704,7 @@ export async function gameRoutes(app: FastifyInstance) {
       if (summaries.length > 0) {
         try {
           const { conn, baseUrl } = await resolveConnection(connections, connectionId, newChat.connectionId);
-          const provider = createLLMProvider(
-            conn.provider,
-            baseUrl,
-            conn.apiKey!,
-            conn.maxContext,
-            conn.openrouterProvider,
-            conn.maxTokensOverride,
-          );
+          const provider = await createGameMainProvider(connections, conn, baseUrl);
 
           const recapMessages: ChatMessage[] = [
             { role: "system", content: buildRecapPrompt(summaries, latestSessionEndingBeat) },
@@ -6886,14 +6882,7 @@ export async function gameRoutes(app: FastifyInstance) {
         maxContext: conn.maxContext,
         parameters: conclusionGenerationParameters,
       });
-      const provider = createLLMProvider(
-        conn.provider,
-        baseUrl,
-        conn.apiKey!,
-        conn.maxContext,
-        conn.openrouterProvider,
-        conn.maxTokensOverride,
-      );
+      const provider = await createGameMainProvider(connections, conn, baseUrl);
 
       const conclusionAbort = createResponseAbortTracker(reply, GAME_GENERATION_TIMEOUT_MS, "Game session conclusion");
       const conclusionOptions = gameGenOptions(
@@ -7438,14 +7427,7 @@ export async function gameRoutes(app: FastifyInstance) {
       maxContext: conn.maxContext,
       parameters: conclusionGenerationParameters,
     });
-    const provider = createLLMProvider(
-      conn.provider,
-      baseUrl,
-      conn.apiKey!,
-      conn.maxContext,
-      conn.openrouterProvider,
-      conn.maxTokensOverride,
-    );
+    const provider = await createGameMainProvider(connections, conn, baseUrl);
     const conclusionAbort = createResponseAbortTracker(
       reply,
       GAME_GENERATION_TIMEOUT_MS,
@@ -7696,14 +7678,7 @@ export async function gameRoutes(app: FastifyInstance) {
       currentMeta,
       defaultGenerationParameters,
     );
-    const provider = createLLMProvider(
-      conn.provider,
-      baseUrl,
-      conn.apiKey!,
-      conn.maxContext,
-      conn.openrouterProvider,
-      conn.maxTokensOverride,
-    );
+    const provider = await createGameMainProvider(connections, conn, baseUrl);
     const progressionAbort = createResponseAbortTracker(
       reply,
       GAME_GENERATION_TIMEOUT_MS,
@@ -8026,13 +8001,7 @@ export async function gameRoutes(app: FastifyInstance) {
           input.connectionId,
           chat.connectionId,
         );
-        const provider = createLLMProvider(
-          conn.provider,
-          baseUrl,
-          conn.apiKey!,
-          conn.maxContext,
-          conn.openrouterProvider,
-        );
+        const provider = await createGameMainProvider(connections, conn, baseUrl);
         const generationParameters = resolveStoredGameGenerationParameters(meta, defaultGenerationParameters);
         const latestState = await stateStore.getLatest(input.chatId);
         const recentMessages = applyGameSegmentEditsForPrompt(await chats.listMessages(input.chatId), meta);
@@ -8450,14 +8419,7 @@ export async function gameRoutes(app: FastifyInstance) {
     if (!chat) throw new Error("Chat not found");
 
     const { conn, baseUrl } = await resolveConnection(connections, connectionId, chat.connectionId);
-    const provider = createLLMProvider(
-      conn.provider,
-      baseUrl,
-      conn.apiKey!,
-      conn.maxContext,
-      conn.openrouterProvider,
-      conn.maxTokensOverride,
-    );
+    const provider = await createGameMainProvider(connections, conn, baseUrl);
 
     const messages: ChatMessage[] = [
       { role: "system", content: buildMapGenerationPrompt(locationType, mapContext) },
@@ -9187,14 +9149,7 @@ export async function gameRoutes(app: FastifyInstance) {
       { role: "user", content: userPrompt },
     ];
 
-    const provider = createLLMProvider(
-      conn.provider,
-      baseUrl,
-      conn.apiKey!,
-      conn.maxContext,
-      conn.openrouterProvider,
-      conn.maxTokensOverride,
-    );
+    const provider = await createGameMainProvider(connections, conn, baseUrl);
     const partyTurnAbortSignal = createResponseAbortSignal(reply, GAME_GENERATION_TIMEOUT_MS, "Game party turn");
     const result = await runGameChatComplete(
       provider,
@@ -9501,14 +9456,7 @@ export async function gameRoutes(app: FastifyInstance) {
       debugLog("[debug/game/scene-analysis:connection] user prompt:\n%s", userPrompt);
     }
 
-    const provider = createLLMProvider(
-      conn.provider,
-      baseUrl,
-      conn.apiKey!,
-      conn.maxContext,
-      conn.openrouterProvider,
-      conn.maxTokensOverride,
-    );
+    const provider = await createGameMainProvider(connections, conn, baseUrl);
     logger.debug(
       "[game/scene-wrap] chatId=%s, model=%s, narration=%d chars, streaming=%s",
       input.chatId,
@@ -9996,14 +9944,7 @@ export async function gameRoutes(app: FastifyInstance) {
         chat.connectionId,
       );
       const parameters = resolveStoredGameGenerationParameters(meta, defaultGenerationParameters);
-      const provider = createLLMProvider(
-        conn.provider,
-        baseUrl,
-        conn.apiKey!,
-        conn.maxContext,
-        conn.openrouterProvider,
-        conn.maxTokensOverride,
-      );
+      const provider = await createGameMainProvider(connections, conn, baseUrl);
 
       const setupCfg = (meta.gameSetupConfig as Record<string, unknown> | null) ?? null;
       const latestState = await createGameStateStorage(app.db)
@@ -10151,6 +10092,7 @@ export async function gameRoutes(app: FastifyInstance) {
       const imgServiceHint = imgConn.imageService || imgSource;
       const imgEndpointId = imgConn.imageEndpointId || undefined;
       const imgDefaults = resolveConnectionImageDefaults(imgConn);
+      const imgFallback = await resolveImageConnectionFallback(connections, imgConn.id);
       const imageSettings = await loadImageGenerationUserSettings(app.db);
       const backgroundSize: ImageGenerationSize = imageSettings.background;
       const styleProfiles = imageSettings.styleProfiles;
@@ -10169,11 +10111,13 @@ export async function gameRoutes(app: FastifyInstance) {
       const { charReferenceByName, charAvatarByName, charDescriptionByName } = storyboardCharacterContext;
 
       let videoRuntime: GameVideoRuntime | null = null;
+      let videoFallback: Awaited<ReturnType<typeof resolveVideoConnectionFallback>> = undefined;
       if (generateStoryboardVideos) {
         const videoConnectionId = await resolveGameVideoConnectionId(meta, connections);
         const videoConn = videoConnectionId ? await connections.getWithKey(videoConnectionId) : null;
         if (videoConn?.provider === "video_generation") {
           videoRuntime = resolveGameVideoRuntime(videoConn);
+          videoFallback = await resolveVideoConnectionFallback(connections, videoConn.id);
         }
       }
 
@@ -10280,6 +10224,7 @@ export async function gameRoutes(app: FastifyInstance) {
             imgEndpointId,
             imgComfyWorkflow,
             imgDefaults,
+            imgFallback,
             styleProfiles,
             styleProfileId,
             debugLog: debugLogsEnabled ? debugLog : undefined,
@@ -10346,6 +10291,7 @@ export async function gameRoutes(app: FastifyInstance) {
                   resolution: videoRuntime.resolution,
                   referenceImage,
                   publicReferenceUpload: videoRuntime.publicReferenceUpload,
+                  fallback: videoFallback,
                   signal: backgroundSignal,
                 },
               );
@@ -10661,6 +10607,7 @@ export async function gameRoutes(app: FastifyInstance) {
       },
     });
     const prompt = limitSceneVideoPromptForProvider(promptDraft, promptLimits.finalPrompt);
+    const videoFallback = await resolveVideoConnectionFallback(connections, videoConn.id);
 
     logger.info(
       "[game/generate-scene-video] request: chatId=%s connection=%s source=%s model=%s duration=%d aspect=%s illustration=%s",
@@ -10687,6 +10634,7 @@ export async function gameRoutes(app: FastifyInstance) {
         resolution,
         referenceImage,
         publicReferenceUpload,
+        fallback: videoFallback,
         signal: sceneVideoAbortSignal,
       });
       const filePath = await saveVideoToDisk(input.chatId, generated.base64);
@@ -11132,6 +11080,7 @@ export async function gameRoutes(app: FastifyInstance) {
       const imgServiceHint = imgConn.imageService || imgSource;
       const imgEndpointId = imgConn.imageEndpointId || undefined;
       const imgDefaults = resolveConnectionImageDefaults(imgConn);
+      const imgFallback = await resolveImageConnectionFallback(connections, imgConn.id);
 
       const setupCfg = meta.gameSetupConfig as Record<string, unknown> | null;
       const genre = (setupCfg?.genre as string) || "";
@@ -11203,6 +11152,7 @@ export async function gameRoutes(app: FastifyInstance) {
           imgEndpointId,
           imgComfyWorkflow,
           imgDefaults,
+          imgFallback,
           styleProfiles,
           styleProfileId,
           debugLog: debugLogsEnabled ? debugLog : undefined,
@@ -11321,6 +11271,7 @@ export async function gameRoutes(app: FastifyInstance) {
             imgEndpointId,
             imgComfyWorkflow,
             imgDefaults,
+            imgFallback,
             styleProfiles,
             styleProfileId,
             debugLog: debugLogsEnabled ? debugLog : undefined,
@@ -11440,6 +11391,7 @@ export async function gameRoutes(app: FastifyInstance) {
                 imgEndpointId,
                 imgComfyWorkflow,
                 imgDefaults,
+                imgFallback,
                 styleProfiles,
                 styleProfileId,
                 debugLog: debugLogsEnabled ? debugLog : undefined,
