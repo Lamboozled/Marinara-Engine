@@ -265,9 +265,13 @@ Definition update:
 ```ts
 interface UpdateSpatialContextRequest {
   expectedRevision: number;
+  expectedCurrentLocationId: string | null;
+  replacementCurrentLocationId?: string | null;
   definition: SpatialContextDefinition;
 }
 ```
+
+`replacementCurrentLocationId` is only used when a definition edit archives the effective current location. The server must validate and apply that replacement in the same write as the definition revision. Ordinary movement still goes through owner-mode turn submission.
 
 Pending movement is submitted through the existing owner-mode turn request rather than a separate immediate-transition endpoint.
 
@@ -322,6 +326,324 @@ Exit condition: all three owner modes author, move, persist, restore, and prompt
 - Apply the same revision, reachability, and idempotency validation.
 - Record accepted and rejected requests in debug diagnostics.
 - Conversation remains unable to request transitions.
+
+## Repository implementation blueprint
+
+Planning baseline: `hierarchical-locations` after merging `staging` at `4fd752ea` on 2026-07-13. At this baseline the branch contains the V1, V2, and V3 planning documents only. No Spatial Context runtime code exists yet.
+
+### Confirmed integration constraints
+
+| Concern | Current repository behavior | Implementation consequence |
+| --- | --- | --- |
+| Definition storage | Chat metadata is JSON and generic metadata updates are partial merges. | Spatial definitions stay in `chat.metadata.spatialContext`, but use a dedicated validated endpoint instead of the generic metadata patch route. |
+| Runtime history | `game_state_snapshots` is the only message and swipe-addressable world-state history. | Add a mode-neutral spatial snapshot table. Do not add Spatial Context columns to Game-only snapshots. |
+| Owner turn start | `/api/generate` commits visible Game state, creates the user message, then updates attachments and persona data in separate calls. | Add a small transaction-bound owner-turn service so user-message creation and an accepted spatial move succeed or fail together. Keep provider calls outside the transaction. |
+| Swipes and branches | Swipe deletion shifts Game snapshot indexes. Branch creation copies all Game and turn-game snapshots to new message IDs. | Spatial snapshots must participate in both paths and must copy the snapshot effective at an earlier branch point. |
+| Prompt assembly | Live generation, dry run, live Peek Prompt, cached Peek Prompt, and Game GM prompts have distinct assembly paths. | Resolve structured spatial data once, then call a shared formatter/injector from every live path. Cached Peek Prompt continues to read the exact saved provider request. |
+| Client data | Server data uses React Query. Per-chat input drafts survive navigation and reload. Heavy editors are lazy-loaded through `AppShell`. | Add a dedicated query/mutation hook, persist pending transitions beside per-chat drafts, and route a lazy Location Editor through the existing detail-view model. |
+| Game travel | Game maps already have a pending map move that becomes visible `*moves to ...*` text. | Keep map travel and Spatial Context independent. Spatial movement is structured request data and is never synthesized into visible message text. |
+| Storage backends | File-native storage is the default; legacy libSQL remains supported. Small transactions are used, while large transaction loops are avoided for Windows stability. | Keep the owner-turn transaction constant-size and prove it against both storage backends before expanding the feature. |
+
+### Target module map
+
+New shared modules:
+
+- `packages/shared/src/types/spatial-context.ts`: public definition, snapshot, transition, projection, response, warning, and error-code types.
+- `packages/shared/src/schemas/spatial-context.schema.ts`: Zod schemas and all storage/request limits.
+- `packages/shared/src/utils/spatial-context.ts`: pure graph indexing, validation, breadcrumb, reachability, archive checks, and deterministic destination sorting.
+- `packages/shared/src/index.ts`: explicit exports for the new shared contract.
+
+New server modules:
+
+- `packages/server/src/db/schema/spatial-context.ts`: `spatial_context_snapshots` schema.
+- `packages/server/src/services/storage/spatial-context.storage.ts`: snapshot reads, writes, branch copies, swipe shifts, command lookup, and cleanup.
+- `packages/server/src/services/spatial-context/state-resolution.ts`: effective snapshot resolution for bootstrap, visible swipe, regeneration, branching, and checkpoints.
+- `packages/server/src/services/spatial-context/projection.ts`: structured owner and connected projections plus bounded text formatting.
+- `packages/server/src/services/spatial-context/owner-turn.ts`: validation and constant-size atomic move plus user-message commit.
+- `packages/server/src/services/spatial-context/game-compatibility.ts`: authoritative breadcrumb projection into the legacy Game tracker boundary.
+- `packages/server/src/routes/spatial-context.routes.ts`: dedicated GET and revisioned PUT routes.
+
+New client modules:
+
+- `packages/client/src/hooks/use-spatial-context.ts`: query keys, GET, definition PUT, conflict handling, and cache invalidation.
+- `packages/client/src/features/spatial-context/SpatialContextSettingsSection.tsx`: compact Chat Settings summary and editor action.
+- `packages/client/src/features/spatial-context/SpatialContextEditor.tsx`: lazy full-page editor shell.
+- `packages/client/src/features/spatial-context/components/LocationTree.tsx`: hierarchy navigation and keyboard interactions.
+- `packages/client/src/features/spatial-context/components/LocationDetails.tsx`: field editing, links, archive controls, and inline validation.
+- `packages/client/src/features/spatial-context/components/SpatialContextRuntimeBar.tsx`: breadcrumb, destination picker, pending state, and clear action.
+- `packages/client/src/features/spatial-context/lib/editor-state.ts`: working-copy operations and server-error mapping. This remains client-local and is not exported through a barrel.
+
+Existing integration files expected to change:
+
+- Persistence: `packages/server/src/db/migrate.ts`, `packages/server/src/db/schema/index.ts`, `packages/server/src/db/file-backed-store.ts`, `packages/server/src/services/storage/chats.storage.ts`, and `packages/server/src/routes/backup.routes.ts` where required by table registration.
+- Chat lifecycle: `packages/server/src/routes/chats.routes.ts`, `packages/server/src/routes/generate.routes.ts`, and `packages/shared/src/schemas/chat.schema.ts`.
+- Prompt paths: `packages/server/src/routes/generate/dry-run-route.ts`, `packages/server/src/services/generation/game-gm-prompt-runtime.ts`, and the live-preview portion of `packages/server/src/routes/chats.routes.ts`.
+- Client routing and send paths: `packages/client/src/stores/ui.store.ts`, `packages/client/src/stores/chat.store.ts`, `packages/client/src/components/layout/AppShell.tsx`, `packages/client/src/components/chat/ChatSettingsDrawer.tsx`, `packages/client/src/components/chat/ChatArea.tsx`, `packages/client/src/components/chat/ChatRoleplaySurface.tsx`, `packages/client/src/components/chat/ChatInput.tsx`, `packages/client/src/components/game/GameSurface.tsx`, and `packages/client/src/components/game/GameInput.tsx`.
+- Portability and proof: native chat import/export code in `packages/server/src/routes/chats.routes.ts` and `packages/server/src/services/import/`, `scripts/regressions/`, `e2e/core-flows.e2e.ts`, and root `package.json` scripts.
+
+The file list is a boundary, not a requirement to edit every file in one pull request. Each work package below should keep its diff focused.
+
+### Persistence contract
+
+Definitions remain inside chat metadata and are copied automatically when a branch copies chat metadata. Runtime state uses a separate table:
+
+```ts
+interface SpatialContextSnapshotRow {
+  id: string;
+  chatId: string;
+  messageId: string;
+  swipeIndex: number;
+  currentLocationId: string | null;
+  definitionRevision: number;
+  source: "bootstrap" | "owner_turn" | "assistant_swipe" | "definition_repair" | "branch_copy";
+  transitionCommandId: string | null;
+  transitionPayloadHash: string | null;
+  createdAt: string;
+}
+```
+
+Required indexes and invariants:
+
+- One effective row per `(chatId, messageId, swipeIndex)`.
+- A transition command ID is unique within its chat when non-null.
+- A repeated command ID with different destination, expected revision, or expected current location returns `409 spatial_transition_command_mismatch`.
+- A repeated command ID with the same payload returns `409 spatial_transition_already_applied`, includes the committed snapshot and user-message ID, and performs no second write. The client reconciles from the response instead of resending the turn.
+- Snapshot rows use stable location IDs. Renames and reparenting do not rewrite snapshots.
+- A bootstrap row uses `messageId: ""` and swipe `0` until a committed message anchor exists.
+- Deleting a chat, message, or swipe removes or shifts the matching spatial rows in the same places that currently maintain Game and turn-game snapshots.
+
+The new table must be registered in the Drizzle schema, migration bootstrap, file-backed table list, cascade graph, profile backup/restore, and Mari DB integrity metadata. Legacy libSQL indexes must match file-native lookup behavior.
+
+### Effective-state and history rules
+
+Use one resolver for APIs, prompts, branching, and the client response:
+
+1. If a specific message and swipe are requested, return that spatial snapshot.
+2. For the current view, inspect the latest visible assistant message and its active swipe.
+3. If that assistant swipe has no row, walk backward to the nearest user-turn or assistant snapshot in visible message order.
+4. Fall back to the bootstrap row.
+5. If no snapshot exists and the enabled definition has a valid starting location, return an in-memory starting state and materialize it on the first owner turn.
+
+Owner-turn anchoring:
+
+- Before persistence, resolve the source state from the currently visible history, not from the newest row by timestamp alone.
+- In the atomic turn transaction, create the user message, initial swipe, chat timestamps, and an `owner_turn` spatial snapshot anchored to that user message.
+- After an assistant response is saved, materialize the same state on its `(messageId, swipeIndex)` as `assistant_swipe`.
+- A failed or aborted provider call leaves the accepted user turn and its spatial snapshot committed. Reload therefore shows the move and the saved user message, without inventing an assistant response.
+- Regeneration resolves state immediately before the target assistant message and writes that state to the new swipe. Continuation retains the target swipe's state.
+- Selecting a swipe changes the effective state through the existing active-swipe row. It does not rewrite other snapshots.
+- Branch creation copies the definition, rekeys every copied spatial snapshot to the new message IDs, and includes the bootstrap row. An earlier-message branch stops copying at the selected cutoff.
+- Game checkpoints store the applicable spatial snapshot ID or a stable copy of its current location and definition revision. Loading a checkpoint restores both Game state and spatial state.
+
+Definition editing is not historical. A rename or reparent changes the breadcrumb rendered for old snapshots because the stable location ID is resolved against the branch's current definition. An old snapshot may refer to an archived location; it remains readable, but the next destination must be an active reachable node. If an editor archives the currently effective location, `replacementCurrentLocationId` is required and the server writes a `definition_repair` snapshot at the current visible anchor in the same transaction as the new definition revision.
+
+### Atomic owner-turn sequence
+
+Extend `generateRequestSchema` and the client generation contract with optional `pendingSpatialTransition`. It is accepted only for Roleplay, Visual Novel, and Game owner chats.
+
+The server sequence is:
+
+1. Acquire the existing per-chat generation lock.
+2. Parse the request and load the chat inside the request lifecycle.
+3. If there is no spatial transition, preserve the current message flow.
+4. If a transition exists, start a constant-size database transaction.
+5. Re-read the definition and visible state inside the transaction.
+6. Validate owner mode, enabled state, expected definition revision, expected current location, command ID, destination status, and reachability.
+7. Create the user message and initial swipe through a transaction-bound chat-storage instance.
+8. Insert the spatial snapshot and update chat timestamps.
+9. For Game, commit the visible Game snapshot in the same transaction where practical.
+10. Commit, then continue attachment enrichment, persona snapshotting, prompt assembly, and provider work outside the transaction.
+
+Validation failures occur before optimistic client state is treated as authoritative. A `400` graph or destination error and a `409` stale-state error contain stable machine codes, safe user-facing text, current revision, and current breadcrumb. They never include hidden or blocked destination names.
+
+The client retains the submitted text, attachments, and pending destination until the server accepts the turn. On a conflict it removes the optimistic message, refreshes the Spatial Context query, restores the draft, and offers `Review destinations`. On acceptance it clears all three together.
+
+### Shared projection contract
+
+The resolver returns structured data before any prompt text is produced:
+
+```ts
+interface ResolvedOwnerSpatialProjection {
+  kind: "owner";
+  chatId: string;
+  ownerMode: SpatialOwnerMode;
+  definitionRevision: number;
+  currentLocationId: string;
+  breadcrumb: Array<{ id: string; name: string }>;
+  description: string;
+  gmMemory: string | null;
+  destinations: Array<{ id: string; name: string; label?: string }>;
+  omittedDestinationCount: number;
+}
+```
+
+Prompt limits are separate from storage limits:
+
+- At most 20 breadcrumb nodes.
+- At most 4,000 characters of owner description.
+- At most 8,000 characters of GM memory.
+- At most 50 destinations in deterministic `sortOrder`, name, then ID order, followed only by an omitted count.
+- At most 1,000 characters for a connected `awarenessSummary` or fallback public-description excerpt.
+
+One formatter produces the owner system block. Roleplay and Visual Novel share identical wording. Game appends the same authoritative block to the built GM system prompt. A second formatter, introduced only in Phase 2, produces the privacy-reduced Conversation block.
+
+Every live path calls the same resolver and formatter immediately before final model-request preparation:
+
+- Standard Roleplay and Visual Novel generation.
+- Game GM generation.
+- `/api/generate/dryRun`.
+- Live Peek Prompt assembly when no exact saved request exists.
+- Retry and continuation paths that rebuild a prompt.
+
+Exact cached Peek Prompt needs no new assembly. It displays the already-saved provider request, which must contain the spatial block used for that swipe. Regression coverage must compare normalized spatial blocks across live generation, dry run, and live Peek Prompt for the same fixture.
+
+### Game compatibility boundary
+
+When Spatial Context is enabled for a Game chat:
+
+- `SpatialContextSnapshot.currentLocationId` is authoritative.
+- Game state `location` is a compatibility projection only.
+- Game-state GET responses and tracker UI receive the resolved breadcrumb as the displayed location.
+- World State agent patches and manual Game tracker patches cannot independently write `location`; the server drops that field with a debug diagnostic or returns a field-level conflict for explicit manual edits.
+- New Game snapshots mirror the breadcrumb into their legacy `location` value so session history and existing UI remain readable, but prompt code still reads the spatial projection.
+- Existing map clicks, map coordinates, and the current pending-map-move text flow remain unchanged and never mutate Spatial Context.
+- The UI labels the systems distinctly as `Story location` and `Map position` when both are visible.
+- Disabling Spatial Context immediately restores current legacy Game location behavior without deleting spatial definitions or snapshots.
+
+Negative controls must prove that a model-emitted Game location patch, a manual tracker edit, and a map click cannot change `currentLocationId`.
+
+### Owner UI contract
+
+Chat Settings adds one compact `Spatial Context` section for Roleplay, Visual Novel, and Game only. It shows enabled state, current breadcrumb, active and archived counts, warning count, and `Open Location Editor`. It does not embed the full editor in the drawer.
+
+The Location Editor follows the existing full-page editor route:
+
+- Desktop uses a calm split workspace: a searchable hierarchy pane on the left and selected-location details on the right.
+- Mobile shows the hierarchy first and details second, with a visible Back to locations action. No operation depends on hover or drag.
+- Tree rows expose add child, add sibling, move, archive, and link actions through labelled controls. Drag and drop may be added later, but keyboard and touch controls are sufficient for the MVP.
+- The detail pane contains name, public description, awareness summary, GM memory, status, sort order, parent, and direct links. GM memory is visually marked private to the owner story.
+- Validation is inline and also summarized near Save. Selecting a summary item focuses the affected node and field.
+- The editor uses a local working copy and one revisioned Save action. `editorDirty` protects navigation. Server conflicts preserve the working copy and offer Reload server version or Review differences; there is no blind overwrite.
+- Empty state teaches the first action: `Create a starting location`. Enabling is unavailable until a valid active starting location exists.
+- Loading uses the existing editor skeleton vocabulary. Save, conflict, archived, hidden, blocked, and invalid states use text or icons in addition to color.
+
+Owner chat surfaces share `SpatialContextRuntimeBar`:
+
+- The persisted breadcrumb is visible above or beside the input without covering story content.
+- The destination picker lists parent, children, and direct links in labelled groups while preserving deterministic order.
+- Selecting a destination creates a clearly labelled pending chip. It does not move state immediately.
+- The chip can be cleared and survives chat switching or reload with the text draft.
+- Sending may contain text, attachments, or only a pending destination. The transition is request data and is not appended to visible message text.
+- A stale pending destination stays visible after conflict, marked `Needs review`, until the user selects a valid replacement or clears it.
+- On narrow screens the breadcrumb truncates in the middle, retains the current location name, and exposes the full path through an accessible disclosure.
+
+The editor and runtime controls use existing semantic theme tokens, support dark, light, and SillyTavern themes, maintain 44px touch targets for primary mobile actions, and include visible focus states. Motion is limited to 150 to 250 ms state transitions and never moves layout purely for decoration.
+
+### Portability and lifecycle coverage
+
+Native Marinara chat export must carry:
+
+- The current definition in `marinara_metadata`.
+- Spatial snapshots keyed by exported message ordinal and swipe index, not by display names.
+- The bootstrap snapshot when present.
+
+Import creates new chat, message, and snapshot IDs while preserving location IDs inside the definition. Malformed imported graphs disable Spatial Context, preserve the raw definition for repair, and return warnings. They are never silently name-matched or partially activated.
+
+Profile backup and restore include the new table through `FILE_BACKED_TABLES`. Chat deletion, bulk deletion, expunge, branch deletion, swipe deletion, and message deletion follow the existing cascade and application-cleanup paths. Existing chats need no eager migration because absent metadata means disabled Spatial Context.
+
+### Work packages and merge order
+
+#### Package A: core contract and proof spike
+
+- Add shared types, schemas, pure graph helpers, limits, fixtures, and stable error codes.
+- Add a temporary proof harness for constant-size transactions against file-native storage and legacy libSQL. Do not keep `.test.ts` files.
+- Prove the state resolver with bootstrap, visible swipe, earlier branch point, archived historical current, and stale-definition fixtures.
+- Measure projection sizes for shallow, depth-20, wide-500, long-text, and linked graphs.
+
+Gate: graph semantics, projection bounds, snapshot anchors, and transaction feasibility are demonstrated before UI work starts.
+
+#### Package B: definition API and storage
+
+- Add schema, migration, file-backed registration, storage adapter, GET, and revisioned PUT.
+- Add current-location replacement for archive operations.
+- Wire deletion, swipe shifting, and profile backup/restore.
+- Add server regression coverage for revision conflicts, invalid graphs, hidden errors, and command reuse.
+
+Gate: definitions and snapshots round-trip on both storage backends and invalid writes leave no partial state.
+
+#### Package C: owner-turn history integration
+
+- Extend the generation request with `pendingSpatialTransition`.
+- Add atomic owner-turn persistence and assistant-swipe materialization.
+- Integrate regeneration, continuation, active swipes, branches, and Game checkpoints.
+- Add native chat export/import of definitions and snapshots.
+
+Gate: reload, provider failure, swipe changes, earlier-message branching, import/export, and checkpoint restore resolve the expected location.
+
+#### Package D: prompt projection and Game authority
+
+- Add structured projection and bounded formatters.
+- Integrate live generation, Game GM, dry run, live Peek Prompt, retries, and continuations.
+- Enforce the Game compatibility boundary and tracker breadcrumb display.
+- Add privacy and inactive-location negative controls.
+
+Gate: all prompt paths contain the same spatial block, no unrelated location text leaks, and Game cannot maintain a competing authoritative location.
+
+#### Package E: owner UI
+
+- Add React Query hooks and conflict mapping.
+- Add the Chat Settings section and lazy editor route.
+- Add desktop and mobile editor states.
+- Add the shared runtime bar and per-chat pending-transition persistence.
+- Integrate Roleplay, Visual Novel, and Game send paths without altering visible message text.
+
+Gate: all owner modes can author, move, recover from a stale revision, reload, switch chats, and use the feature with keyboard and touch.
+
+#### Package F: connected Conversation
+
+- Implement only after Packages A through E are stable.
+- Resolve the linked owner at generation time and use the reduced projection formatter.
+- Add conservative presence wording and read-only UI.
+- Prove unlink, relink, deleted owner, malformed reciprocal links, cycles, and concluded story behavior.
+
+Gate: Conversation never receives GM memory, internal IDs, hidden destinations, or mutation capability.
+
+Location lorebooks and model-requested movement remain separate later packages after the owner and connected projections ship.
+
+### Issue and pull-request boundaries
+
+This is a large feature under the repository workflow. Before Package A implementation begins:
+
+1. Confirm or open the single tracking issue and make ownership visible there.
+2. Check for an existing issue-linked branch, draft pull request, or project-board item.
+3. Open a draft pull request against `staging` as soon as implementation starts.
+4. Use the work packages as reviewable PR boundaries when practical; do not combine the owner MVP and connected Conversation merely to reduce PR count.
+
+Suggested issue split:
+
+1. Spatial Context shared core, persistence, and definition API.
+2. Owner-turn snapshots, swipes, branches, checkpoints, and portability.
+3. Owner prompt projection and Game compatibility.
+4. Owner editor and runtime movement UI.
+5. Connected Conversation read-only projection.
+6. Location lorebooks.
+7. Model-requested movement.
+
+### Proof matrix
+
+| Claim | Automated proof | Manual proof |
+| --- | --- | --- |
+| Graph validation is deterministic | Dedicated spatial regression script with positive and negative fixtures | Inspect inline editor errors for representative invalid nodes |
+| Move and user message are atomic | Injected storage failure before and after each transaction write on both backends | Force a stale revision while a draft and destination are pending |
+| History restores the right location | Snapshot regression covering reload, swipes, regeneration, branch cutoff, and checkpoint | Exercise each flow in Roleplay, Visual Novel, and Game |
+| Prompt paths agree | Compare normalized blocks from generation helper, dry run, and live Peek Prompt | Inspect Peek Prompt and debug output for one chat per owner mode |
+| Context stays bounded | Wide and long-text fixtures assert character and destination caps | Inspect a deep and wide hierarchy in the editor and destination picker |
+| Privacy holds | Negative assertions for GM memory, hidden links, inactive nodes, and unrelated descriptions | Link a Conversation chat and inspect its prompt in Phase 2 |
+| Game has one location authority | Reject or ignore Game location patches while enabled; disabled-mode control remains unchanged | Try tracker edit, model patch, map move, checkpoint load, enable, and disable |
+| UI is resilient | Playwright flow for create, edit, pending move, conflict, and mobile navigation | Verify dark, light, SillyTavern, keyboard, touch, long names, and empty states |
+| Portability preserves IDs and state | Native export/import and profile backup/restore round trips | Export a branched chat, import it, and inspect current breadcrumb and history |
+
+Add `scripts/regressions/spatial-context.regression.ts` and a `regression:spatial` package script, then include it in `pnpm regression`. Do not add permanent `.test.ts` files. Each implementation PR still runs the narrow spatial regression plus the repository checks appropriate to its scope.
 
 ## Acceptance criteria
 
