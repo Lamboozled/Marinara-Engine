@@ -716,16 +716,17 @@ async function buildRefreshPrompt(input: {
   let recalledPosts: NoodlePost[];
   if (enhancedTimelineWriting) {
     const activeAccountIds = new Set(input.activeAccounts.map((account) => account.id));
-    const activeAccountHandles = input.activeAccounts
-      .map((account) => account.handle?.toLowerCase())
-      .filter((handle): handle is string => Boolean(handle));
+    const activeAccountHandles = new Set(
+      input.activeAccounts
+        .map((account) => account.handle?.toLowerCase())
+        .filter((handle): handle is string => Boolean(handle)),
+    );
     const recentAuthorIds = new Set(recentPosts.map((post) => post.authorAccountId));
     const recalledPostRelevanceWeight = (post: NoodlePost): number => {
       let weight = 0.25;
       if (activeAccountIds.has(post.authorAccountId)) weight += 2;
-      const contentLower = post.content?.toLowerCase() ?? "";
-      for (const handle of activeAccountHandles) {
-        if (contentLower.includes(`@${handle}`)) weight += 1;
+      for (const handle of extractNoodleMentionHandles(post.content ?? "")) {
+        if (activeAccountHandles.has(handle)) weight += 1;
       }
       if (recentAuthorIds.has(post.authorAccountId)) weight += 1;
       return weight;
