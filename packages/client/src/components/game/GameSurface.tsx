@@ -5703,7 +5703,7 @@ function GameSurfaceComponent({
   );
 
   const handleGenerateTurnStoryboard = useCallback(async () => {
-    if (!activeChatId || storyboardGenerating || latestTurnStoryboardRendering) return;
+    if (!activeChatId || storyboardGenerating || latestTurnStoryboardRendering || manualStoryboardReviewActive) return;
     if (!latestAssistantMsg?.id) {
       toast.error("No GM narration turn is available to storyboard.");
       return;
@@ -5736,12 +5736,43 @@ function GameSurfaceComponent({
       let promptOverrides: GameImagePromptOverride[] | undefined;
       let plannedStoryboard: unknown;
       if (useUIStore.getState().reviewImagePromptsBeforeSend) {
-        const preview = await previewTurnStoryboardPrompts.mutateAsync(payload);
-        plannedStoryboard = preview.plannedStoryboard;
-        if (preview.items.length > 0) {
-          const overrides = await openImagePromptReview(preview.items);
-          if (!overrides) return;
-          promptOverrides = overrides;
+        let preview: Awaited<ReturnType<typeof previewTurnStoryboardPrompts.mutateAsync>> | null = null;
+        try {
+          preview = await withTimeout(
+            () => previewTurnStoryboardPrompts.mutateAsync(payload),
+            GAME_ASSET_PREVIEW_TIMEOUT_MS,
+            () => {
+              toast.error("Storyboard prompt preview timed out. Continuing with the default prompts.");
+            },
+          );
+        } catch (error) {
+          if (!isTimeoutError(error)) throw error;
+        }
+
+        if (preview) {
+          plannedStoryboard = preview.plannedStoryboard;
+          if (preview.items.length > 0) {
+            let overrides: GameImagePromptOverride[] | null | typeof IMAGE_PROMPT_REVIEW_TIMED_OUT | undefined;
+            try {
+              overrides = await withTimeout(
+                () => openImagePromptReview(preview.items),
+                GAME_ASSET_PROMPT_REVIEW_TIMEOUT_MS,
+                () => {
+                  closeImagePromptReview(null);
+                  toast.error("Storyboard prompt review timed out. Continuing with the default prompts.");
+                },
+              );
+            } catch (error) {
+              if (isTimeoutError(error)) {
+                overrides = IMAGE_PROMPT_REVIEW_TIMED_OUT;
+              } else {
+                throw error;
+              }
+            }
+
+            if (overrides === null || overrides === undefined) return;
+            if (overrides !== IMAGE_PROMPT_REVIEW_TIMED_OUT) promptOverrides = overrides;
+          }
         }
       }
 
@@ -5778,6 +5809,8 @@ function GameSurfaceComponent({
     latestAssistantStoryboardSections,
     latestAssistantSwipeIndex,
     latestTurnStoryboardRendering,
+    manualStoryboardReviewActive,
+    closeImagePromptReview,
     openImagePromptReview,
     previewTurnStoryboardPrompts,
     applyGeneratedStoryboardToCache,
@@ -10126,6 +10159,7 @@ function GameSurfaceComponent({
             disabled={
               storyboardGenerating ||
               latestTurnStoryboardRendering ||
+              manualStoryboardReviewActive ||
               isStreaming ||
               !gameImageGenerationEnabled ||
               !latestAssistantMsg?.id

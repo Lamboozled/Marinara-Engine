@@ -1061,6 +1061,25 @@ const cases: RegressionCase[] = [
       assert.match(gameSurfaceSource, /previewTurnStoryboardPrompts\.mutateAsync\(payload\)/);
       assert.match(gameSurfaceSource, /plannedStoryboard = preview\.plannedStoryboard/);
       assert.match(gameSurfaceSource, /promptOverrides/);
+      const storyboardHandlerStart = gameSurfaceSource.indexOf("const handleGenerateTurnStoryboard = useCallback");
+      const storyboardHandlerEnd = gameSurfaceSource.indexOf("\n  useEffect(() =>", storyboardHandlerStart);
+      assert.notEqual(storyboardHandlerStart, -1);
+      assert.notEqual(storyboardHandlerEnd, -1);
+      const storyboardHandlerSource = gameSurfaceSource.slice(storyboardHandlerStart, storyboardHandlerEnd);
+      assert.match(
+        storyboardHandlerSource,
+        /latestTurnStoryboardRendering \|\| manualStoryboardReviewActive/,
+      );
+      assert.match(
+        storyboardHandlerSource,
+        /withTimeout\(\s*\(\) => previewTurnStoryboardPrompts\.mutateAsync\(payload\),\s*GAME_ASSET_PREVIEW_TIMEOUT_MS/,
+      );
+      assert.match(storyboardHandlerSource, /GAME_ASSET_PROMPT_REVIEW_TIMEOUT_MS/);
+      assert.match(storyboardHandlerSource, /overrides = IMAGE_PROMPT_REVIEW_TIMED_OUT/);
+      assert.match(
+        gameSurfaceSource,
+        /onClick=\{\(\) => void handleGenerateTurnStoryboard\(\)\}[\s\S]{0,300}manualStoryboardReviewActive/,
+      );
       assert.match(storyboardHookSource, /previewOnly: true/);
       assert.match(gameRouteSource, /if \(input\.previewOnly\)/);
       assert.match(gameRouteSource, /return \{ items, plannedStoryboard: plan \}/);
