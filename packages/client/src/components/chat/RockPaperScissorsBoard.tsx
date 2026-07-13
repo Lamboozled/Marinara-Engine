@@ -188,7 +188,7 @@ export function RockPaperScissorsBoard({ chatId }: Props) {
           <div className="relative grid grid-cols-[1fr_auto_1fr] items-center gap-3">
             <div className={`min-w-0 text-left transition-all duration-300 ease-out ${castSideClass("you")}`}>
               <div className="truncate text-[0.65rem] font-semibold text-[var(--muted-foreground)]">You</div>
-              <div className="mt-1 flex min-h-14 items-center gap-2 rounded-lg bg-[var(--background)]/85 px-3 py-2 ring-1 ring-[var(--border)]">
+              <div className="mt-1 flex min-h-14 items-center gap-2 px-1 py-2">
                 <span className="text-3xl leading-none">
                   {castClash.phase === "reveal" ? CHOICE_EMOJI[castClash.yourChoice] : "?"}
                 </span>
@@ -204,7 +204,7 @@ export function RockPaperScissorsBoard({ chatId }: Props) {
               <div className="truncate text-[0.65rem] font-semibold text-[var(--muted-foreground)]">
                 {opponent?.displayName ?? "Opponent"}
               </div>
-              <div className="mt-1 ml-auto flex min-h-14 w-fit max-w-full items-center gap-2 rounded-lg bg-[var(--background)]/85 px-3 py-2 ring-1 ring-[var(--border)]">
+              <div className="mt-1 ml-auto flex min-h-14 w-fit max-w-full items-center gap-2 px-1 py-2">
                 <span className="truncate text-xs font-semibold text-[var(--foreground)]">
                   {castClash.phase === "reveal" && castClash.opponentChoice ? CHOICE_LABEL[castClash.opponentChoice] : "Casting"}
                 </span>
@@ -239,7 +239,7 @@ export function RockPaperScissorsBoard({ chatId }: Props) {
                   type="button"
                   disabled={disabled}
                   onClick={() => onThrow(choice)}
-                  className="flex flex-col items-center gap-1 rounded-lg bg-[var(--muted)]/40 px-4 py-2 ring-1 ring-[var(--border)] transition-transform hover:scale-105 active:scale-95 disabled:opacity-50"
+                  className="flex h-16 w-20 flex-col items-center justify-center gap-1 rounded-lg bg-[var(--muted)]/40 px-2 py-2 ring-1 ring-[var(--border)] transition-transform hover:scale-105 active:scale-95 disabled:opacity-50"
                   aria-label={`Throw ${CHOICE_LABEL[choice]}`}
                 >
                   <span className="text-2xl">{CHOICE_EMOJI[choice]}</span>
