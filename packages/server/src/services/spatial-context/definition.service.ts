@@ -1,0 +1,222 @@
+import {
+  buildSpatialLocationIndex,
+  resolveSpatialBreadcrumb,
+  resolveSpatialDestinations,
+  spatialContextDefinitionSchema,
+  type SpatialContextDefinition,
+  type SpatialContextResponse,
+  type UpdateSpatialContextRequestInput,
+} from "@marinara-engine/shared";
+import { eq } from "drizzle-orm";
+import type { DB } from "../../db/connection.js";
+import { chats } from "../../db/schema/index.js";
+import { now } from "../../utils/id-generator.js";
+import { withChatMetadataPatchQueue } from "../storage/chats.storage.js";
+import { createSpatialContextStorage } from "../storage/spatial-context.storage.js";
+
+const METADATA_KEY = "spatialContext";
+
+export type SpatialContextServiceErrorCode =
+  | "chat_not_found"
+  | "spatial_mode_unsupported"
+  | "spatial_definition_corrupt"
+  | "spatial_definition_stale"
+  | "spatial_current_location_stale"
+  | "spatial_replacement_required"
+  | "spatial_replacement_invalid";
+
+export class SpatialContextServiceError extends Error {
+  constructor(
+    readonly code: SpatialContextServiceErrorCode,
+    message: string,
+    readonly statusCode: 400 | 404 | 409,
+  ) {
+    super(message);
+    this.name = "SpatialContextServiceError";
+  }
+}
+
+function parseMetadata(raw: unknown): Record<string, unknown> {
+  if (typeof raw === "string") {
+    try {
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {};
+    } catch {
+      return {};
+    }
+  }
+  return raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+}
+
+function readDefinition(metadata: Record<string, unknown>): {
+  definition: SpatialContextDefinition | null;
+  corrupt: boolean;
+} {
+  if (metadata[METADATA_KEY] === undefined || metadata[METADATA_KEY] === null) {
+    return { definition: null, corrupt: false };
+  }
+  const parsed = spatialContextDefinitionSchema.safeParse(metadata[METADATA_KEY]);
+  return parsed.success
+    ? { definition: parsed.data as SpatialContextDefinition, corrupt: false }
+    : { definition: null, corrupt: true };
+}
+
+function assertSupportedMode(mode: string | null): asserts mode is "roleplay" | "game" {
+  if (mode !== "roleplay" && mode !== "game") {
+    throw new SpatialContextServiceError(
+      "spatial_mode_unsupported",
+      "Hierarchical maps are available only in Roleplay and Game chats.",
+      400,
+    );
+  }
+}
+
+function buildResponse(
+  definition: SpatialContextDefinition | null,
+  currentLocationId: string | null,
+  corrupt = false,
+): SpatialContextResponse {
+  if (!definition) {
+    return {
+      definition: null,
+      currentLocationId: null,
+      breadcrumb: [],
+      destinations: [],
+      warnings: corrupt
+        ? [
+            {
+              code: "stored_definition_invalid",
+              message: "The stored hierarchical map is invalid and has been disabled.",
+              path: [METADATA_KEY],
+            },
+          ]
+        : [],
+    };
+  }
+
+  const byId = buildSpatialLocationIndex(definition);
+  const current = currentLocationId === null ? undefined : byId.get(currentLocationId);
+  const effectiveCurrentId = current?.status === "active" ? current.id : null;
+  return {
+    definition,
+    currentLocationId: effectiveCurrentId,
+    breadcrumb: resolveSpatialBreadcrumb(definition, effectiveCurrentId).map(({ id, name }) => ({ id, name })),
+    destinations: resolveSpatialDestinations(definition, effectiveCurrentId),
+    warnings: [],
+  };
+}
+
+export function createSpatialContextService(db: DB) {
+  const storage = createSpatialContextStorage(db);
+
+  return {
+    async get(chatId: string): Promise<SpatialContextResponse> {
+      const rows = await db.select().from(chats).where(eq(chats.id, chatId)).limit(1);
+      const chat = rows[0];
+      if (!chat) throw new SpatialContextServiceError("chat_not_found", "Chat not found.", 404);
+      assertSupportedMode(chat.mode);
+
+      const stored = readDefinition(parseMetadata(chat.metadata));
+      if (!stored.definition) return buildResponse(null, null, stored.corrupt);
+
+      const latest = await storage.getLatest(chatId);
+      return buildResponse(stored.definition, latest?.currentLocationId ?? stored.definition.startingLocationId);
+    },
+
+    async update(chatId: string, input: UpdateSpatialContextRequestInput): Promise<SpatialContextResponse> {
+      return withChatMetadataPatchQueue(chatId, async () => {
+        const rows = await db.select().from(chats).where(eq(chats.id, chatId)).limit(1);
+        const chat = rows[0];
+        if (!chat) throw new SpatialContextServiceError("chat_not_found", "Chat not found.", 404);
+        assertSupportedMode(chat.mode);
+
+        const metadata = parseMetadata(chat.metadata);
+        const stored = readDefinition(metadata);
+        if (stored.corrupt) {
+          throw new SpatialContextServiceError(
+            "spatial_definition_corrupt",
+            "The stored hierarchical map is invalid and must be repaired before it can be updated.",
+            409,
+          );
+        }
+
+        const currentRevision = stored.definition?.revision ?? 0;
+        if (input.expectedRevision !== currentRevision) {
+          throw new SpatialContextServiceError(
+            "spatial_definition_stale",
+            "The hierarchical map changed. Reload it before saving.",
+            409,
+          );
+        }
+
+        const latest = await storage.getLatest(chatId);
+        const currentLocationId = latest?.currentLocationId ?? stored.definition?.startingLocationId ?? null;
+        if (input.expectedCurrentLocationId !== currentLocationId) {
+          throw new SpatialContextServiceError(
+            "spatial_current_location_stale",
+            "The current location changed. Reload the map before saving.",
+            409,
+          );
+        }
+
+        const definition: SpatialContextDefinition = {
+          ...(input.definition as SpatialContextDefinition),
+          ownerMode: chat.mode,
+          revision: currentRevision + 1,
+        };
+        const parsedDefinition = spatialContextDefinitionSchema.safeParse(definition);
+        if (!parsedDefinition.success) {
+          throw new SpatialContextServiceError(
+            "spatial_replacement_invalid",
+            parsedDefinition.error.issues[0]?.message ?? "The hierarchical map is invalid.",
+            400,
+          );
+        }
+
+        const byId = buildSpatialLocationIndex(definition);
+        const currentStillActive = currentLocationId === null || byId.get(currentLocationId)?.status === "active";
+        let nextCurrentLocationId = currentLocationId;
+        if (!currentStillActive) {
+          if (input.replacementCurrentLocationId === undefined) {
+            throw new SpatialContextServiceError(
+              "spatial_replacement_required",
+              "Choose an active replacement before removing or archiving the current location.",
+              409,
+            );
+          }
+          nextCurrentLocationId = input.replacementCurrentLocationId;
+        } else if (input.replacementCurrentLocationId !== undefined) {
+          nextCurrentLocationId = input.replacementCurrentLocationId;
+        }
+
+        if (nextCurrentLocationId !== null && byId.get(nextCurrentLocationId)?.status !== "active") {
+          throw new SpatialContextServiceError(
+            "spatial_replacement_invalid",
+            "The replacement location must exist and be active.",
+            400,
+          );
+        }
+
+        const nextMetadata = { ...metadata, [METADATA_KEY]: definition };
+        await db.transaction(async (tx) => {
+          await tx
+            .update(chats)
+            .set({ metadata: JSON.stringify(nextMetadata), updatedAt: now() })
+            .where(eq(chats.id, chatId));
+
+          if (!latest || nextCurrentLocationId !== currentLocationId) {
+            await createSpatialContextStorage(tx).replaceBootstrap({
+              chatId,
+              currentLocationId: nextCurrentLocationId ?? definition.startingLocationId,
+              definitionRevision: definition.revision,
+              source: latest ? "definition_repair" : "bootstrap",
+              transitionCommandId: null,
+            });
+          }
+        });
+
+        return buildResponse(definition, nextCurrentLocationId ?? definition.startingLocationId);
+      });
+    },
+  };
+}

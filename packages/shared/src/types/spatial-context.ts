@@ -113,7 +113,8 @@ export type SpatialDefinitionIssueCode =
   | "self_link"
   | "duplicate_link_target"
   | "layer_order_missing"
-  | "duplicate_layer_order";
+  | "duplicate_layer_order"
+  | "stored_definition_invalid";
 
 export interface SpatialDefinitionIssue {
   code: SpatialDefinitionIssueCode;
