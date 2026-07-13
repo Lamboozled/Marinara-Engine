@@ -2168,8 +2168,14 @@ export function ChatArea() {
   );
 
   const handleBranch = useCallback(
-    (messageId: string) => {
+    async (messageId: string) => {
       if (!activeChatId || branchChat.isPending) return;
+      const confirmed = await showConfirmDialog({
+        title: "Create a new branch?",
+        message: "This will copy the chat through this message and open the new branch.",
+        confirmLabel: "Create branch",
+      });
+      if (!confirmed || !activeChatId || branchChat.isPending) return;
       const branchToastId = toast.loading("Creating branch...");
       branchChat.mutate(
         { chatId: activeChatId, upToMessageId: messageId },

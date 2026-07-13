@@ -15,6 +15,10 @@ export type RejectedNoodleGeneratedRefreshItem = {
   issueCount: number;
 };
 
+function normalizeGeneratedHandle(handle: string): string {
+  return handle.trim().replace(/^@/u, "").toLowerCase();
+}
+
 /**
  * Require a refresh to contain usable activity attributed to the exact cast
  * selected for this run. The persona may be a follow target, but generations
@@ -22,20 +26,22 @@ export type RejectedNoodleGeneratedRefreshItem = {
  */
 export function validateNoodleGeneratedRefresh(
   refresh: NoodleGeneratedRefresh,
-  allowedActorEntityIds: ReadonlySet<string>,
-  knownEntityIds: ReadonlySet<string>,
+  allowedActorHandles: ReadonlySet<string>,
+  knownHandles: ReadonlySet<string>,
 ): string | null {
   const hasActivity =
     refresh.posts.length + refresh.interactions.length + refresh.follows.length + refresh.digests.length > 0;
   if (!hasActivity) return "the response contained no timeline activity";
 
   const hasUsableAttribution =
-    refresh.posts.some((post) => allowedActorEntityIds.has(post.authorEntityId)) ||
-    refresh.interactions.some((interaction) => allowedActorEntityIds.has(interaction.actorEntityId)) ||
+    refresh.posts.some((post) => allowedActorHandles.has(normalizeGeneratedHandle(post.authorHandle))) ||
+    refresh.interactions.some((interaction) => allowedActorHandles.has(normalizeGeneratedHandle(interaction.actorHandle))) ||
     refresh.follows.some(
-      (follow) => allowedActorEntityIds.has(follow.actorEntityId) && knownEntityIds.has(follow.targetEntityId),
+      (follow) =>
+        allowedActorHandles.has(normalizeGeneratedHandle(follow.actorHandle)) &&
+        knownHandles.has(normalizeGeneratedHandle(follow.targetHandle)),
     );
-  return hasUsableAttribution ? null : "the response used no selected participant entityId";
+  return hasUsableAttribution ? null : "the response used no selected participant handle";
 }
 
 const collectionSchemas = {
