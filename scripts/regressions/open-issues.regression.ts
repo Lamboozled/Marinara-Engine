@@ -472,7 +472,7 @@ const sharedGameSetup = formatGameSetupShareText({
     personaName: "Player Persona",
   },
 });
-assert.match(sharedGameSetup, /Presentation: Anime Episode/u);
+assert.match(sharedGameSetup, /Presentation: Storyboard Optimized/u);
 assert.match(sharedGameSetup, /Temperature: 1\.1/u);
 assert.match(sharedGameSetup, /Max Tokens: 16384/u);
 assert.match(sharedGameSetup, /gpt-5\.6-sol/iu);
