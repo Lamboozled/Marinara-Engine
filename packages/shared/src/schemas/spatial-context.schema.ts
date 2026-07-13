@@ -99,6 +99,10 @@ export const spatialContextSnapshotSchema = z
     definitionRevision: z.number().int().nonnegative().safe(),
     source: spatialSnapshotSourceSchema,
     transitionCommandId: z.string().trim().min(1).max(SPATIAL_CONTEXT_LIMITS.maxCommandIdLength).nullable(),
+    transitionPayloadHash: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/u)
+      .nullable(),
     createdAt: z.string().datetime(),
   })
   .strict();

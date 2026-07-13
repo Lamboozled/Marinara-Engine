@@ -66,6 +66,7 @@ export interface SpatialContextSnapshot {
   definitionRevision: number;
   source: SpatialSnapshotSource;
   transitionCommandId: string | null;
+  transitionPayloadHash: string | null;
   createdAt: string;
 }
 

@@ -126,6 +126,7 @@ try {
   const updated = await reopenedService.update(chat.id, {
     expectedRevision: 1,
     expectedCurrentLocationId: "tower",
+    replacementCurrentLocationId: "city",
     definition: {
       ...definition,
       revision: 1,

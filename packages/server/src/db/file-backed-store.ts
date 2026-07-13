@@ -277,6 +277,12 @@ const SET_NULL_RELATIONS: Array<{
     parentKey: "id",
     childKey: "sceneVideoId",
   },
+  {
+    parent: "spatial_context_snapshots",
+    child: "game_checkpoints",
+    parentKey: "id",
+    childKey: "spatialSnapshotId",
+  },
 ];
 
 const tableMetasByObject = new WeakMap<object, TableMeta>();

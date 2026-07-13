@@ -13,6 +13,7 @@ import { chats } from "../../db/schema/index.js";
 import { now } from "../../utils/id-generator.js";
 import { withChatMetadataPatchQueue } from "../storage/chats.storage.js";
 import { createSpatialContextStorage } from "../storage/spatial-context.storage.js";
+import { resolveEffectiveSpatialState } from "./state-resolution.js";
 
 const METADATA_KEY = "spatialContext";
 
@@ -96,7 +97,7 @@ function buildResponse(
 
   const byId = buildSpatialLocationIndex(definition);
   const current = currentLocationId === null ? undefined : byId.get(currentLocationId);
-  const effectiveCurrentId = current?.status === "active" ? current.id : null;
+  const effectiveCurrentId = current?.id ?? null;
   return {
     definition,
     currentLocationId: effectiveCurrentId,
@@ -107,8 +108,6 @@ function buildResponse(
 }
 
 export function createSpatialContextService(db: DB) {
-  const storage = createSpatialContextStorage(db);
-
   return {
     async get(chatId: string): Promise<SpatialContextResponse> {
       const rows = await db.select().from(chats).where(eq(chats.id, chatId)).limit(1);
@@ -119,8 +118,8 @@ export function createSpatialContextService(db: DB) {
       const stored = readDefinition(parseMetadata(chat.metadata));
       if (!stored.definition) return buildResponse(null, null, stored.corrupt);
 
-      const latest = await storage.getLatest(chatId);
-      return buildResponse(stored.definition, latest?.currentLocationId ?? stored.definition.startingLocationId);
+      const state = await resolveEffectiveSpatialState(db, chatId);
+      return buildResponse(stored.definition, state.currentLocationId);
     },
 
     async update(chatId: string, input: UpdateSpatialContextRequestInput): Promise<SpatialContextResponse> {
@@ -149,8 +148,8 @@ export function createSpatialContextService(db: DB) {
           );
         }
 
-        const latest = await storage.getLatest(chatId);
-        const currentLocationId = latest?.currentLocationId ?? stored.definition?.startingLocationId ?? null;
+        const state = await resolveEffectiveSpatialState(db, chatId);
+        const currentLocationId = state.currentLocationId;
         if (input.expectedCurrentLocationId !== currentLocationId) {
           throw new SpatialContextServiceError(
             "spatial_current_location_stale",
@@ -185,8 +184,6 @@ export function createSpatialContextService(db: DB) {
             );
           }
           nextCurrentLocationId = input.replacementCurrentLocationId;
-        } else if (input.replacementCurrentLocationId !== undefined) {
-          nextCurrentLocationId = input.replacementCurrentLocationId;
         }
 
         if (nextCurrentLocationId !== null && byId.get(nextCurrentLocationId)?.status !== "active") {
@@ -204,14 +201,32 @@ export function createSpatialContextService(db: DB) {
             .set({ metadata: JSON.stringify(nextMetadata), updatedAt: now() })
             .where(eq(chats.id, chatId));
 
-          if (!latest || nextCurrentLocationId !== currentLocationId) {
-            await createSpatialContextStorage(tx).replaceBootstrap({
+          if (!state.snapshot || nextCurrentLocationId !== currentLocationId) {
+            const visibleSnapshot =
+              state.snapshot &&
+              state.visibleAnchor &&
+              state.snapshot.messageId === state.visibleAnchor.messageId &&
+              state.snapshot.swipeIndex === state.visibleAnchor.swipeIndex
+                ? state.snapshot
+                : null;
+            const snapshotInput = {
               chatId,
               currentLocationId: nextCurrentLocationId ?? definition.startingLocationId,
               definitionRevision: definition.revision,
-              source: latest ? "definition_repair" : "bootstrap",
-              transitionCommandId: null,
-            });
+              source: state.snapshot || state.visibleAnchor ? ("definition_repair" as const) : ("bootstrap" as const),
+              transitionCommandId: visibleSnapshot?.transitionCommandId ?? null,
+              transitionPayloadHash: visibleSnapshot?.transitionPayloadHash ?? null,
+            };
+            const txStorage = createSpatialContextStorage(tx);
+            if (state.visibleAnchor) {
+              await txStorage.replaceAtAnchor({
+                ...snapshotInput,
+                messageId: state.visibleAnchor.messageId,
+                swipeIndex: state.visibleAnchor.swipeIndex,
+              });
+            } else {
+              await txStorage.replaceBootstrap(snapshotInput);
+            }
           }
         });
 

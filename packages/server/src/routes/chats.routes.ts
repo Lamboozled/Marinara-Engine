@@ -49,6 +49,7 @@ import { createCharactersStorage } from "../services/storage/characters.storage.
 import { createConnectionsStorage } from "../services/storage/connections.storage.js";
 import { createLorebooksStorage } from "../services/storage/lorebooks.storage.js";
 import { createGameStateStorage, type GameStateVisibleAnchor } from "../services/storage/game-state.storage.js";
+import { createSpatialContextStorage } from "../services/storage/spatial-context.storage.js";
 import { createRegexScriptsStorage } from "../services/storage/regex-scripts.storage.js";
 import { createLLMProvider } from "../services/llm/provider-registry.js";
 import { withConnectionFallbackProvider } from "../services/llm/connection-fallback-provider.js";
@@ -2877,6 +2878,24 @@ export async function chatsRoutes(app: FastifyInstance) {
     const msgs = await storage.listMessages(chat.id);
     const charIds = parseExportCharacterIds(chat.characterIds);
     const metadata = parseExportMetadata(chat.metadata);
+    const messageIndexById = new Map(msgs.map((message, index) => [message.id, index]));
+    const spatialContextHistory = (await createSpatialContextStorage(app.db).listForChat(chat.id))
+      .map((snapshot) => ({
+        messageIndex: snapshot.messageId === "" ? -1 : messageIndexById.get(snapshot.messageId),
+        swipeIndex: snapshot.swipeIndex,
+        currentLocationId: snapshot.currentLocationId,
+        definitionRevision: snapshot.definitionRevision,
+      }))
+      .filter(
+        (snapshot): snapshot is {
+          messageIndex: number;
+          swipeIndex: number;
+          currentLocationId: string | null;
+          definitionRevision: number;
+        } => snapshot.messageIndex !== undefined,
+      )
+      .sort((left, right) => left.messageIndex - right.messageIndex || left.swipeIndex - right.swipeIndex);
+
     const branchName = typeof metadata.branchName === "string" ? metadata.branchName : "";
 
     // Build a characterId → name map for all characters in this chat
@@ -2968,6 +2987,7 @@ export async function chatsRoutes(app: FastifyInstance) {
           marinara_metadata: {
             ...jsonlMetadata,
             mode: chat.mode,
+            spatialContextHistory,
           },
         },
       }),
@@ -3283,6 +3303,7 @@ export async function chatsRoutes(app: FastifyInstance) {
     // them to the new branch's message IDs. Copying all snapshots (not just the latest)
     // ensures that branching a branch at an earlier point finds the correct tracker state
     // for that specific message, not just the latest snapshot in the source chat.
+    const spatialStore = createSpatialContextStorage(app.db);
     if (sourceToBranchedMessageId.size > 0) {
       const { createGameStateStorage } = await import("../services/storage/game-state.storage.js");
       const gameStateStore = createGameStateStorage(app.db);
@@ -3351,6 +3372,19 @@ export async function chatsRoutes(app: FastifyInstance) {
         if (!branchedMsgId) continue;
         const swipeIndexes = sourceToCopiedSwipeIndexes.get(srcMsg.id) ?? [srcMsg.activeSwipeIndex ?? 0];
         for (const swipeIndex of swipeIndexes) {
+          const spatialSnapshot = await spatialStore.getByAnchor(req.params.id, srcMsg.id, swipeIndex);
+          if (spatialSnapshot) {
+            await spatialStore.create({
+              chatId: newChat.id,
+              messageId: branchedMsgId,
+              swipeIndex,
+              currentLocationId: spatialSnapshot.currentLocationId,
+              definitionRevision: spatialSnapshot.definitionRevision,
+              source: "branch_copy",
+              transitionCommandId: null,
+              transitionPayloadHash: null,
+            });
+          }
           const snapshot = await gameStateStore.getByMessage(srcMsg.id, swipeIndex);
           if (snapshot) {
             await copySnapshot(snapshot, branchedMsgId, swipeIndex);
@@ -3377,6 +3411,18 @@ export async function chatsRoutes(app: FastifyInstance) {
           await copyEngineSnapshot(engineBootstrap, "", 0);
         }
       }
+    }
+
+    const spatialBootstrap = await spatialStore.getBootstrap(req.params.id);
+    if (spatialBootstrap) {
+      await spatialStore.replaceBootstrap({
+        chatId: newChat.id,
+        currentLocationId: spatialBootstrap.currentLocationId,
+        definitionRevision: spatialBootstrap.definitionRevision,
+        source: "branch_copy",
+        transitionCommandId: null,
+        transitionPayloadHash: null,
+      });
     }
 
     // Return the fully-updated chat (including copied metadata)

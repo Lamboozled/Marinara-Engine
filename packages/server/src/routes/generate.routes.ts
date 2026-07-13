@@ -58,6 +58,8 @@ import type {
   ThinkingTagPair,
 } from "@marinara-engine/shared";
 import { createChatsStorage } from "../services/storage/chats.storage.js";
+import { commitSpatialOwnerTurn, SpatialOwnerTurnError } from "../services/spatial-context/owner-turn.js";
+import { materializeAssistantSpatialState } from "../services/spatial-context/state-resolution.js";
 import { createConnectionsStorage } from "../services/storage/connections.storage.js";
 import { createPromptsStorage } from "../services/storage/prompts.storage.js";
 import { createCharactersStorage } from "../services/storage/characters.storage.js";
@@ -656,6 +658,18 @@ export async function generateRoutes(app: FastifyInstance) {
     if (requestChatMode === "conversation" && input.impersonate) {
       return reply.status(400).send({ error: "Impersonate is not available in Conversation mode" });
     }
+    if (input.pendingSpatialTransition && requestChatMode !== "roleplay" && requestChatMode !== "game") {
+      return reply.status(400).send({
+        error: "Only Roleplay and Game chats can change hierarchical location.",
+        code: "spatial_mode_unsupported",
+      });
+    }
+    if (input.pendingSpatialTransition && (input.impersonate || input.regenerateMessageId || input.continueMessageId)) {
+      return reply.status(400).send({
+        error: "A hierarchical location change must be submitted as a new owner turn.",
+        code: "spatial_transition_requires_new_turn",
+      });
+    }
     if (input.regenerateMessageId && input.continueMessageId) {
       return reply.status(400).send({ error: "Choose either regenerateMessageId or continueMessageId, not both" });
     }
@@ -730,10 +744,11 @@ export async function generateRoutes(app: FastifyInstance) {
     let currentTurnUserMessageId: string | null = null;
 
     // Save user message — skip for impersonate (no real user message to save)
-    if (!input.impersonate && (input.userMessage || input.attachments?.length)) {
+    if (!input.impersonate && (input.userMessage || input.attachments?.length || input.pendingSpatialTransition)) {
       // ── Commit game state: lock in the game state the user was seeing ──
       // Find the last assistant message's active swipe and commit its game state.
       // This ensures swipes/regens always use the state from the user's accepted turn.
+      let spatialGameStateSnapshotId: string | null = null;
       const preMessages = await chats.listMessages(input.chatId).catch(releaseActiveGenerationAndRethrow);
       for (let i = preMessages.length - 1; i >= 0; i--) {
         if (preMessages[i]!.role === "assistant") {
@@ -741,19 +756,46 @@ export async function generateRoutes(app: FastifyInstance) {
           const gs = await gameStateStore
             .getByMessage(lastAsstMsg.id, lastAsstMsg.activeSwipeIndex)
             .catch(releaseActiveGenerationAndRethrow);
-          if (gs) await gameStateStore.commit(gs.id).catch(releaseActiveGenerationAndRethrow);
+          if (gs && input.pendingSpatialTransition && requestChatMode === "game") {
+            spatialGameStateSnapshotId = gs.id;
+          } else if (gs) {
+            await gameStateStore.commit(gs.id).catch(releaseActiveGenerationAndRethrow);
+          }
           break;
         }
       }
 
-      const userMsg = await chats
-        .createMessage({
-          chatId: input.chatId,
-          role: "user",
-          characterId: null,
-          content: input.userMessage ?? "",
-        })
-        .catch(releaseActiveGenerationAndRethrow);
+      let userMsg: Awaited<ReturnType<typeof chats.createMessage>>;
+      if (input.pendingSpatialTransition) {
+        try {
+          const committed = await commitSpatialOwnerTurn(app.db, {
+            chatId: input.chatId,
+            content: input.userMessage ?? "",
+            transition: input.pendingSpatialTransition,
+            gameStateSnapshotId: spatialGameStateSnapshotId,
+          });
+          userMsg = committed.message;
+        } catch (error) {
+          releaseActiveGeneration();
+          if (error instanceof SpatialOwnerTurnError) {
+            return reply.status(error.statusCode).send({
+              error: error.message,
+              code: error.code,
+              ...(error.details ?? {}),
+            });
+          }
+          throw error;
+        }
+      } else {
+        userMsg = await chats
+          .createMessage({
+            chatId: input.chatId,
+            role: "user",
+            characterId: null,
+            content: input.userMessage ?? "",
+          })
+          .catch(releaseActiveGenerationAndRethrow);
+      }
       currentTurnUserMessageId = userMsg?.id ?? null;
       if (requestChatMode === "conversation") {
         recordUserActivity(input.chatId);
@@ -5550,6 +5592,18 @@ export async function generateRoutes(app: FastifyInstance) {
                     isGenerated: true,
                   })
                 : savedMsg;
+              if (
+                anchoredMsg?.id &&
+                (requestChatMode === "roleplay" || requestChatMode === "game")
+              ) {
+                await materializeAssistantSpatialState(app.db, {
+                  chatId: input.chatId,
+                  messageId: anchoredMsg.id,
+                  swipeIndex: anchoredMsg.activeSwipeIndex ?? 0,
+                  regenerate: false,
+                  continuation: false,
+                });
+              }
               if (markGenerationCommitted && anchoredMsg?.id) {
                 generationComplete = true;
               }
@@ -5597,6 +5651,20 @@ export async function generateRoutes(app: FastifyInstance) {
               content: fullResponse,
             });
             savedSwipeIndex = 0;
+          }
+          if (
+            savedMsg?.id &&
+            savedSwipeIndex !== null &&
+            !input.impersonate &&
+            (requestChatMode === "roleplay" || requestChatMode === "game")
+          ) {
+            await materializeAssistantSpatialState(app.db, {
+              chatId: input.chatId,
+              messageId: savedMsg.id,
+              swipeIndex: savedSwipeIndex,
+              regenerate: Boolean(input.regenerateMessageId),
+              continuation: Boolean(input.continueMessageId),
+            });
           }
           if (markGenerationCommitted && savedMsg?.id) {
             generationComplete = true;

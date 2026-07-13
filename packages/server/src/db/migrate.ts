@@ -480,6 +480,7 @@ const CREATE_TABLES: string[] = [
     definition_revision INTEGER NOT NULL,
     source TEXT NOT NULL,
     transition_command_id TEXT,
+    transition_payload_hash TEXT,
     created_at TEXT NOT NULL
   )`,
   `CREATE TABLE IF NOT EXISTS game_engine_state (
@@ -497,6 +498,7 @@ const CREATE_TABLES: string[] = [
     id TEXT PRIMARY KEY NOT NULL,
     chat_id TEXT NOT NULL,
     snapshot_id TEXT NOT NULL,
+    spatial_snapshot_id TEXT,
     message_id TEXT NOT NULL,
     label TEXT NOT NULL,
     trigger_type TEXT NOT NULL,
@@ -1248,6 +1250,16 @@ const COLUMN_MIGRATIONS: ColumnMigration[] = [
     column: "source_interaction_id",
     definition: "TEXT",
   },
+  {
+    table: "spatial_context_snapshots",
+    column: "transition_payload_hash",
+    definition: "TEXT",
+  },
+  {
+    table: "game_checkpoints",
+    column: "spatial_snapshot_id",
+    definition: "TEXT",
+  },
 ];
 
 /**
@@ -1317,6 +1329,16 @@ export async function runMigrations(db: DB) {
   await db.run(
     sql.raw(
       `CREATE INDEX IF NOT EXISTS idx_spatial_context_message ON spatial_context_snapshots(message_id, swipe_index)`,
+    ),
+  );
+  await db.run(
+    sql.raw(
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_spatial_context_anchor_unique ON spatial_context_snapshots(chat_id, message_id, swipe_index)`,
+    ),
+  );
+  await db.run(
+    sql.raw(
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_spatial_context_command_unique ON spatial_context_snapshots(chat_id, transition_command_id) WHERE transition_command_id IS NOT NULL`,
     ),
   );
   await db.run(

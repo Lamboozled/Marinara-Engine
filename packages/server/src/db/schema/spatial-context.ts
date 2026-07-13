@@ -11,5 +11,6 @@ export const spatialContextSnapshots = sqliteTable("spatial_context_snapshots", 
   definitionRevision: integer("definition_revision").notNull(),
   source: text("source").notNull(),
   transitionCommandId: text("transition_command_id"),
+  transitionPayloadHash: text("transition_payload_hash"),
   createdAt: text("created_at").notNull(),
 });

@@ -16,6 +16,8 @@ import { createGalleryStorage } from "../services/storage/gallery.storage.js";
 import { createGameSceneVideosStorage } from "../services/storage/game-scene-videos.storage.js";
 import { createGameStoryboardsStorage } from "../services/storage/game-storyboards.storage.js";
 import { createGameStateStorage } from "../services/storage/game-state.storage.js";
+import { createSpatialContextStorage } from "../services/storage/spatial-context.storage.js";
+import { resolveEffectiveSpatialState } from "../services/spatial-context/state-resolution.js";
 import { createLorebooksStorage } from "../services/storage/lorebooks.storage.js";
 import { createAgentsStorage } from "../services/storage/agents.storage.js";
 import { createLLMProvider } from "../services/llm/provider-registry.js";
@@ -11605,13 +11607,28 @@ export async function gameRoutes(app: FastifyInstance) {
     const input = checkpointCreateSchema.parse(req.body);
     const checkpoints = createCheckpointService(app.db);
     const stateStore = createGameStateStorage(app.db);
+    const spatialStore = createSpatialContextStorage(app.db);
 
     const snapshot = await stateStore.getLatest(input.chatId);
     if (!snapshot) throw new Error("No game state snapshot to checkpoint");
+    const spatialState = await resolveEffectiveSpatialState(app.db, input.chatId);
+    const spatialSnapshot =
+      spatialState.snapshot ??
+      (spatialState.definition?.enabled && spatialState.currentLocationId
+        ? await spatialStore.replaceBootstrap({
+            chatId: input.chatId,
+            currentLocationId: spatialState.currentLocationId,
+            definitionRevision: spatialState.definitionRevision,
+            source: "bootstrap",
+            transitionCommandId: null,
+            transitionPayloadHash: null,
+          })
+        : null);
 
     const id = await checkpoints.create({
       chatId: input.chatId,
       snapshotId: snapshot.id,
+      spatialSnapshotId: spatialSnapshot?.id ?? null,
       messageId: snapshot.messageId,
       label: input.label,
       triggerType: input.triggerType as CheckpointTrigger,
@@ -11655,6 +11672,7 @@ export async function gameRoutes(app: FastifyInstance) {
     const input = checkpointLoadSchema.parse(req.body);
     const checkpointSvc = createCheckpointService(app.db);
     const stateStore = createGameStateStorage(app.db);
+    const spatialStore = createSpatialContextStorage(app.db);
     const chats = createChatsStorage(app.db);
 
     const cp = await checkpointSvc.getById(input.checkpointId);
@@ -11667,6 +11685,13 @@ export async function gameRoutes(app: FastifyInstance) {
     const snapshot = await stateStore.getById(cp.snapshotId);
     if (!snapshot) throw new Error("Checkpoint snapshot was deleted and can no longer be restored");
     if (snapshot.chatId !== input.chatId) throw new Error("Checkpoint snapshot does not belong to this chat");
+    const spatialSnapshot = cp.spatialSnapshotId ? await spatialStore.getById(cp.spatialSnapshotId) : null;
+    if (cp.spatialSnapshotId && !spatialSnapshot) {
+      throw new Error("Checkpoint spatial snapshot was deleted and can no longer be restored");
+    }
+    if (spatialSnapshot && spatialSnapshot.chatId !== input.chatId) {
+      throw new Error("Checkpoint spatial snapshot does not belong to this chat");
+    }
 
     // Create a system message to mark the restore point
     const restoreMsg = await chats.createMessage({
@@ -11703,6 +11728,18 @@ export async function gameRoutes(app: FastifyInstance) {
       },
       manualOverrides,
     );
+    if (spatialSnapshot) {
+      await spatialStore.replaceAtAnchor({
+        chatId: input.chatId,
+        messageId: restoreMsg.id,
+        swipeIndex: 0,
+        currentLocationId: spatialSnapshot.currentLocationId,
+        definitionRevision: spatialSnapshot.definitionRevision,
+        source: "definition_repair",
+        transitionCommandId: null,
+        transitionPayloadHash: null,
+      });
+    }
 
     // Restore chat metadata fields from checkpoint
     const chat = await chats.getById(input.chatId);
