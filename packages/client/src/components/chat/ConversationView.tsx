@@ -81,6 +81,7 @@ interface ConversationViewProps {
   onToggleHiddenFromAI: (messageId: string, current: boolean) => void;
   onPeekPrompt: () => void;
   onIllustrate?: () => void | Promise<void>;
+  onGenerateSelfie?: (characterId?: string) => void | Promise<void>;
   lastAssistantMessageId: string | null;
   onOpenSettings: (event?: ReactMouseEvent<HTMLElement>, options?: { initialSection?: "autonomous" | null }) => void;
   onOpenScheduleEditor?: (characterId: string, options?: { initialDay?: string | null }) => void;
@@ -289,6 +290,7 @@ export function ConversationView({
   onToggleHiddenFromAI,
   onPeekPrompt,
   onIllustrate,
+  onGenerateSelfie,
   lastAssistantMessageId,
   onOpenSettings,
   onOpenScheduleEditor,
@@ -326,15 +328,11 @@ export function ConversationView({
   const gameSetup = useConversationGamesStore((s) => s.setup?.chatId === chatId ? s.setup : null);
   const closeGameSetup = useConversationGamesStore((s) => s.closeSetup);
   const { data: installedCapabilities = [] } = useInstalledCapabilityPackages();
-  const activeAgentIds = Array.isArray(chatMeta.activeAgentIds)
-    ? chatMeta.activeAgentIds.filter((id): id is string => typeof id === "string")
-    : [];
   const turnGamePackages = installedCapabilities.filter(
     (item) =>
       item.status === "active" &&
       item.manifest.kind.includes("turn-game") &&
-      item.manifest.entrypoints.client &&
-      activeAgentIds.includes(item.id),
+      item.manifest.entrypoints.client,
   );
   const isStreamCommitted = useChatStore((s) => s.committedStreamChatIds.has(chatId));
   const hasLiveStream = isStreaming && !isStreamCommitted;
@@ -437,10 +435,9 @@ export function ConversationView({
     (item) =>
       item.status === "active" &&
       item.manifest.kind.includes("conversation-calls") &&
-      item.manifest.entrypoints.client &&
-      activeAgentIds.includes(item.id),
+      item.manifest.entrypoints.client,
   );
-  const callCapabilityProps = { chatId, characterMap, chatCharIds, personaInfo };
+  const callCapabilityProps = { chatId, metadata: chatMeta, characterMap, chatCharIds, personaInfo };
   const renderToolbarActions = (compact = false) => (
     <>
       <ChatBranchSelector
@@ -1456,6 +1453,7 @@ export function ConversationView({
           })}
         onPeekPrompt={onPeekPrompt}
         onIllustrate={onIllustrate}
+        onGenerateSelfie={onGenerateSelfie}
       />
     </div>
   );

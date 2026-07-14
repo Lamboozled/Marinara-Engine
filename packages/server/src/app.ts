@@ -113,6 +113,10 @@ export async function buildApp(https?: { cert: Buffer; key: Buffer }) {
   let migratedLegacyCapabilities = false;
   if (getNodeEnv() !== "test") {
     try {
+      const removedCorePackages = await capabilityPackageManager.pruneNonDownloadableCorePackages();
+      if (removedCorePackages.length > 0) {
+        app.log.info("Removed obsolete downloadable copies of core features: %s", removedCorePackages.join(", "));
+      }
       const migration = await capabilityPackageManager.migrateLegacyAvailability(hadUserStateBeforeStartup);
       migratedLegacyCapabilities = migration.migrated;
     } catch (error) {

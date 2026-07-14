@@ -14,11 +14,13 @@ import {
 } from "@marinara-engine/shared";
 import { DATA_DIR } from "../../utils/data-dir.js";
 import { safeFetch } from "../../utils/security.js";
+import { sidecarSpeechService } from "../sidecar/sidecar-speech.service.js";
 
 const ROOT = join(DATA_DIR, "capability-packages");
 const VERSIONS = join(ROOT, "versions");
 const REGISTRY = join(ROOT, "installed.json");
 const AVAILABILITY_MIGRATION = join(ROOT, "availability-migration-v1.json");
+const NON_DOWNLOADABLE_CORE_PACKAGE_IDS = new Set(["about-me-keeper"]);
 const CATALOG_URL = process.env.MARINARA_AGENT_CATALOG_URL?.trim() ||
   "https://raw.githubusercontent.com/Pasta-Devs/Marinara-Agents/main/catalog/catalog.json";
 const MAX_ARTIFACT_BYTES = 100 * 1024 * 1024;
@@ -103,7 +105,20 @@ export const capabilityPackageManager = {
       allowedContentTypes: ["application/json", "text/plain"],
     });
     if (!response.ok) throw new Error(`Catalog request failed with HTTP ${response.status}`);
-    return capabilityCatalogSchema.parse(await response.json());
+    const catalog = capabilityCatalogSchema.parse(await response.json());
+    return {
+      ...catalog,
+      packages: catalog.packages.filter((entry) => !NON_DOWNLOADABLE_CORE_PACKAGE_IDS.has(entry.manifest.id)),
+    };
+  },
+
+  async pruneNonDownloadableCorePackages() {
+    const registry = await readRegistry();
+    const removed = registry.packages.filter((item) => NON_DOWNLOADABLE_CORE_PACKAGE_IDS.has(item.id));
+    if (removed.length === 0) return [];
+    await writeRegistry(registry.packages.filter((item) => !NON_DOWNLOADABLE_CORE_PACKAGE_IDS.has(item.id)));
+    await Promise.all(removed.map((item) => rm(join(VERSIONS, item.id), { recursive: true, force: true })));
+    return removed.map((item) => item.id);
   },
 
   async installed() {
@@ -305,6 +320,9 @@ export const capabilityPackageManager = {
     const registry = await readRegistry();
     const existing = registry.packages.find((item) => item.id === packageId);
     if (!existing) return false;
+    if (existing.manifest.kind.includes("conversation-calls")) {
+      await sidecarSpeechService.deleteAllModels();
+    }
     await writeRegistry(registry.packages.filter((item) => item.id !== packageId));
     await rm(join(VERSIONS, packageId), { recursive: true, force: true });
     return existing;

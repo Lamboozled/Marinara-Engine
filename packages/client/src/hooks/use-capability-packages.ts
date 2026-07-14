@@ -28,11 +28,15 @@ export function useCapabilityCatalog(enabled = true) {
 export function useCapabilityAgentRegistry() {
   const query = useQuery({
     queryKey: capabilityPackageKeys.agents(),
-    queryFn: () => api.get<BuiltInAgentManifest[]>("/capability-packages/agents"),
+    queryFn: async () => {
+      const agents = await api.get<BuiltInAgentManifest[]>("/capability-packages/agents");
+      // Keep the shared registry current before React Query publishes the new
+      // result. Updating it in an effect leaves mounted consumers one render
+      // behind because the registry itself is mutable, non-React state.
+      replaceBuiltInAgentDefinitions(agents);
+      return agents;
+    },
   });
-  useEffect(() => {
-    if (query.data) replaceBuiltInAgentDefinitions(query.data);
-  }, [query.data]);
   return query;
 }
 
@@ -72,6 +76,46 @@ function useInvalidateCapabilityState() {
   };
 }
 
+interface BulkCapabilityPackageVariables {
+  ids: string[];
+  onProgress?: (completed: number, total: number) => void;
+}
+
+interface BulkCapabilityPackageFailure {
+  id: string;
+  error: unknown;
+}
+
+interface BulkCapabilityPackageResult {
+  succeeded: string[];
+  failures: BulkCapabilityPackageFailure[];
+  restartRequired: boolean;
+}
+
+async function runCapabilityPackageQueue(
+  ids: string[],
+  operation: (id: string) => Promise<{ restartRequired: boolean }>,
+  onProgress?: BulkCapabilityPackageVariables["onProgress"],
+): Promise<BulkCapabilityPackageResult> {
+  const succeeded: string[] = [];
+  const failures: BulkCapabilityPackageFailure[] = [];
+  let restartRequired = false;
+
+  for (const [index, id] of ids.entries()) {
+    try {
+      const result = await operation(id);
+      succeeded.push(id);
+      restartRequired ||= result.restartRequired;
+    } catch (error) {
+      failures.push({ id, error });
+    } finally {
+      onProgress?.(index + 1, ids.length);
+    }
+  }
+
+  return { succeeded, failures, restartRequired };
+}
+
 export function useInstallCapabilityPackage() {
   const invalidate = useInvalidateCapabilityState();
   return useMutation({
@@ -84,6 +128,37 @@ export function useUninstallCapabilityPackage() {
   const invalidate = useInvalidateCapabilityState();
   return useMutation({
     mutationFn: (id: string) => api.delete<{ restartRequired: boolean }>(`/capability-packages/${id}`),
+    onSuccess: invalidate,
+  });
+}
+
+export function useInstallAllCapabilityPackages() {
+  const invalidate = useInvalidateCapabilityState();
+  return useMutation({
+    mutationFn: ({ ids, onProgress }: BulkCapabilityPackageVariables) =>
+      runCapabilityPackageQueue(
+        ids,
+        async (id) => {
+          const result = await api.post<InstalledCapabilityPackage>(
+            `/capability-packages/${encodeURIComponent(id)}/install`,
+          );
+          return { restartRequired: result.status === "restart-required" };
+        },
+        onProgress,
+      ),
+    onSuccess: invalidate,
+  });
+}
+
+export function useUninstallAllCapabilityPackages() {
+  const invalidate = useInvalidateCapabilityState();
+  return useMutation({
+    mutationFn: ({ ids, onProgress }: BulkCapabilityPackageVariables) =>
+      runCapabilityPackageQueue(
+        ids,
+        (id) => api.delete<{ restartRequired: boolean }>(`/capability-packages/${encodeURIComponent(id)}`),
+        onProgress,
+      ),
     onSuccess: invalidate,
   });
 }

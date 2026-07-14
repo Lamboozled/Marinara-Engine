@@ -2997,7 +2997,7 @@ async function applyRetryResultEffects(args: {
           let imgConnFull = imageConnectionOverride ? await conns.getWithKey(imageConnectionOverride) : null;
           if (imageConnectionOverride && !imgConnFull) {
             logger.warn(
-              "[retry-agents] Illustrator image connection %s could not be resolved; falling back to default Illustrator connection",
+              "[retry-agents] Illustrator image connection %s could not be resolved; falling back to the default Images connection",
               imageConnectionOverride,
             );
           }
@@ -3256,7 +3256,7 @@ async function applyRetryResultEffects(args: {
                 agentType: "illustrator",
                 agentName: illustratorFailureName,
                 error:
-                  "No image generation connection set on the Illustrator agent, and no default Illustrator image connection is configured. Go to Settings -> Connections and mark an image generation connection as the default for Illustrator, or assign one directly in Settings -> Agents -> Illustrator.",
+                  "No image generation connection is set on the Illustrator agent or under Settings -> Connections -> Defaults -> Images. Choose one there, or assign one directly in Settings -> Agents -> Illustrator.",
               },
             });
           }

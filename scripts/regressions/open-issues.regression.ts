@@ -17,7 +17,11 @@ import {
 import { buildLorebookDuplicateInput } from "../../packages/client/src/lib/lorebook-duplicate.js";
 import { appendLorebookActivationKeys } from "../../packages/client/src/lib/lorebook-keys.js";
 import { arePresetChoiceSelectionsComplete } from "../../packages/client/src/lib/preset-choice-selection.js";
-import { shouldExecuteQuickPostAsCommand } from "../../packages/client/src/lib/slash-commands.js";
+import {
+  getSlashCompletions,
+  matchSlashCommand,
+  shouldExecuteQuickPostAsCommand,
+} from "../../packages/client/src/lib/slash-commands.js";
 import { getAvatarCropStyle } from "../../packages/client/src/lib/utils.js";
 import { getApiErrorMessage } from "../../packages/client/src/lib/api-client.js";
 import {
@@ -548,6 +552,58 @@ assert.equal(isGitUpdateApplyAllowed({ updatesApplyEnabled: true, localChannelSw
 assert.equal(shouldExecuteQuickPostAsCommand("/illustrate"), true);
 assert.equal(shouldExecuteQuickPostAsCommand("  /roll 1d20  "), true);
 assert.equal(shouldExecuteQuickPostAsCommand("/not-a-real-command"), false);
+
+const noCapabilityPackages = new Set<string>();
+const illustratorCapabilityPackages = new Set(["illustrator"]);
+const roleplayCommandsWithoutIllustrator = getSlashCompletions("/", {
+  mode: "roleplay",
+  availableCapabilityIds: noCapabilityPackages,
+});
+assert.equal(roleplayCommandsWithoutIllustrator[0]?.name, "help");
+assert.equal(roleplayCommandsWithoutIllustrator.some((command) => command.name === "illustrate"), false);
+assert.equal(roleplayCommandsWithoutIllustrator.some((command) => command.name === "selfie"), false);
+assert.equal(
+  getSlashCompletions("/", {
+    mode: "roleplay",
+    availableCapabilityIds: illustratorCapabilityPackages,
+  }).some((command) => command.name === "illustrate"),
+  true,
+);
+assert.equal(
+  getSlashCompletions("/", {
+    mode: "conversation",
+    availableCapabilityIds: illustratorCapabilityPackages,
+  }).some((command) => command.name === "selfie"),
+  true,
+);
+assert.equal(
+  getSlashCompletions("/", {
+    mode: "conversation",
+    availableCapabilityIds: illustratorCapabilityPackages,
+  }).some((command) => command.name === "illustrate"),
+  false,
+);
+assert.equal(
+  matchSlashCommand("/illustrate", {
+    mode: "roleplay",
+    availableCapabilityIds: noCapabilityPackages,
+  }),
+  null,
+);
+assert.equal(
+  matchSlashCommand("/illustrate", {
+    mode: "roleplay",
+    availableCapabilityIds: illustratorCapabilityPackages,
+  })?.command.name,
+  "illustrate",
+);
+assert.equal(
+  shouldExecuteQuickPostAsCommand("/selfie", {
+    mode: "conversation",
+    availableCapabilityIds: noCapabilityPackages,
+  }),
+  false,
+);
 
 const choiceVariables = [
   {

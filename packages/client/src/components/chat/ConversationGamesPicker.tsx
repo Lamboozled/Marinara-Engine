@@ -1,7 +1,6 @@
 import { ChevronRight, Gamepad2 } from "lucide-react";
 import { Modal } from "../ui/Modal";
 import { useInstalledCapabilityPackages } from "../../hooks/use-capability-packages";
-import { useChat, useUpdateChatMetadata } from "../../hooks/use-chats";
 import { useConversationGamesStore } from "../../stores/conversation-games.store";
 
 interface Props {
@@ -12,8 +11,6 @@ interface Props {
 
 export function ConversationGamesPicker({ chatId, open, onClose }: Props) {
   const { data: installed = [] } = useInstalledCapabilityPackages(open);
-  const { data: chat } = useChat(chatId);
-  const updateMetadata = useUpdateChatMetadata();
   const openSetup = useConversationGamesStore((state) => state.openSetup);
   const games = installed.filter(
     (item) =>
@@ -23,20 +20,7 @@ export function ConversationGamesPicker({ chatId, open, onClose }: Props) {
       item.manifest.contributions?.conversationGame,
   );
 
-  const handleStart = async (packageId: string) => {
-    const metadata = chat?.metadata && typeof chat.metadata === "object" && !Array.isArray(chat.metadata)
-      ? (chat.metadata as Record<string, unknown>)
-      : {};
-    const activeAgentIds = Array.isArray(metadata.activeAgentIds)
-      ? metadata.activeAgentIds.filter((id): id is string => typeof id === "string")
-      : [];
-    if (!activeAgentIds.includes(packageId)) {
-      await updateMetadata.mutateAsync({
-        id: chatId,
-        enableAgents: true,
-        activeAgentIds: [...activeAgentIds, packageId],
-      });
-    }
+  const handleStart = (packageId: string) => {
     openSetup(packageId, chatId);
   };
 
@@ -48,8 +32,7 @@ export function ConversationGamesPicker({ chatId, open, onClose }: Props) {
             <button
               key={game.id}
               type="button"
-              onClick={() => void handleStart(game.id)}
-              disabled={updateMetadata.isPending}
+              onClick={() => handleStart(game.id)}
               className="group flex min-h-28 w-full flex-col justify-between rounded-lg border border-[var(--border)] bg-[var(--secondary)]/45 p-3 text-left transition-colors hover:border-[var(--primary)]/60 hover:bg-[var(--accent)]/60 focus:outline-none focus:ring-2 focus:ring-[var(--primary)]/40"
             >
               <span className="flex items-start justify-between gap-3">

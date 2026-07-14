@@ -1944,7 +1944,7 @@ function DialogueTab({
           rows={10}
           title="Example Dialogue"
           className="w-full resize-y rounded-xl border border-[var(--border)] bg-[var(--secondary)] p-4 font-mono text-xs leading-relaxed outline-none placeholder:text-[var(--muted-foreground)]/40 focus:border-[var(--primary)]/40 focus:ring-1 focus:ring-[var(--primary)]/20"
-          placeholder={"<START>\n{{user}}: Hello!\n{{char}}: *waves excitedly* Hey there!"}
+          placeholder={"<START>\n{{user}}: Hello!\n{{char}}: *Waves excitedly.* Hey there!"}
         />
       </div>
     </div>
@@ -4142,9 +4142,9 @@ function ColorsTab({
               className="rounded-2xl rounded-tl-sm px-4 py-3 text-[0.8125rem] leading-[1.8] backdrop-blur-md ring-1 ring-white/8"
               style={boxColor ? { backgroundColor: boxColor } : { backgroundColor: "rgba(255,255,255,0.08)" }}
             >
-              <span className="text-white/90">*She looks at you with a warm smile.* </span>
+              <span className="text-white/90">They jump down, landing behind you, and straighten up. </span>
               <strong style={dialogueColor ? { color: dialogueColor } : { color: "rgb(255, 255, 255)" }}>
-                &ldquo;Hello there! How are you?&rdquo;
+                &ldquo;Hello there.&rdquo;
               </strong>
             </div>
           </div>

@@ -1,12 +1,12 @@
 # Optional Agent and Capability Packages
 
-Status: implemented for the v2.2.2 development cycle in issue #3612.
+Status: implemented for the v2.3.0 development cycle in issue #3612.
 
 ## Objective
 
 Marinara Engine's base distribution must not compile or ship optional agent and capability implementations. Fresh installations start with no optional packages. Upgrades preserve capabilities that were available before this package system was introduced.
 
-The official catalog and package sources live in `Pasta-Devs/Marinara-Agents`. Installed artifacts live beneath the configured Marinara data directory so application updates cannot overwrite them.
+The official catalog, package sources, reproducible artifacts, validation scripts, and contribution workflow live in [Pasta-Devs/Marinara-Agents](https://github.com/Pasta-Devs/Marinara-Agents). Installed artifacts live beneath the configured Marinara data directory so application updates cannot overwrite them.
 
 ## Package model
 

@@ -162,6 +162,7 @@ function stripLeadingQuote(value: string): string {
 function buildConversationSlashCompletions(
   input: string,
   characters: Array<{ id: string; name: string }> | undefined,
+  availableCapabilityIds: ReadonlySet<string>,
 ): ConversationSlashCompletion[] {
   if (!input.startsWith("/")) return [];
 
@@ -218,7 +219,7 @@ function buildConversationSlashCompletions(
       });
   }
 
-  return getSlashCompletions(input)
+  return getSlashCompletions(input, { mode: "conversation", availableCapabilityIds })
     .filter((command) => !isConversationHiddenSlashCommand(command))
     .map((command) => {
       const { value, cursor } = buildSlashCommandPrefill(command, characters);
@@ -311,6 +312,7 @@ interface ConversationInputProps {
   }>;
   onPeekPrompt?: () => void;
   onIllustrate?: () => void | Promise<void>;
+  onGenerateSelfie?: (characterId?: string) => void | Promise<void>;
 }
 
 export function ConversationInput({
@@ -321,6 +323,7 @@ export function ConversationInput({
   chatCharacters,
   onPeekPrompt,
   onIllustrate,
+  onGenerateSelfie,
 }: ConversationInputProps) {
   const [hasInput, setHasInput] = useState(false);
   const [completions, setCompletions] = useState<ConversationSlashCompletion[]>([]);
@@ -363,16 +366,16 @@ export function ConversationInput({
   const professorMariSuggestionsEnabled = useUIStore((s) => s.professorMariSuggestionsEnabled);
   const { data: activeChat } = useChat(activeChatId);
   const { data: installedCapabilities = [] } = useInstalledCapabilityPackages();
-  const activeFeatureAgentIds = Array.isArray(parseChatMetadata(activeChat?.metadata).activeAgentIds)
-    ? (parseChatMetadata(activeChat?.metadata).activeAgentIds as string[])
-    : [];
+  const availableCapabilityIds = useMemo(
+    () => new Set(installedCapabilities.filter((item) => item.status === "active").map((item) => item.id)),
+    [installedCapabilities],
+  );
   const availableConversationGames = installedCapabilities.filter(
     (item) =>
       item.status === "active" &&
       item.manifest.kind.includes("turn-game") &&
       item.manifest.entrypoints.client &&
-      item.manifest.contributions?.conversationGame &&
-      activeFeatureAgentIds.includes(item.id),
+      item.manifest.contributions?.conversationGame,
   );
   const chatName = activeChat?.name;
   const streamingChatId = useChatStore((s) => s.streamingChatId);
@@ -950,7 +953,7 @@ export function ConversationInput({
     }
 
     // Slash command check
-    const matched = matchSlashCommand(raw);
+    const matched = matchSlashCommand(raw, { mode: "conversation", availableCapabilityIds });
     if (matched) {
       if (isConversationHiddenSlashCommand(matched.command)) {
         setFeedback("Impersonate is not available in Conversation mode.");
@@ -970,6 +973,8 @@ export function ConversationInput({
         latestAssistantMessageId: latestAssistantMessage?.id ?? null,
         lastMessageRole,
         illustrate: onIllustrate,
+        selfie: onGenerateSelfie,
+        availableCapabilityIds,
       };
       const submittedDraft = textareaRef.current?.value ?? "";
       const submittedHeight = textareaRef.current?.style.height ?? "auto";
@@ -1127,13 +1132,15 @@ export function ConversationInput({
     updateAttachments,
     onPeekPrompt,
     onIllustrate,
+    onGenerateSelfie,
+    availableCapabilityIds,
   ]);
 
   const runQuickSlashCommand = useCallback(
     async (commandLine: string, fallbackError: string) => {
       if (!activeChatId) return;
       const submittingChatId = activeChatId;
-      const matched = matchSlashCommand(commandLine);
+      const matched = matchSlashCommand(commandLine, { mode: "conversation", availableCapabilityIds });
       if (!matched) return;
       if (isConversationHiddenSlashCommand(matched.command)) {
         toast.info("Impersonate is not available in Conversation mode.");
@@ -1158,6 +1165,8 @@ export function ConversationInput({
         latestAssistantMessageId: latestAssistantMessage?.id ?? null,
         lastMessageRole,
         illustrate: onIllustrate,
+        selfie: onGenerateSelfie,
+        availableCapabilityIds,
       };
 
       const previousDraft = textareaRef.current?.value ?? "";
@@ -1222,6 +1231,8 @@ export function ConversationInput({
       generate,
       latestAssistantMessage,
       onIllustrate,
+      onGenerateSelfie,
+      availableCapabilityIds,
       qc,
       setInputDraft,
       syncInputState,
@@ -1240,7 +1251,7 @@ export function ConversationInput({
     const hasFiles = attachments.length > 0;
     if (!hasText && !hasFiles) return;
 
-    if (shouldExecuteQuickPostAsCommand(raw)) {
+    if (shouldExecuteQuickPostAsCommand(raw, { mode: "conversation", availableCapabilityIds })) {
       await handleSend();
       return;
     }
@@ -1361,6 +1372,7 @@ export function ConversationInput({
     deleteMessage,
     updateMessageExtra,
     handleSend,
+    availableCapabilityIds,
   ]);
 
   const handleGuidedGenerationButton = useCallback(async () => {
@@ -1565,7 +1577,7 @@ export function ConversationInput({
 
       // Slash completions
       if (formatted.startsWith("/")) {
-        const results = buildConversationSlashCompletions(formatted, activeChatCharacters);
+        const results = buildConversationSlashCompletions(formatted, activeChatCharacters, availableCapabilityIds);
         setCompletions(results);
         setSelectedCompletion(0);
       } else {
@@ -1629,6 +1641,7 @@ export function ConversationInput({
       quoteFormat,
       setInputDraft,
       syncInputState,
+      availableCapabilityIds,
     ],
   );
 

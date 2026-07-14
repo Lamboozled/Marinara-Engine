@@ -65,9 +65,9 @@ import { replaceBuiltInAgentDefinitions as replaceBuiltInAgentDefinitionsDist } 
 
 const REGRESSION_AGENT_IDS = [
   "about-me-keeper", "background", "card-evolution-auditor", "character-tracker", "combat", "continuity",
-  "custom-tracker", "cyoa", "director", "echo-chamber", "expression", "haptic", "html", "illustrator",
-  "knowledge-retrieval", "knowledge-router", "lorebook-keeper", "persona-stats", "prose-guardian", "quest",
-  "spotify", "world-state",
+  "conversation-calls", "custom-tracker", "cyoa", "director", "echo-chamber", "eightball", "expression", "haptic",
+  "html", "illustrator", "knowledge-retrieval", "knowledge-router", "lorebook-keeper", "persona-stats", "poker",
+  "prose-guardian", "quest", "rock-paper-scissors", "spotify", "tic-tac-toe", "uno", "world-state", "chess",
 ] as const;
 
 // The production Engine intentionally carries no optional agent definitions.
@@ -191,6 +191,11 @@ import {
   mergeIllustratorNegativePrompt,
   resolveIllustratorCharacterReferences,
 } from "../../packages/server/src/routes/generate/illustrator-references.js";
+import {
+  OFFICIAL_AGENT_KNOWLEDGE_ENTRIES,
+  PROFESSOR_MARI_AGENT_CATALOG_KNOWLEDGE,
+} from "../../packages/server/src/services/professor-mari/official-agent-knowledge.js";
+import { filterEnabledConversationCommands } from "../../packages/server/src/services/generation/conversation-command-runtime.js";
 
 type RegressionCase = {
   name: string;
@@ -288,6 +293,78 @@ const keywordOptions = {
 };
 
 const cases: RegressionCase[] = [
+  {
+    name: "installed Conversation feature commands do not require per-chat agent attachment",
+    run() {
+      const commands = [
+        { type: "uno" },
+        { type: "chess" },
+        { type: "call" },
+        { type: "selfie" },
+        { type: "note", content: "remember this" },
+      ] as Parameters<typeof filterEnabledConversationCommands>[0];
+      const withoutLegacyAttachment = filterEnabledConversationCommands(commands, {
+        enableAgents: false,
+        activeAgentIds: [],
+      });
+      assert.deepEqual(withoutLegacyAttachment.map((command) => command.type), [
+        "uno",
+        "chess",
+        "call",
+        "selfie",
+        "note",
+      ]);
+
+      const withUnoDisabled = filterEnabledConversationCommands(commands, {
+        enableAgents: false,
+        activeAgentIds: [],
+        conversationCommandToggles: { uno: false },
+      });
+      assert.deepEqual(withUnoDisabled.map((command) => command.type), ["chess", "call", "selfie", "note"]);
+    },
+  },
+  {
+    name: "Professor Mari and the public reference cover every official downloadable agent",
+    run() {
+      const publicReference = readFileSync(
+        new URL("../../docs/agents/built-in-agents.md", import.meta.url),
+        "utf8",
+      );
+      const readme = readFileSync(new URL("../../README.md", import.meta.url), "utf8");
+      const seededMariSource = readFileSync(
+        new URL("../../packages/server/src/db/seed-mari.ts", import.meta.url),
+        "utf8",
+      );
+      const workspaceMariSource = readFileSync(
+        new URL("../../packages/server/src/services/professor-mari/workspace-agent.service.ts", import.meta.url),
+        "utf8",
+      );
+
+      assert.equal(OFFICIAL_AGENT_KNOWLEDGE_ENTRIES.length, 29);
+      assert.equal(new Set(OFFICIAL_AGENT_KNOWLEDGE_ENTRIES.map((entry) => entry.id)).size, 29);
+      assert.deepEqual(
+        Object.fromEntries(
+          (["writer", "tracker", "misc"] as const).map((category) => [
+            category,
+            OFFICIAL_AGENT_KNOWLEDGE_ENTRIES.filter((entry) => entry.category === category).length,
+          ]),
+        ),
+        { writer: 6, tracker: 8, misc: 15 },
+      );
+
+      for (const entry of OFFICIAL_AGENT_KNOWLEDGE_ENTRIES) {
+        assert.ok(
+          PROFESSOR_MARI_AGENT_CATALOG_KNOWLEDGE.includes(`- ${entry.name} (package \`${entry.id}\`;`),
+          `Professor Mari knowledge is missing ${entry.name}`,
+        );
+        assert.ok(publicReference.includes(`### ${entry.name}\n`), `Public agent reference is missing ${entry.name}`);
+        assert.ok(readme.includes(entry.name), `README agent catalog is missing ${entry.name}`);
+      }
+
+      assert.match(seededMariSource, /\$\{PROFESSOR_MARI_AGENT_CATALOG_KNOWLEDGE\}/u);
+      assert.match(workspaceMariSource, /\$\{PROFESSOR_MARI_AGENT_CATALOG_KNOWLEDGE\}/u);
+    },
+  },
   {
     name: "game narration preserves angle-bracket status readouts and rejects transformed empty steps",
     run() {
@@ -1500,7 +1577,7 @@ const cases: RegressionCase[] = [
         id: "builtin:illustrator",
         type: "illustrator",
         name: "Illustrator",
-        description: "Generates image prompts for key scenes (requires image generation API).",
+        description: "Responsible for image and video generations.",
         phase: "post_processing",
         enabled: "false",
         connectionId: null,

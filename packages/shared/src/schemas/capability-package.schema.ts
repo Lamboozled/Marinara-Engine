@@ -65,6 +65,7 @@ export const capabilityPackageManifestSchema = z.object({
 
 export const capabilityCatalogPackageSchema = z.object({
   manifest: capabilityPackageManifestSchema,
+  category: z.enum(["writer", "tracker", "misc"]).default("misc"),
   artifact: z.object({
     url: z.string().url(),
     sha256: z.string().regex(/^[a-f0-9]{64}$/),

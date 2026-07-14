@@ -1,4 +1,6 @@
 import {
+  BUILT_IN_AGENTS,
+  CONVERSATION_COMMAND_AGENT_IDS,
   CONVERSATION_COMMAND_KEYS,
   type ChatMode,
   type ConversationCommandKey,
@@ -90,13 +92,18 @@ function getConversationCommandKey(command: CharacterCommand): ConversationComma
   }
 }
 
+function isConversationCommandAvailable(key: ConversationCommandKey): boolean {
+  const packageAgentId = CONVERSATION_COMMAND_AGENT_IDS[key];
+  return !packageAgentId || BUILT_IN_AGENTS.some((agent) => agent.id === packageAgentId);
+}
+
 export function filterEnabledConversationCommands(
   commands: CharacterCommand[],
   metadata: Record<string, unknown>,
 ): CharacterCommand[] {
   return commands.filter((command) => {
     const key = getConversationCommandKey(command);
-    return key === null || isConversationCommandEnabled(metadata, key);
+    return key === null || (isConversationCommandAvailable(key) && isConversationCommandEnabled(metadata, key));
   });
 }
 
@@ -139,20 +146,18 @@ export async function buildConversationCommandsReminder(args: {
 }): Promise<string | null> {
   if (!args.enabled) return null;
   const { chatMeta, chatMode, characterIds, personaName } = args;
-  const activeFeatureIds = new Set(
-    chatMeta.enableAgents === true && Array.isArray(chatMeta.activeAgentIds)
-      ? chatMeta.activeAgentIds.filter((id): id is string => typeof id === "string")
-      : [],
-  );
   const scheduleCommandEnabled = isConversationCommandEnabled(chatMeta, "schedule_update");
   const crossPostCommandEnabled = isConversationCommandEnabled(chatMeta, "cross_post");
-  const selfieCommandEnabled = isConversationCommandEnabled(chatMeta, "selfie");
+  const selfieCommandEnabled =
+    isConversationCommandAvailable("selfie") && isConversationCommandEnabled(chatMeta, "selfie");
   const memoryCommandEnabled = isConversationCommandEnabled(chatMeta, "memory");
   const sceneCommandEnabled = isConversationCommandEnabled(chatMeta, "scene");
   const callCommandEnabled =
-    activeFeatureIds.has("conversation-calls") && isConversationCommandEnabled(chatMeta, "call");
-  const musicCommandEnabled = isConversationCommandEnabled(chatMeta, "music");
-  const hapticCommandEnabled = isConversationCommandEnabled(chatMeta, "haptic");
+    isConversationCommandAvailable("call") && isConversationCommandEnabled(chatMeta, "call");
+  const musicCommandEnabled =
+    isConversationCommandAvailable("music") && isConversationCommandEnabled(chatMeta, "music");
+  const hapticCommandEnabled =
+    isConversationCommandAvailable("haptic") && isConversationCommandEnabled(chatMeta, "haptic");
   const activeMusicCommandSource =
     args.musicPlayerEnabled === false
       ? null
@@ -277,32 +282,32 @@ export async function buildConversationCommandsReminder(args: {
 
   // Turn-games: conversation mode only, when no game is running yet and at least one other character is present.
   const unoAdvertisable =
-    activeFeatureIds.has("uno") &&
+    isConversationCommandAvailable("uno") &&
     chatMode === "conversation" &&
     isConversationCommandEnabled(chatMeta, "uno") &&
     characterIds.length >= 1;
   const chessAdvertisable =
-    activeFeatureIds.has("chess") &&
+    isConversationCommandAvailable("chess") &&
     chatMode === "conversation" &&
     isConversationCommandEnabled(chatMeta, "chess") &&
     characterIds.length >= 1;
   const pokerAdvertisable =
-    activeFeatureIds.has("poker") &&
+    isConversationCommandAvailable("poker") &&
     chatMode === "conversation" &&
     isConversationCommandEnabled(chatMeta, "poker") &&
     characterIds.length >= 1;
   const eightballAdvertisable =
-    activeFeatureIds.has("eightball") &&
+    isConversationCommandAvailable("eightball") &&
     chatMode === "conversation" &&
     isConversationCommandEnabled(chatMeta, "eightball") &&
     characterIds.length >= 1;
   const ticTacToeAdvertisable =
-    activeFeatureIds.has("tic-tac-toe") &&
+    isConversationCommandAvailable("tic_tac_toe") &&
     chatMode === "conversation" &&
     isConversationCommandEnabled(chatMeta, "tic_tac_toe") &&
     characterIds.length >= 1;
   const rpsAdvertisable =
-    activeFeatureIds.has("rock-paper-scissors") &&
+    isConversationCommandAvailable("rock_paper_scissors") &&
     chatMode === "conversation" &&
     isConversationCommandEnabled(chatMeta, "rock_paper_scissors") &&
     characterIds.length >= 1;

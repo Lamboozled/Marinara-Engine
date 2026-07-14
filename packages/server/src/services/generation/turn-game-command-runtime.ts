@@ -33,23 +33,11 @@ function readCharacterIds(value: unknown): string[] {
   }
 }
 
-function isFeatureActive(chatMeta: Record<string, unknown>, gameType: string) {
-  return (
-    chatMeta.enableAgents === true &&
-    Array.isArray(chatMeta.activeAgentIds) &&
-    chatMeta.activeAgentIds.includes(gameType)
-  );
-}
-
 /** Package-agnostic bridge from a registered bracket command to a registered engine. */
 export async function handleTurnGameCommand(args: TurnGameCommandArgs): Promise<boolean> {
   const gameType = normalizeGameType(args.commandType);
   const engine = getTurnGameEngine(gameType);
   if (!engine) return false;
-  if (!isFeatureActive(args.chatMeta, gameType)) {
-    logger.debug("[commands] Ignored %s because its agent is not active in chat %s", gameType, args.chatId);
-    return true;
-  }
 
   try {
     if (await getActiveTurnGame(args.db, args.chatId)) {

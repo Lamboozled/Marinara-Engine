@@ -6,7 +6,7 @@ New to agents? Read [Agents: AI Helpers for Your Chats](agents-overview.md) firs
 
 ## When to build a custom agent
 
-Marinara Engine offers many official downloadable agents. See the [Downloadable Agents Reference](built-in-agents.md) before you build your own. A catalog agent may already do what you want.
+Marinara Engine offers many official downloadable agents. See the [Downloadable Agents Reference](built-in-agents.md) and the public [Pasta-Devs/Marinara-Agents](https://github.com/Pasta-Devs/Marinara-Agents) package repository before you build your own. A catalog agent may already do what you want, and the official manifests provide working package examples.
 
 Build a custom agent when you need something the built-ins do not cover. Good reasons include:
 

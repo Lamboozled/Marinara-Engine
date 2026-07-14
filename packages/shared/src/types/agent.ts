@@ -432,6 +432,7 @@ export const BUILT_IN_AGENT_IDS = {
 } as const;
 
 export const RETIRED_BUILT_IN_AGENT_IDS = [
+  "about-me-keeper",
   "prompt-reviewer",
   "response-orchestrator",
   "schedule-planner",
