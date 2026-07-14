@@ -90,6 +90,8 @@ import { gameStateSnapshots as gameStateSnapshotsTable } from "../../db/schema/i
 import {
   buildLockedPlayerStatsArrayPatch,
   buildLockedPersonaTrackerPatch,
+  applyTrackerCharacterCardIdentity,
+  collectLatestTrackerCharacterHistory,
   isMessageHiddenFromAI,
   parseExtra,
   parseStoredGenerationParameters,
@@ -607,6 +609,9 @@ async function buildRetryAgentContext(args: {
       mesExample: cardPromptText(charData.mes_example) || undefined,
       firstMes: cardPromptText(charData.first_mes) || undefined,
       postHistoryInstructions: cardPromptText(charData.post_history_instructions) || undefined,
+      avatarPath: typeof charRow.avatarPath === "string" ? charRow.avatarPath : null,
+      avatarCrop: extensions.avatarCrop ?? null,
+      rpgStats: extensions.rpgStats as AgentContext["characters"][number]["rpgStats"],
     });
   }
 
@@ -674,6 +679,11 @@ async function buildRetryAgentContext(args: {
   const retryVisibleHistorySnapshot = retryVisibleAnchor
     ? await gameStateStore.getByChatAndMessage(chatId, retryVisibleAnchor.messageId, retryVisibleAnchor.swipeIndex)
     : null;
+  const characterTrackerHistory = resolvedAgentTypes.has("character-tracker")
+    ? collectLatestTrackerCharacterHistory(
+        await gameStateStore.getRecent(chatId, 100, retryVisibleHistorySnapshot?.createdAt),
+      )
+    : [];
   const retryOwnerSpatialProjection = retryVisibleAnchor
     ? ((await resolveOwnerSpatialProjection(db, chatId, { exactAnchor: retryVisibleAnchor })) ??
       (await resolveOwnerSpatialProjection(db, chatId, { throughMessageId: retryVisibleAnchor.messageId })))
@@ -730,6 +740,7 @@ async function buildRetryAgentContext(args: {
     mainResponse: resolvedLastAssistantContent,
     gameState: null,
     characters: charInfo,
+    characterTrackerHistory: characterTrackerHistory as unknown as AgentContext["characterTrackerHistory"],
     persona:
       personaContext.personaName !== "User"
         ? {
@@ -2720,7 +2731,11 @@ async function applyRetryResultEffects(args: {
             previousCharacters = [];
           }
         }
-        preserveTrackerCharacterUiFields(presentCharacters, previousCharacters);
+        preserveTrackerCharacterUiFields(
+          presentCharacters,
+          agentContext.characterTrackerHistory?.length ? agentContext.characterTrackerHistory : previousCharacters,
+        );
+        applyTrackerCharacterCardIdentity(presentCharacters, agentContext.characters);
         const lockedCharacterPatch = applyTrackerFieldLocksToGameStatePatch(
           { presentCharacters },
           previousSnapshot ? parseGameStateRow(previousSnapshot as Record<string, unknown>) : null,

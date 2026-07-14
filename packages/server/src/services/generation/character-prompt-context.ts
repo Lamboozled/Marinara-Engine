@@ -27,6 +27,7 @@ export type CharacterPromptInfo = {
   talkativeness: number;
   avatarPath: string | null;
   avatarCrop: unknown | null;
+  rpgStats?: RPGStatsConfig;
   /** Conversation-only: cosmetic display name + whether to declare it on the card. */
   convoDisplayName?: string;
   convoDisplayNameInCard?: boolean;
@@ -128,6 +129,7 @@ export async function loadCharacterPromptInfo({
       talkativeness: Math.max(0, Math.min(1, Number(charData.extensions?.talkativeness ?? 0.5))),
       avatarPath: (charRow.avatarPath as string) ?? null,
       avatarCrop: charData.extensions?.avatarCrop ?? null,
+      rpgStats: charData.extensions?.rpgStats as RPGStatsConfig | undefined,
       convoDisplayName:
         typeof charData.extensions?.convoDisplayName === "string" ? charData.extensions.convoDisplayName : undefined,
       convoDisplayNameInCard: charData.extensions?.convoDisplayNameInCard === true,

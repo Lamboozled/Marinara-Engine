@@ -184,6 +184,8 @@ import {
   buildUserMessageRegenerationPromptFromSource,
   buildLockedPlayerStatsArrayPatch,
   buildLockedPersonaTrackerPatch,
+  applyTrackerCharacterCardIdentity,
+  collectLatestTrackerCharacterHistory,
   createLocalSidecarGenerationConnection,
   extractImageAttachmentDataUrls,
   appendNonLeadingSystemMessagesToLastUser,
@@ -3029,6 +3031,9 @@ export async function generateRoutes(app: FastifyInstance) {
         const committedSnapshots = await gameStateStore.getCommittedForMessages(
           agentSlice.filter((m: any) => m.role === "assistant"),
         );
+        const characterTrackerHistory = resolvedAgents.some((agent) => agent.type === "character-tracker")
+          ? collectLatestTrackerCharacterHistory(await gameStateStore.getRecent(input.chatId))
+          : [];
         const visibleHistorySnapshot =
           latestGameState &&
           visibleGameStateAnchor &&
@@ -3075,6 +3080,7 @@ export async function generateRoutes(app: FastifyInstance) {
           mainResponse: null,
           gameState,
           characters: charInfo,
+          characterTrackerHistory: characterTrackerHistory as unknown as AgentContext["characterTrackerHistory"],
           persona:
             personaName !== "User"
               ? {
@@ -7173,7 +7179,7 @@ export async function generateRoutes(app: FastifyInstance) {
                   trackerBaseGameStateSnapshot ??
                   (allowLatestGameStateFallback ? await gameStateStore.getLatest(input.chatId) : null);
                 const oldChars = parseJsonField<any[]>(previousCharacterSnapshot?.presentCharacters, []);
-                preserveTrackerCharacterUiFields(chars, oldChars);
+                preserveTrackerCharacterUiFields(chars, characterTrackerHistory);
                 const characterLockState = previousCharacterSnapshot
                   ? parseGameStateRow(previousCharacterSnapshot as Record<string, unknown>)
                   : null;
@@ -7190,6 +7196,7 @@ export async function generateRoutes(app: FastifyInstance) {
                 // 2. Fall back to stored NPC avatars (per-chat generated/uploaded)
                 const NPC_AVATAR_DIR = join(DATA_DIR, "avatars", "npc");
                 const storedNpcAvatarByName = new Map<string, string>();
+                const cardCharacterIds = applyTrackerCharacterCardIdentity(chars, charInfo);
                 const gameNpcs = sanitizeGameNpcAvatarUrls((chatMeta.gameNpcs as GameNpc[]) ?? []);
                 if (gameNpcs !== chatMeta.gameNpcs) {
                   chatMeta.gameNpcs = gameNpcs;
@@ -7201,6 +7208,7 @@ export async function generateRoutes(app: FastifyInstance) {
 
                 for (const char of chars) {
                   if (isManualTrackerCharacterId(char.characterId)) continue;
+                  if (cardCharacterIds.has(String(char.characterId))) continue;
                   const name = (char.name as string) ?? "";
                   // Try matching against the chat's character cards (case-insensitive)
                   const matched = charInfo.find((c) => normalizeTextForMatch(c.name) === normalizeTextForMatch(name));
