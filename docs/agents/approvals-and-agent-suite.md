@@ -103,5 +103,5 @@ For each cached injection you can:
 ## Related guides
 
 - [Agents Overview](agents-overview.md)
-- [Built-in Agents Reference](built-in-agents.md)
+- [Downloadable Agents Reference](built-in-agents.md)
 - [Creating and Editing Characters](../characters/creating-and-editing-characters.md)

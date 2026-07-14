@@ -53,8 +53,6 @@ import {
   resolveStandardEmojiShortcode,
   searchStandardEmojiShortcodes,
 } from "../../packages/client/src/lib/emoji-shortcodes.js";
-import { unoEngine } from "../../packages/shared/src/features/turn-games/uno/engine.js";
-import { DEFAULT_UNO_CONFIG, type UnoState } from "../../packages/shared/src/features/turn-games/uno/types.js";
 import { persistGeneratedImageToEntityGalleries } from "../../packages/server/src/services/image/generated-image-entity-gallery.js";
 import { runImageGenerationRequest } from "../../packages/server/src/services/image/image-generation-queue.js";
 import {
@@ -234,39 +232,6 @@ assert.equal(
   true,
 );
 assert.equal(bulkUpdateLorebookEntriesSchema.safeParse({ entryIds: ["entry-1"], changes: {} }).success, false);
-
-const unoColorStrategyState: UnoState = {
-  config: { ...DEFAULT_UNO_CONFIG },
-  seatOrder: ["bot", "user"],
-  seatNames: { bot: "Bot", user: "User" },
-  drawPile: [{ id: "yellow-1", color: "yellow", value: "1" }],
-  discardPile: [{ id: "red-5", color: "red", value: "5" }],
-  activeColor: "red",
-  hands: {
-    bot: [
-      { id: "wild", color: "wild", value: "wild" },
-      { id: "blue-1", color: "blue", value: "1" },
-      { id: "blue-2", color: "blue", value: "2" },
-      { id: "red-2", color: "red", value: "2" },
-    ],
-    user: [{ id: "green-1", color: "green", value: "1" }],
-  },
-  turnIndex: 0,
-  direction: 1,
-  pendingDraw: 0,
-  pendingDrawType: null,
-  mustCallUno: { bot: false, user: false },
-  drawnCardId: null,
-  status: "awaiting_move",
-  seed: 1,
-  rngCursor: 1,
-  turnCount: 0,
-  lastAction: null,
-  log: [],
-};
-const unoInstructions = unoEngine.describeForModel(unoColorStrategyState, "bot").instructions;
-assert.match(unoInstructions, /Blue 2/u);
-assert.match(unoInstructions, /do not simply repeat the current Red/u);
 
 assert.equal(parsePureTemperatureValue("15°C"), 15);
 assert.equal(parsePureTemperatureValue("59 Fahrenheit"), 15);

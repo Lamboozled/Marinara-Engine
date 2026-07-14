@@ -24,12 +24,7 @@ import { useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import { useChatStore } from "../../stores/chat.store";
 import { useAgentStore } from "../../stores/agent.store";
 import { useUIStore } from "../../stores/ui.store";
-import { useUnoGameStore } from "../../stores/uno-game.store";
-import { useChessGameStore } from "../../stores/chess-game.store";
-import { usePokerGameStore } from "../../stores/poker-game.store";
-import { useEightBallGameStore } from "../../stores/eightball-game.store";
-import { useTicTacToeGameStore } from "../../stores/tic-tac-toe-game.store";
-import { useRockPaperScissorsGameStore } from "../../stores/rock-paper-scissors-game.store";
+import { useConversationGamesStore } from "../../stores/conversation-games.store";
 import { useGenerate } from "../../hooks/use-generate";
 import { useApplyRegex } from "../../hooks/use-apply-regex";
 import { useCreateMessage, useDeleteMessage, useUpdateMessageExtra, useChat, chatKeys } from "../../hooks/use-chats";
@@ -65,6 +60,7 @@ import {
   type ConversationMediaPickerTab,
   type ConversationMediaPickerTabId,
 } from "./ConversationMediaPickerPanel";
+import { useInstalledCapabilityPackages } from "../../hooks/use-capability-packages";
 import {
   buildGuidedGenerationInstructionMessage,
   formatTextQuotes,
@@ -366,6 +362,18 @@ export function ConversationInput({
   const clearMariChips = useAgentStore((s) => s.clearMariChips);
   const professorMariSuggestionsEnabled = useUIStore((s) => s.professorMariSuggestionsEnabled);
   const { data: activeChat } = useChat(activeChatId);
+  const { data: installedCapabilities = [] } = useInstalledCapabilityPackages();
+  const activeFeatureAgentIds = Array.isArray(parseChatMetadata(activeChat?.metadata).activeAgentIds)
+    ? (parseChatMetadata(activeChat?.metadata).activeAgentIds as string[])
+    : [];
+  const availableConversationGames = installedCapabilities.filter(
+    (item) =>
+      item.status === "active" &&
+      item.manifest.kind.includes("turn-game") &&
+      item.manifest.entrypoints.client &&
+      item.manifest.contributions?.conversationGame &&
+      activeFeatureAgentIds.includes(item.id),
+  );
   const chatName = activeChat?.name;
   const streamingChatId = useChatStore((s) => s.streamingChatId);
   const isStreamingGlobal = useChatStore((s) => s.isStreaming);
@@ -1012,50 +1020,22 @@ export function ConversationInput({
       return;
     }
 
-    // Natural-language launchers: "let's play uno" / "let's play chess" / "let's
-    // play poker" / "let's play pool" open the game setup. The message still
-    // sends normally, so the characters can react too.
+    // Downloaded games contribute their own aliases. The message still sends so characters can react.
     {
-      const activeUno = useUnoGameStore.getState().current;
-      const unoActive = !!activeUno && activeUno.chatId === activeChatId && activeUno.status !== "finished";
-      if (!unoActive && /\b(?:play|start)\b[^.!?\n]{0,16}\buno\b/i.test(raw)) {
-        useUnoGameStore.getState().openSetup(activeChatId);
-      }
-      const activeChess = useChessGameStore.getState().current;
-      const chessActive = !!activeChess && activeChess.chatId === activeChatId && activeChess.status !== "finished";
-      if (!chessActive && /\b(?:play|start)\b[^.!?\n]{0,16}\bchess\b/i.test(raw)) {
-        useChessGameStore.getState().openSetup(activeChatId);
-      }
-      const activePoker = usePokerGameStore.getState().current;
-      const pokerActive = !!activePoker && activePoker.chatId === activeChatId && activePoker.status !== "finished";
-      if (!pokerActive && /\b(?:play|start|deal)\b[^.!?\n]{0,24}\bpoker\b/i.test(raw)) {
-        usePokerGameStore.getState().openSetup(activeChatId);
-      }
-      const activeEightBall = useEightBallGameStore.getState().current;
-      const eightBallActive =
-        !!activeEightBall && activeEightBall.chatId === activeChatId && activeEightBall.status !== "finished";
-      if (
-        !eightBallActive &&
-        /\b(?:play|start|rack)\b[^.!?\n]{0,24}\b(?:8-ball|8 ball|eightball|pool|billiards)\b/i.test(raw)
-      ) {
-        useEightBallGameStore.getState().openSetup(activeChatId);
-      }
-      const activeTicTacToe = useTicTacToeGameStore.getState().current;
-      const ticTacToeActive =
-        !!activeTicTacToe && activeTicTacToe.chatId === activeChatId && activeTicTacToe.status !== "finished";
-      if (
-        !ticTacToeActive &&
-        /\b(?:play|start)\b[^.!?\n]{0,24}\b(?:tic-tac-toe|tic tac toe|noughts and crosses)\b/i.test(raw)
-      ) {
-        useTicTacToeGameStore.getState().openSetup(activeChatId);
-      }
-      const activeRps = useRockPaperScissorsGameStore.getState().current;
-      const rpsActive = !!activeRps && activeRps.chatId === activeChatId && activeRps.status !== "finished";
-      if (
-        !rpsActive &&
-        /\b(?:play|start)\b[^.!?\n]{0,24}\b(?:rock[\s-]?paper[\s-]?scissors|rps)\b/i.test(raw)
-      ) {
-        useRockPaperScissorsGameStore.getState().openSetup(activeChatId);
+      const normalized = raw.toLocaleLowerCase();
+      if (/\b(?:play|start|deal|rack)\b/i.test(normalized)) {
+        const matchedGame = availableConversationGames.find((game) => {
+          const contribution = game.manifest.contributions!.conversationGame!;
+          const aliases = [
+            game.manifest.name,
+            contribution.command.slice(1),
+            ...contribution.aliases,
+          ].map((alias) => alias.toLocaleLowerCase());
+          return aliases.some((alias) => normalized.includes(alias));
+        });
+        if (matchedGame) {
+          useConversationGamesStore.getState().openSetup(matchedGame.id, activeChatId);
+        }
       }
     }
 
@@ -1121,6 +1101,7 @@ export function ConversationInput({
     });
   }, [
     activeChatId,
+    availableConversationGames,
     activeChatCharacters,
     lastMessageRole,
     attachments,

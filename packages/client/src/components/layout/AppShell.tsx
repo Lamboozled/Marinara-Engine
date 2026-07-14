@@ -22,7 +22,8 @@ import { useBackgroundAutonomousPolling } from "../../hooks/use-background-auton
 import { useClearAutonomousUnread } from "../../hooks/use-chats";
 import { useIdleDetection } from "../../hooks/use-idle-detection";
 import { usePageActivity } from "../../hooks/use-page-activity";
-import { useCapabilityAgentRegistry } from "../../hooks/use-capability-packages";
+import { useCapabilityAgentRegistry, useCapabilityClientModules } from "../../hooks/use-capability-packages";
+import { CapabilityElement } from "../capabilities/CapabilityElement";
 import { getCssBackgroundStyle } from "../../lib/css-colors";
 import { cn } from "../../lib/utils";
 import { parseChatMetadata } from "../../lib/chat-display";
@@ -62,11 +63,6 @@ const PersonaEditor = lazy(() =>
 const RegexScriptEditor = lazy(() =>
   import("../agents/RegexScriptEditor").then((module) => ({ default: module.RegexScriptEditor })),
 );
-const SpatialMapWorkspace = lazy(() =>
-  import("../../features/spatial-context/SpatialMapWorkspace").then((module) => ({
-    default: module.SpatialMapWorkspace,
-  })),
-);
 const BotBrowserView = lazy(() =>
   import("../bot-browser/BotBrowserView").then((module) => ({ default: module.BotBrowserView })),
 );
@@ -83,9 +79,6 @@ const ChatNotificationBubbles = lazy(() =>
 );
 const OnboardingTutorial = lazy(() =>
   import("../onboarding/OnboardingTutorial").then((module) => ({ default: module.OnboardingTutorial })),
-);
-const ConversationCallFloatingHost = lazy(() =>
-  import("../chat/ConversationCallFloatingHost").then((module) => ({ default: module.ConversationCallFloatingHost })),
 );
 
 function clampWidth(width: number, min: number, max: number) {
@@ -202,6 +195,7 @@ function useExitPresence(open: boolean, exitMs: number) {
 
 export function AppShell() {
   useCapabilityAgentRegistry();
+  useCapabilityClientModules();
 
   // Background autonomous polling for inactive conversation chats
   useBackgroundAutonomousPolling();
@@ -251,6 +245,9 @@ export function AppShell() {
   const trackerPanelHideHudWidgets = useUIStore((s) => s.trackerPanelHideHudWidgets);
   const trackerPanelSizeProfile = useUIStore((s) => s.trackerPanelSizeProfile);
   const trackerPanelBackgroundColor = useUIStore((s) => s.trackerPanelBackgroundColor);
+  const spatialMapDetailChatId = useUIStore((s) => s.spatialMapDetailChatId);
+  const pendingSpatialMapDraftReview = useUIStore((s) => s.pendingSpatialMapDraftReview);
+  const closeSpatialMapDetail = useUIStore((s) => s.closeSpatialMapDetail);
   const setTrackerPanelOpen = useUIStore((s) => s.setTrackerPanelOpen);
   const [sidebarDragWidth, setSidebarDragWidth] = useState<number | null>(null);
   const [rightPanelDragWidth, setRightPanelDragWidth] = useState<number | null>(null);
@@ -412,7 +409,6 @@ export function AppShell() {
   const toolDetailId = useUIStore((s) => s.toolDetailId);
   const personaDetailId = useUIStore((s) => s.personaDetailId);
   const regexDetailId = useUIStore((s) => s.regexDetailId);
-  const spatialMapDetailChatId = useUIStore((s) => s.spatialMapDetailChatId);
   const botBrowserOpen = useUIStore((s) => s.botBrowserOpen);
   const gameAssetsBrowserOpen = useUIStore((s) => s.gameAssetsBrowserOpen);
   const noodleOpen = useUIStore((s) => s.noodleOpen);
@@ -564,9 +560,7 @@ export function AppShell() {
     [setRightPanelWidth, setSidebarWidth, sharedSidebarWidth],
   );
 
-  const detailView = spatialMapDetailChatId ? (
-    <SpatialMapWorkspace chatId={spatialMapDetailChatId} />
-  ) : regexDetailId ? (
+  const detailView = regexDetailId ? (
     <RegexScriptEditor />
   ) : personaDetailId ? (
     <PersonaEditor />
@@ -970,9 +964,6 @@ export function AppShell() {
               )}
             </Suspense>
           </div>
-          <Suspense fallback={null}>
-            <ConversationCallFloatingHost />
-          </Suspense>
         </div>
         {/* Floating avatar notification bubbles (right edge) */}
         <Suspense fallback={null}>
@@ -1118,6 +1109,18 @@ export function AppShell() {
         />
       )}
 
+      {spatialMapDetailChatId ? (
+        <CapabilityElement
+          packageId="hierarchical-maps"
+          view="workspace"
+          capabilityProps={{
+            chatId: spatialMapDetailChatId,
+            pendingDraftReview: pendingSpatialMapDraftReview,
+            onClose: closeSpatialMapDetail,
+          }}
+        />
+      ) : null}
+
       {/* First-time onboarding tutorial */}
       {!hasCompletedOnboarding && (
         <Suspense fallback={null}>
@@ -1125,11 +1128,7 @@ export function AppShell() {
         </Suspense>
       )}
       <ProfessorMariFloatingAssistantHost active={professorMariFloatingActive} />
-      <div
-        data-component="MobileMusicWidgetLayer"
-        className={spatialMapDetailChatId ? "hidden" : "contents"}
-        aria-hidden={spatialMapDetailChatId ? true : undefined}
-      >
+      <div data-component="MobileMusicWidgetLayer" className="contents">
         <SpotifyMobileWidget />
         <YouTubeMobileWidget />
         <LocalMusicMobileWidget />

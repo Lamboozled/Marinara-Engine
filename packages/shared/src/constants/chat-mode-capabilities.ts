@@ -88,18 +88,11 @@ export const CONVERSATION_AGENT_IDS = [] as const;
 // Conversation-only opt-in agents: available to add in Convo mode, but not on by default.
 export const CONVERSATION_ALLOWED_AGENT_IDS = ["about-me-keeper"] as const;
 
-export const ROLEPLAY_DEFAULT_AGENT_IDS = [
-  "world-state",
-  "prose-guardian",
-  "continuity",
-  "expression",
-] as const;
+// Optional packages are never activated implicitly. Existing chats retain their
+// selections through the one-time legacy package migration.
+export const ROLEPLAY_DEFAULT_AGENT_IDS = [] as const;
 
-export const VISUAL_NOVEL_DEFAULT_AGENT_IDS = [
-  "world-state",
-  "prose-guardian",
-  "expression",
-] as const;
+export const VISUAL_NOVEL_DEFAULT_AGENT_IDS = [] as const;
 
 // Game mode has native GM/world-state/quest/combat/knowledge systems.
 // Roleplay helper agents must not be exposed as per-game agent toggles here.

@@ -139,12 +139,18 @@ export async function buildConversationCommandsReminder(args: {
 }): Promise<string | null> {
   if (!args.enabled) return null;
   const { chatMeta, chatMode, characterIds, personaName } = args;
+  const activeFeatureIds = new Set(
+    chatMeta.enableAgents === true && Array.isArray(chatMeta.activeAgentIds)
+      ? chatMeta.activeAgentIds.filter((id): id is string => typeof id === "string")
+      : [],
+  );
   const scheduleCommandEnabled = isConversationCommandEnabled(chatMeta, "schedule_update");
   const crossPostCommandEnabled = isConversationCommandEnabled(chatMeta, "cross_post");
   const selfieCommandEnabled = isConversationCommandEnabled(chatMeta, "selfie");
   const memoryCommandEnabled = isConversationCommandEnabled(chatMeta, "memory");
   const sceneCommandEnabled = isConversationCommandEnabled(chatMeta, "scene");
-  const callCommandEnabled = isConversationCommandEnabled(chatMeta, "call");
+  const callCommandEnabled =
+    activeFeatureIds.has("conversation-calls") && isConversationCommandEnabled(chatMeta, "call");
   const musicCommandEnabled = isConversationCommandEnabled(chatMeta, "music");
   const hapticCommandEnabled = isConversationCommandEnabled(chatMeta, "haptic");
   const activeMusicCommandSource =
@@ -271,16 +277,32 @@ export async function buildConversationCommandsReminder(args: {
 
   // Turn-games: conversation mode only, when no game is running yet and at least one other character is present.
   const unoAdvertisable =
-    chatMode === "conversation" && isConversationCommandEnabled(chatMeta, "uno") && characterIds.length >= 1;
+    activeFeatureIds.has("uno") &&
+    chatMode === "conversation" &&
+    isConversationCommandEnabled(chatMeta, "uno") &&
+    characterIds.length >= 1;
   const chessAdvertisable =
-    chatMode === "conversation" && isConversationCommandEnabled(chatMeta, "chess") && characterIds.length >= 1;
+    activeFeatureIds.has("chess") &&
+    chatMode === "conversation" &&
+    isConversationCommandEnabled(chatMeta, "chess") &&
+    characterIds.length >= 1;
   const pokerAdvertisable =
-    chatMode === "conversation" && isConversationCommandEnabled(chatMeta, "poker") && characterIds.length >= 1;
+    activeFeatureIds.has("poker") &&
+    chatMode === "conversation" &&
+    isConversationCommandEnabled(chatMeta, "poker") &&
+    characterIds.length >= 1;
   const eightballAdvertisable =
-    chatMode === "conversation" && isConversationCommandEnabled(chatMeta, "eightball") && characterIds.length >= 1;
+    activeFeatureIds.has("eightball") &&
+    chatMode === "conversation" &&
+    isConversationCommandEnabled(chatMeta, "eightball") &&
+    characterIds.length >= 1;
   const ticTacToeAdvertisable =
-    chatMode === "conversation" && isConversationCommandEnabled(chatMeta, "tic_tac_toe") && characterIds.length >= 1;
+    activeFeatureIds.has("tic-tac-toe") &&
+    chatMode === "conversation" &&
+    isConversationCommandEnabled(chatMeta, "tic_tac_toe") &&
+    characterIds.length >= 1;
   const rpsAdvertisable =
+    activeFeatureIds.has("rock-paper-scissors") &&
     chatMode === "conversation" &&
     isConversationCommandEnabled(chatMeta, "rock_paper_scissors") &&
     characterIds.length >= 1;

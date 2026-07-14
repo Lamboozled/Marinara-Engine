@@ -21,7 +21,6 @@ import {
   Sparkles,
   Feather,
   RotateCcw,
-  Phone,
   Dices,
   FolderOpen,
 } from "lucide-react";
@@ -52,10 +51,10 @@ import {
   DEFAULT_CONVERSATION_PROMPT,
   DEFAULT_AGENT_CONTEXT_SIZE,
   DEFAULT_AGENT_MAX_TOKENS,
-  DEFAULT_AGENT_PROMPTS,
   DEFAULT_AGENT_TOOLS,
   MIN_AGENT_MAX_TOKENS,
   getAgentPromptTemplateOptions,
+  getDefaultAgentPrompt,
   resolveDefaultAgentPromptTemplateId,
   isAgentAvailableInChatMode,
   isAgentConfigDeleted,
@@ -239,6 +238,7 @@ type AvailableAgent = {
   phase: AgentPhase;
   builtIn: boolean;
   runtimeDisabled?: boolean;
+  execution?: "pipeline" | "feature";
 };
 
 type AgentAddPreview = {
@@ -769,7 +769,6 @@ function ConversationQuickSetup({ chat, onFinish }: ChatSetupWizardProps) {
   const metadata = useMemo(() => {
     return readChatMetadata(chat);
   }, [chat]);
-  const [callsEnabled, setCallsEnabled] = useState(() => metadata.conversationCallsEnabled === true);
   const [commandsEnabled, setCommandsEnabled] = useState(() => metadata.characterCommands !== false);
   const [conversationCommandToggles, setConversationCommandToggles] = useState<
     Partial<Record<ConversationCommandKey, boolean>>
@@ -805,10 +804,6 @@ function ConversationQuickSetup({ chat, onFinish }: ChatSetupWizardProps) {
   useEffect(() => {
     setCustomizeParameters(!!parseEditableGenerationParameters(metadata.chatParameters));
   }, [metadata.chatParameters]);
-
-  useEffect(() => {
-    setCallsEnabled(metadata.conversationCallsEnabled === true);
-  }, [metadata.conversationCallsEnabled]);
 
   const persistedChatCharIds: string[] = useMemo(() => {
     return typeof chat.characterIds === "string" ? JSON.parse(chat.characterIds) : (chat.characterIds ?? []);
@@ -1022,7 +1017,6 @@ function ConversationQuickSetup({ chat, onFinish }: ChatSetupWizardProps) {
       id: chat.id,
       autonomousMessages: autonomousEnabled,
       conversationSchedulesEnabled: autonomousEnabled && generateSchedule,
-      conversationCallsEnabled: callsEnabled,
       characterCommands: commandsEnabled,
       conversationCommandToggles,
       chatParameters: customizeParameters ? generationParameters : null,
@@ -1054,7 +1048,6 @@ function ConversationQuickSetup({ chat, onFinish }: ChatSetupWizardProps) {
     chatCharIds,
     onFinish,
     autonomousEnabled,
-    callsEnabled,
     generateSchedule,
     updateMeta,
     customizeParameters,
@@ -1450,45 +1443,6 @@ function ConversationQuickSetup({ chat, onFinish }: ChatSetupWizardProps) {
         </button>
       )}
 
-      <div
-        className={cn(
-          "mari-chat-option-field rounded-lg transition-all",
-          callsEnabled && "mari-chat-option-field--active",
-        )}
-      >
-        <button
-          type="button"
-          onClick={() => setCallsEnabled((value) => !value)}
-          className="flex w-full items-center justify-between px-3 py-2.5 text-left"
-        >
-          <div className="flex min-w-0 flex-1 items-center gap-2">
-            <Phone
-              size="0.875rem"
-              className={callsEnabled ? "text-[var(--primary)]" : "text-[var(--muted-foreground)]"}
-            />
-            <div>
-              <span className="text-xs font-medium">Audio/Video Calls</span>
-              <p className="text-[0.625rem] text-[var(--muted-foreground)]">
-                Add a call button and call-only transcript to this conversation.
-              </p>
-            </div>
-          </div>
-          <div
-            className={cn(
-              "mari-chat-option-switch h-5 w-9 shrink-0 rounded-full p-0.5 transition-colors",
-              callsEnabled && "mari-chat-option-switch--active",
-            )}
-          >
-            <div
-              className={cn(
-                "h-4 w-4 rounded-full bg-white shadow-sm transition-transform",
-                callsEnabled && "translate-x-3.5",
-              )}
-            />
-          </div>
-        </button>
-      </div>
-
       <button
         onClick={() => setCommandsEnabled((value) => !value)}
         className={cn(
@@ -1787,6 +1741,7 @@ function RoleplaySetupWizard({ chat, onFinish }: ChatSetupWizardProps) {
         phase: normalizeAgentPhaseForType(agent.id, existing?.phase ?? agent.phase),
         builtIn: true,
         runtimeDisabled: isBuiltInAgentRuntimeDisabled(agent.id),
+        execution: agent.execution,
       });
     }
     for (const config of (agentConfigs ?? []) as AgentConfigRow[]) {
@@ -1801,6 +1756,7 @@ function RoleplaySetupWizard({ chat, onFinish }: ChatSetupWizardProps) {
         phase: normalizeAgentPhaseForType(config.type, config.phase),
         builtIn: false,
         runtimeDisabled: false,
+        execution: "pipeline",
       });
     }
     return agents;
@@ -1812,7 +1768,7 @@ function RoleplaySetupWizard({ chat, onFinish }: ChatSetupWizardProps) {
       const settings = mergeBuiltInAgentSettings(agentId, config?.settings);
       return getAgentPromptTemplateOptions({
         promptTemplate: config?.promptTemplate || "",
-        fallbackPromptTemplate: DEFAULT_AGENT_PROMPTS[agentId] || "",
+        fallbackPromptTemplate: getDefaultAgentPrompt(agentId),
         settings,
       });
     },
@@ -2166,7 +2122,9 @@ function RoleplaySetupWizard({ chat, onFinish }: ChatSetupWizardProps) {
 
     setAddingAgentToChat(true);
     try {
-      if (config) {
+      if (builtInMeta?.execution === "feature") {
+        // Feature packages own their settings and runtime; chat activation is enough.
+      } else if (config) {
         await updateAgentConfig.mutateAsync({ id: config.id, settings: nextSettings });
       } else if (builtInMeta) {
         await createAgent.mutateAsync({
@@ -2653,9 +2611,9 @@ function RoleplaySetupWizard({ chat, onFinish }: ChatSetupWizardProps) {
                   </div>
                 </div>
 
-                {agentAddPreview.agent.runtimeDisabled ? (
+                {agentAddPreview.agent.execution === "feature" ? (
                   <p className="rounded-lg bg-[var(--accent)] px-3 py-2 text-[0.6875rem] text-[var(--muted-foreground)] ring-1 ring-[var(--border)]">
-                    This adds instructions to the Roleplay prompt without making a separate model call.
+                    This activates the downloaded feature for this chat. It does not make a separate agent model call.
                   </p>
                 ) : (
                   <div className="grid gap-3 sm:grid-cols-2">

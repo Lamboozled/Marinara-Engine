@@ -3,6 +3,7 @@ import {
   ArrowLeft,
   Check,
   Download,
+  ExternalLink,
   HardDrive,
   Loader2,
   PackageOpen,
@@ -74,14 +75,18 @@ export function AgentCatalogView({ open, onClose }: { open: boolean; onClose: ()
   const handleUninstall = async (entry: CapabilityCatalogPackage) => {
     const confirmed = await showConfirmDialog({
       title: `Uninstall ${entry.manifest.name}?`,
-      message: "The downloaded package and its settings will be removed. Existing chat messages and history will remain.",
+      message: "The downloaded package, active chat selections, and agent configuration will be removed. Existing chat messages and feature history will remain so reinstalling cannot destroy your work.",
       confirmLabel: "Uninstall",
       tone: "destructive",
     });
     if (!confirmed) return;
     try {
-      await uninstall.mutateAsync(entry.manifest.id);
-      toast.success(`${entry.manifest.name} uninstalled.`);
+      const result = await uninstall.mutateAsync(entry.manifest.id);
+      toast.success(
+        result.restartRequired
+          ? `${entry.manifest.name} uninstalled. Restart Marinara Engine to finish removal.`
+          : `${entry.manifest.name} uninstalled.`,
+      );
     } catch (error) {
       toast.error(getPrivilegedActionErrorMessage(error, "Agent uninstall failed."));
     }
@@ -128,6 +133,16 @@ export function AgentCatalogView({ open, onClose }: { open: boolean; onClose: ()
                 <div className="flex min-h-full flex-col gap-5 pb-6">
                   <div className="flex items-start gap-4"><div className="mari-panel-gradient-surface mari-panel-gradient--agents flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl"><PackageOpen size="1.65rem" /></div><div className="min-w-0"><h3 className="text-xl font-bold">{selected.manifest.name}</h3><p className="mt-1 max-w-[70ch] text-sm leading-6 text-[var(--muted-foreground)]">{selected.manifest.description}</p><div className="mt-2 flex flex-wrap gap-1.5">{selected.manifest.kind.map((kind) => <span key={kind} className="rounded-full border border-[var(--border)] px-2 py-1 text-[0.68rem]">{kindLabel(kind)}</span>)}</div></div></div>
                   <div className="flex flex-wrap gap-x-6 gap-y-2 border-y border-[var(--border)] py-3 text-xs text-[var(--muted-foreground)]"><span className="flex items-center gap-1.5"><HardDrive size="0.8rem" /> {formatBytes(selected.artifact.bytes)}</span><span className="flex items-center gap-1.5"><ShieldCheck size="0.8rem" /> Official verified package</span><span>Version {selected.manifest.version}</span><span>Engine {selected.manifest.engine.min} to below {selected.manifest.engine.maxExclusive}</span></div>
+                  {selected.documentationUrl && (
+                    <a
+                      href={selected.documentationUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="mari-chrome-control w-fit"
+                    >
+                      <ExternalLink size="0.85rem" /> Read how this agent works
+                    </a>
+                  )}
                   <div><h4 className="text-sm font-semibold">Permissions</h4><ul className="mt-2 grid gap-2 sm:grid-cols-2">{selected.manifest.permissions.map((permission) => <li key={permission} className="flex items-center gap-2 text-sm text-[var(--muted-foreground)]"><Check size="0.85rem" className="text-[var(--marinara-chat-chrome-highlight-text)]" /> {permission.replaceAll("-", " ")}</li>)}</ul></div>
                   <div className="mt-auto flex flex-wrap justify-end gap-2 pt-3">
                     {installedById.has(selected.manifest.id) ? (

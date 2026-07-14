@@ -147,6 +147,20 @@ export const capabilityPackageManager = {
       }));
   },
 
+  async clientEntrypoint(packageId: string) {
+    const installed = (await readRegistry()).packages.find((item) => item.id === packageId);
+    if (!installed || installed.status !== "active") return null;
+    const entrypoint = installed.manifest.entrypoints.client;
+    if (!entrypoint) return null;
+    return {
+      installed,
+      file: inside(
+        VERSIONS,
+        join(VERSIONS, installed.id, installed.version, normalizeArchivePath(entrypoint)),
+      ),
+    };
+  },
+
   async markRuntimeStatus(packageId: string, status: InstalledCapabilityPackage["status"], error: string | null = null) {
     const registry = await readRegistry();
     const index = registry.packages.findIndex((installed) => installed.id === packageId);
@@ -293,6 +307,6 @@ export const capabilityPackageManager = {
     if (!existing) return false;
     await writeRegistry(registry.packages.filter((item) => item.id !== packageId));
     await rm(join(VERSIONS, packageId), { recursive: true, force: true });
-    return true;
+    return existing;
   },
 };

@@ -402,7 +402,7 @@ Key files in `packages/shared/src/constants/`:
 - `providers.ts`: exports `PROVIDERS`, the API provider configs (OpenAI, Anthropic, Google, and more) with URLs and auth.
 - `chat-modes.ts`: exports `CHAT_MODES`, the definition record for each chat mode.
 - `model-lists.ts`: static model catalogs per provider, plus `IMAGE_GENERATION_SOURCES` for image generation providers.
-- `agent-prompts.ts`: default system prompts for the built-in agents.
+- `agent-prompts.ts`: base-only summary and secret-plot prompts plus runtime lookup for prompts supplied by installed agent packages.
 
 ### Schemas (Zod)
 

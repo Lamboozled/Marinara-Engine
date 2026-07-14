@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@source "./capability-package-safelist.html";
 @import "./themes/sillytavern.css";
 
 /* World state & tracker widgets: equal flex sizing on mobile */

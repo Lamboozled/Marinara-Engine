@@ -48,6 +48,7 @@ import { createReplyFallbackNotifier } from "./routes/generate/fallback-notifica
 import { initializeCapabilityAgentRegistry } from "./services/capability-packages/capability-agent-registry.service.js";
 import { capabilityPackageManager } from "./services/capability-packages/package-manager.service.js";
 import { capabilityModuleRuntime } from "./services/capability-packages/capability-module-runtime.service.js";
+import { migrateLegacyChatCapabilitySelections } from "./services/capability-packages/legacy-capability-chat-migration.js";
 
 const isLite = process.env.MARINARA_LITE === "true" || process.env.MARINARA_LITE === "1";
 const REVALIDATE_FILES = new Set(["index.html"]);
@@ -109,18 +110,18 @@ export async function buildApp(https?: { cert: Buffer; key: Buffer }) {
   }
 
   // Existing installations retain the capabilities the previous release shipped. Fresh installs stay empty.
-  // Tests keep the bundled compatibility registry unless they exercise the package manager explicitly.
-  let useBundledAgentFallback = getNodeEnv() === "test";
+  let migratedLegacyCapabilities = false;
   if (getNodeEnv() !== "test") {
     try {
-      await capabilityPackageManager.migrateLegacyAvailability(hadUserStateBeforeStartup);
+      const migration = await capabilityPackageManager.migrateLegacyAvailability(hadUserStateBeforeStartup);
+      migratedLegacyCapabilities = migration.migrated;
     } catch (error) {
-      useBundledAgentFallback = hadUserStateBeforeStartup;
-      app.log.warn(error, "Optional package availability migration did not complete; using compatibility agents");
+      app.log.warn(error, "Optional package availability migration did not complete; it will retry next startup");
     }
   }
-  await initializeCapabilityAgentRegistry({ legacyFallback: useBundledAgentFallback });
-  resetTurnGameRegistry(useBundledAgentFallback);
+  await initializeCapabilityAgentRegistry();
+  resetTurnGameRegistry(false);
+  if (migratedLegacyCapabilities) await migrateLegacyChatCapabilitySelections(db);
 
   // ── Seed defaults ──
   await seedDefaultPreset(db);

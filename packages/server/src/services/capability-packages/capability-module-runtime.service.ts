@@ -8,6 +8,11 @@ import { registerTurnGameEngine, type AnyTurnGameEngine, type InstalledCapabilit
 import { logger } from "../../lib/logger.js";
 import { DATA_DIR } from "../../utils/data-dir.js";
 import { capabilityPackageManager } from "./package-manager.service.js";
+import {
+  registerCapabilityConversationCommand,
+  type CapabilityConversationCommandRegistration,
+} from "./capability-command-registry.service.js";
+import { registerCapabilityService } from "./capability-service-registry.service.js";
 
 type Cleanup = () => void | Promise<void>;
 type CapabilityModule = {
@@ -17,6 +22,8 @@ type CapabilityModule = {
     package: InstalledCapabilityPackage;
     api: {
       registerTurnGameEngine(engine: AnyTurnGameEngine): Cleanup;
+      registerConversationCommand(registration: CapabilityConversationCommandRegistration): Cleanup;
+      registerService<T>(key: string, service: T): Cleanup;
     };
   }) => void | Cleanup | Promise<void | Cleanup>;
 };
@@ -58,7 +65,11 @@ class CapabilityModuleRuntime {
         app,
         dataDir: DATA_DIR,
         package: installed,
-        api: { registerTurnGameEngine },
+        api: {
+          registerTurnGameEngine,
+          registerConversationCommand: registerCapabilityConversationCommand,
+          registerService: registerCapabilityService,
+        },
       });
       if (typeof cleanup === "function") this.cleanup.push(cleanup);
       await capabilityPackageManager.markRuntimeStatus(installed.id, "active");

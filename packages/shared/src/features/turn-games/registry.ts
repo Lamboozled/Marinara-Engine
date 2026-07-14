@@ -2,10 +2,8 @@
 // Turn-Game Runtime Registry
 // ──────────────────────────────────────────────
 import type { AnyTurnGameEngine } from "./engine.types.js";
-import { TURN_GAME_ENGINES as GENERATED_TURN_GAME_ENGINES } from "./registry.generated.js";
-
-/** Compatibility source for upgrades and deterministic tests. Fresh installs do not activate it. */
-export const BUNDLED_TURN_GAME_ENGINES: readonly AnyTurnGameEngine[] = GENERATED_TURN_GAME_ENGINES;
+/** The base Engine intentionally ships no games. Installed packages populate the runtime registry. */
+export const BUNDLED_TURN_GAME_ENGINES: readonly AnyTurnGameEngine[] = [];
 const activeEngines = new Map<string, AnyTurnGameEngine>();
 
 export function registerTurnGameEngine(engine: AnyTurnGameEngine): () => void {

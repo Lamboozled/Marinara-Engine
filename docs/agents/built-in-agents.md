@@ -1,10 +1,10 @@
-# Built-in Agents Reference
+# Downloadable Agents Reference
 
-This guide lists every agent that ships with Marinara Engine, grouped by category. For each one it tells you what the agent does, when it runs, which chat modes allow it, and the main settings. For what agents are and how to turn them on, read the [Agents overview](agents-overview.md) first.
+This guide lists every official first-party agent available through **Agents → Download Agents**, grouped by category. Agents do not ship inside a fresh Marinara Engine installation. For each one, this guide explains what the agent does, when it runs, which chat modes allow it, and the main settings. For installation and activation, read the [Agents overview](agents-overview.md) first.
 
 ## How to read this reference
 
-An agent is a small AI helper that runs automatically alongside your main chat reply. Agents are turned on and set up per chat, not per character card. Every agent is off until you add it to a chat. See the [Agents overview](agents-overview.md) for the panel, the per-chat setup, and the cost warning.
+An agent is a small AI helper that runs automatically alongside your main chat reply. Install it from the catalog first, then turn it on and set it up per chat, not per character card. See the [Agents overview](agents-overview.md) for downloading, updating, uninstalling, per-chat setup, and the cost warning.
 
 Each agent below shows three quick facts.
 
@@ -157,6 +157,14 @@ Watches how a character changes during play and suggests edits to that character
 - **Phase**: Post-Processing.
 - **Where it works**: Roleplay.
 - **Key settings**: it runs once every 8 assistant messages by default. See [Agent approvals and the Agent Suite](approvals-and-agent-suite.md).
+
+### About Me Keeper
+
+Maintains a character's Conversation **About Me** profile from meaningful chat developments. It proposes card changes for review instead of silently rewriting the character.
+
+- **Phase**: Post-Processing
+- **Where it works**: Conversation
+- **Key settings**: add it to a Conversation chat after downloading it. Proposed character-card changes always open the review window so you can accept or reject them.
 
 ### Combat
 

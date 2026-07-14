@@ -28,7 +28,8 @@ import {
   type AgentContext,
   type ChatMLMessage,
   DEFAULT_AGENT_PROMPT_TEMPLATE_ID,
-  DEFAULT_AGENT_PROMPTS,
+  getDefaultAgentPrompt,
+  replaceBuiltInAgentDefinitions,
   GAME_GM_BUILT_IN_PROMPT_TEMPLATES,
   GAME_VIDEO_BUILT_IN_PROMPT_TEMPLATES,
   GAME_VIDEO_PROMPT_TEMPLATE,
@@ -60,6 +61,49 @@ import {
   parseDeferredConditionalPayload,
   selectConditionalPayloadBranch,
 } from "../../packages/shared/src/index.js";
+import { replaceBuiltInAgentDefinitions as replaceBuiltInAgentDefinitionsDist } from "../../packages/shared/dist/index.js";
+
+const REGRESSION_AGENT_IDS = [
+  "about-me-keeper", "background", "card-evolution-auditor", "character-tracker", "combat", "continuity",
+  "custom-tracker", "cyoa", "director", "echo-chamber", "expression", "haptic", "html", "illustrator",
+  "knowledge-retrieval", "knowledge-router", "lorebook-keeper", "persona-stats", "prose-guardian", "quest",
+  "spotify", "world-state",
+] as const;
+
+// The production Engine intentionally carries no optional agent definitions.
+// Prompt regressions install a small synthetic registry so they exercise the
+// generic pipeline without copying package-owned prompts back into the base.
+const regressionAgentDefinitions = REGRESSION_AGENT_IDS.map((id) => ({
+  id,
+  name: id === "html" ? "Immersive HTML" : id === "illustrator" ? "Illustrator" : id,
+  description: id === "html"
+    ? "Post-processes the latest Roleplay response with diegetic HTML/CSS/JS visual artifacts without changing the story meaning."
+    : `Regression fixture for ${id}`,
+  phase: "post_processing" as const,
+  enabledByDefault: false,
+  category: "misc" as const,
+  defaultTools: [],
+  defaultPromptTemplate: id === "html"
+    ? "You are Immersive HTML, a post-processing visual enhancer. Rewrite only the assistant response."
+    : id === "illustrator"
+      ? "Create an image-generation prompt for a visually important moment."
+      : `Run the ${id} agent.`,
+  ...(id === "html" ? {
+    resultType: "text_rewrite" as const,
+    defaultSettings: { resultType: "text_rewrite", contextSize: 5, maxTokens: 4096, holdForRewrite: true },
+  } : {}),
+  ...(id === "illustrator" ? {
+    defaultSettings: { defaultPromptTemplateId: "default" },
+    promptTemplates: [{
+      id: "background",
+      name: "Background",
+      description: "Background-only plate.",
+      promptTemplate: "Create a background-only prompt with no characters.",
+    }],
+  } : {}),
+}));
+replaceBuiltInAgentDefinitions(regressionAgentDefinitions);
+replaceBuiltInAgentDefinitionsDist(regressionAgentDefinitions);
 import {
   compactGameStateForAgentContext,
   executeAgent,
@@ -1461,7 +1505,7 @@ const cases: RegressionCase[] = [
         enabled: "false",
         connectionId: null,
         imagePath: null,
-        promptTemplate: DEFAULT_AGENT_PROMPTS.illustrator,
+        promptTemplate: getDefaultAgentPrompt("illustrator"),
         settings: JSON.stringify({ defaultPromptTemplateId: "background" }),
         createdAt: "2026-01-01T00:00:00.000Z",
         updatedAt: "2026-01-01T00:00:00.000Z",
@@ -1729,7 +1773,7 @@ Use HTML sparingly and diegetically. Do not replace normal prose/dialogue unless
       assert.equal(settings.contextSize, 5);
       assert.equal(settings.maxTokens, 4096);
       assert.deepEqual(settings.promptTemplates, []);
-      assert.match(DEFAULT_AGENT_PROMPTS.html, /post-processing visual enhancer/);
+      assert.match(getDefaultAgentPrompt("html"), /post-processing visual enhancer/);
     },
   },
   {
@@ -2815,11 +2859,6 @@ Use HTML sparingly and diegetically. Do not replace normal prose/dialogue unless
   {
     name: "tracker custom fields remain part of the model contract and survive omitted agent output",
     run() {
-      assert.match(DEFAULT_AGENT_PROMPTS["world-state"] ?? "", /worldCustomFields/);
-      assert.match(DEFAULT_AGENT_PROMPTS["world-state"] ?? "", /do not add, rename, reorder, or remove fields/i);
-      assert.match(DEFAULT_AGENT_PROMPTS["character-tracker"] ?? "", /customFields/);
-      assert.match(DEFAULT_AGENT_PROMPTS["character-tracker"] ?? "", /Do not add, rename, or remove custom fields/i);
-
       assert.deepEqual(
         normalizeWorldCustomFields([
           { name: " Moon Phase ", value: "Waxing", icon: "Moon" },
@@ -2962,7 +3001,7 @@ Use HTML sparingly and diegetically. Do not replace normal prose/dialogue unless
         id: "builtin:character-tracker",
         type: "character-tracker",
         name: "Character Tracker",
-        promptTemplate: DEFAULT_AGENT_PROMPTS["character-tracker"] ?? "Track characters.",
+        promptTemplate: getDefaultAgentPrompt("character-tracker") || "Track characters.",
         settings: { resultType: "character_tracker_update" },
       });
       const context = makeRegressionAgentContext({

@@ -136,6 +136,15 @@ Characters automatically know what's happening in their other chats. When the us
 
 ## Key Features
 
+### Downloadable Agents and Optional Features
+- A fresh Marinara Engine installation starts with no optional agents, keeping the base download and Termux footprint small.
+- Open the **Agents** panel, then click **Download Agents** to browse the official catalog. Each item has a description, permissions, size, documentation, and one-click install, update, or uninstall controls.
+- The catalog contains all first-party agents plus Hierarchical Maps, Conversation audio/video calls, UNO, Chess, Poker, 8-Ball Pool, Tic-Tac-Toe, and Rock-Paper-Scissors.
+- Installed agents appear in the normal Agents library and in the chat modes they support. Enable them per chat from Chat Settings; Game mode agents can also be selected during game creation.
+- Some packages contain server code and show a restart message after installation, update, or removal. Tell the user to close and open Marinara Engine again when prompted.
+- Existing users upgrading from a pre-package version keep their agents and feature selections. Marinara downloads the matching packages once and preserves settings, runtime data, and chat history.
+- Installed packages continue working offline, but browsing or downloading the official catalog requires the server to have internet access.
+
 ### Characters
 - AI personalities with descriptions, personalities, backstories, scenarios, and first messages
 - Created via the Characters panel (right sidebar → character icon)
@@ -234,8 +243,8 @@ Characters can send memories to other characters using \`[memory: target="CharNa
 - Smooth crossfade transitions between backgrounds
 - Users can upload custom backgrounds
 
-## Built-In Agents (Roleplay and Game)
-Agents are AI sub-systems that run alongside the main generation in phases:
+## Downloadable Agents (Roleplay and Game)
+Agents are optional AI sub-systems that run alongside the main generation in phases. Install them first through **Agents → Download Agents**:
 
 ### Pre-Generation (run before the main response)
 - **Prose Guardian**: Reviews and improves the system prompt for better writing quality

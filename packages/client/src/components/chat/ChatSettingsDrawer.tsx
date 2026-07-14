@@ -52,7 +52,6 @@ import {
   ShieldCheck,
   Loader2,
   Wrench,
-  Phone,
 } from "lucide-react";
 import {
   ROLEPLAY_POPOVER_CLOSE_BUTTON,
@@ -77,7 +76,7 @@ import { LorebooksSection } from "../../features/chat-settings/sections/Lorebook
 import { PromptPresetSection } from "../../features/chat-settings/sections/PromptPresetSection";
 import { SceneInstructionsSection } from "../../features/chat-settings/sections/SceneInstructionsSection";
 import { TranslationSection } from "../../features/chat-settings/sections/TranslationSection";
-import { SpatialContextSettingsSection } from "../../features/spatial-context/SpatialContextSettingsSection";
+import { CapabilityElement } from "../capabilities/CapabilityElement";
 import { cn, getAvatarCropStyle, type AvatarCrop } from "../../lib/utils";
 import { showAlertDialog, showConfirmDialog, showPromptDialog } from "../../lib/app-dialogs";
 import { HelpTooltip } from "../ui/HelpTooltip";
@@ -92,9 +91,9 @@ import { useCharacters, usePersonas, useCharacterGroups, type SpriteInfo } from 
 import { useLorebooks, useEntriesAcrossLorebooks } from "../../hooks/use-lorebooks";
 import { useDefaultPreset, usePresetFull, usePresets } from "../../hooks/use-presets";
 import { useConnections } from "../../hooks/use-connections";
-import { useTTSConfig, useUpdateTTSConfig } from "../../hooks/use-tts";
 import { useKnowledgeSources, useUploadKnowledgeSource } from "../../hooks/use-knowledge-sources";
 import { useGenerate } from "../../hooks/use-generate";
+import { useInstalledCapabilityPackages } from "../../hooks/use-capability-packages";
 import {
   useUpdateChat,
   useUpdateChatMetadata,
@@ -173,8 +172,6 @@ import type {
   Message,
   PromptPreset,
   WeekSchedule,
-  TTSConfig,
-  TTSConversationCallAudioInputMode,
 } from "@marinara-engine/shared";
 import { useAgentConfigs, useCreateAgent, useUpdateAgent, type AgentConfigRow } from "../../hooks/use-agents";
 import { useAgentStore } from "../../stores/agent.store";
@@ -186,7 +183,6 @@ import {
   DEFAULT_AGENT_PROMPT_TEMPLATE_ID,
   DEFAULT_AGENT_TOOLS,
   DEFAULT_AGENT_MAX_TOKENS,
-  DEFAULT_AGENT_PROMPTS,
   GAME_GM_BUILT_IN_PROMPT_TEMPLATES,
   GAME_STORYBOARD_ANIMATION_PROMPT_TEMPLATE_ID,
   GAME_STORYBOARD_ANIMATION_PROMPT_TEMPLATES,
@@ -197,6 +193,7 @@ import {
   GAME_STORYBOARD_ILLUSTRATION_PROMPT_TEMPLATE_ID,
   GAME_STORYBOARD_ILLUSTRATION_PROMPT_TEMPLATES,
   GAME_STORYBOARD_IMAGE_BUILT_IN_PROMPT_TEMPLATES,
+  getDefaultAgentPrompt,
   GAME_STORYBOARD_IMAGE_PROMPT_TEMPLATE_ID,
   GAME_STORYBOARD_KEYFRAME_COUNT_DEFAULT,
   GAME_STORYBOARD_KEYFRAME_COUNT_MAX,
@@ -771,6 +768,7 @@ type AvailableAgent = {
   phase: AgentPhase;
   builtIn: boolean;
   runtimeDisabled?: boolean;
+  execution?: "pipeline" | "feature";
 };
 
 type DrawerPersona = {
@@ -951,6 +949,7 @@ export function ChatSettingsDrawer({
   const { data: lorebooks } = useLorebooks();
   const { data: presets } = usePresets();
   const { data: defaultPromptPreset } = useDefaultPreset();
+  const { data: installedCapabilities = [] } = useInstalledCapabilityPackages(open);
   const chatMode = (chat as unknown as { mode?: ChatMode }).mode ?? "roleplay";
   const isConversation = chatMode === "conversation";
   const isGame = chatMode === "game";
@@ -1035,8 +1034,6 @@ export function ChatSettingsDrawer({
     );
   }, [effectiveModePromptPresetId, fallbackPromptPreset, promptPresetOptions]);
   const { data: connections } = useConnections();
-  const { data: ttsConfig } = useTTSConfig();
-  const updateTtsConfig = useUpdateTTSConfig();
   const imageConnectionsList = useMemo(
     () =>
       ((connections as Array<{ id: string; name: string; model?: string; provider?: string }>) ?? []).filter(
@@ -1057,16 +1054,6 @@ export function ChatSettingsDrawer({
         (connections as Array<{ id: string; name: string; model?: string; provider?: string }>) ?? [],
       ),
     [connections],
-  );
-  const patchConversationCallTtsConfig = useCallback(
-    (patch: Partial<TTSConfig>) => {
-      if (!ttsConfig) {
-        toast.error("Conversation call settings are still loading.");
-        return;
-      }
-      updateTtsConfig.mutate({ ...ttsConfig, callSttConnectionId: "", callSttModel: "", ...patch });
-    },
-    [ttsConfig, updateTtsConfig],
   );
   const sidecarModelDownloaded = useSidecarStore((state) => state.modelDownloaded);
   const sidecarModelDisplayName = useSidecarStore((state) => state.modelDisplayName);
@@ -1185,14 +1172,6 @@ export function ChatSettingsDrawer({
     [metadata.conversationCommandToggles],
   );
   const conversationCommandsEnabled = metadata.characterCommands !== false;
-  const callAudioEnabled = ttsConfig?.callAudioEnabled === true;
-  const callAudioInputMode = ttsConfig?.callAudioInputMode ?? "local_whisper";
-  const callVideoInputEnabled = ttsConfig?.callVideoInputEnabled === true;
-  const callCharacterVideoEnabled = ttsConfig?.callCharacterVideoEnabled === true;
-  const callAutomaticVideoClipsEnabled =
-    callCharacterVideoEnabled && ttsConfig?.callAutomaticVideoClipsEnabled === true;
-  const callCustomVideoClipsEnabled = callCharacterVideoEnabled && ttsConfig?.callCustomVideoClipsEnabled === true;
-  const callSettingsDisabled = !ttsConfig || updateTtsConfig.isPending;
   const selfieConnectionId = typeof metadata.imageGenConnectionId === "string" ? metadata.imageGenConnectionId : "";
   const selfieCommandAllowed = conversationCommandToggles.selfie !== false;
   const selfieSettingsOpen =
@@ -1303,6 +1282,20 @@ export function ChatSettingsDrawer({
         (id: unknown): id is string => typeof id === "string" && !deletedBuiltInAgentTypes.has(id),
       ),
     [deletedBuiltInAgentTypes, metadata.activeAgentIds],
+  );
+  const mapsPackage = installedCapabilities.find(
+    (item) =>
+      item.status === "active" &&
+      item.manifest.kind.includes("maps") &&
+      item.manifest.entrypoints.client &&
+      activeAgentIds.includes(item.id),
+  );
+  const callsPackage = installedCapabilities.find(
+    (item) =>
+      item.status === "active" &&
+      item.manifest.kind.includes("conversation-calls") &&
+      item.manifest.entrypoints.client &&
+      activeAgentIds.includes(item.id),
   );
   const readLatestActiveAgentIds = useCallback(() => {
     const latestChat = qc.getQueryData<Chat>(chatKeys.detail(chat.id));
@@ -1450,7 +1443,7 @@ export function ChatSettingsDrawer({
       const settings = mergeBuiltInAgentSettings(agentId, cfg?.settings);
       return getAgentPromptTemplateOptions({
         promptTemplate: cfg?.promptTemplate || "",
-        fallbackPromptTemplate: DEFAULT_AGENT_PROMPTS[agentId] || "",
+        fallbackPromptTemplate: getDefaultAgentPrompt(agentId),
         settings,
       });
     },
@@ -1482,6 +1475,7 @@ export function ChatSettingsDrawer({
         phase: normalizeAgentPhaseForType(a.id, existing?.phase ?? a.phase),
         builtIn: true,
         runtimeDisabled: isBuiltInAgentRuntimeDisabled(a.id),
+        execution: a.execution,
       });
     }
     // Custom agents from DB
@@ -1498,6 +1492,7 @@ export function ChatSettingsDrawer({
             phase: normalizeAgentPhaseForType(c.type, c.phase),
             builtIn: false,
             runtimeDisabled: false,
+            execution: "pipeline",
           });
         }
       }
@@ -1622,7 +1617,7 @@ export function ChatSettingsDrawer({
       const promptTemplate = resolveAgentPromptTemplate({
         agentType: id,
         promptTemplate: cfg?.promptTemplate || "",
-        fallbackPromptTemplate: DEFAULT_AGENT_PROMPTS[id] || "",
+        fallbackPromptTemplate: getDefaultAgentPrompt(id),
         settings,
         selectedPromptTemplateId: agentPromptTemplateSelections[id] ?? null,
       });
@@ -3329,7 +3324,9 @@ export function ChatSettingsDrawer({
 
     setAddingAgentToChat(true);
     try {
-      if (config) {
+      if (builtInMeta?.execution === "feature") {
+        // Feature packages own their settings and runtime; chat activation is enough.
+      } else if (config) {
         await updateAgentConfig.mutateAsync({ id: config.id, settings: nextSettings });
       } else if (builtInMeta) {
         await createAgent.mutateAsync({
@@ -3522,6 +3519,7 @@ export function ChatSettingsDrawer({
     ? getAgentRunIntervalMeta(agentAddPreview.agent.id, agentAddPreview.agent.builtIn)
     : null;
   const agentAddIsRuntimeDisabled = agentAddPreview?.agent.runtimeDisabled === true;
+  const agentAddIsFeature = agentAddPreview?.agent.execution === "feature";
 
   const snapshotCurrentPresetSettings = useCallback((): ChatPresetSettings => {
     return {
@@ -5546,307 +5544,18 @@ export function ChatSettingsDrawer({
                   </div>
                 )}
 
-                <div
-                  className={cn(
-                    "mari-chat-option-field space-y-3 rounded-lg px-3 py-2.5 transition-all",
-                    (metadata.conversationCallsEnabled === true || callAudioEnabled) &&
-                      "mari-chat-option-field--active",
-                  )}
-                >
-                  <div className="flex items-start gap-2">
-                    <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[var(--secondary)] text-[var(--muted-foreground)]">
-                      <Phone size="0.875rem" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <span className="block text-xs font-medium text-[var(--foreground)]">Conversation Calls</span>
-                      <p className="text-[0.625rem] leading-snug text-[var(--muted-foreground)]">
-                        Per-chat call access, microphone handling, camera/screen input, and character video setup.
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="space-y-1.5">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        updateMeta.mutate({
-                          id: chat.id,
-                          conversationCallsEnabled: metadata.conversationCallsEnabled === true ? false : true,
-                        });
-                      }}
-                      className="flex w-full items-center justify-between gap-3 rounded-lg bg-[var(--background)]/35 px-2.5 py-2 text-left transition-colors hover:bg-[var(--secondary)]/50"
-                    >
-                      <div className="min-w-0 flex-1">
-                        <span className="block text-[0.6875rem] font-medium text-[var(--foreground)]">
-                          Audio/Video Calls
-                        </span>
-                        <p className="mt-0.5 text-[0.59375rem] leading-snug text-[var(--muted-foreground)]">
-                          Show the call button for you in this conversation.
-                        </p>
-                      </div>
-                      <div
-                        className={cn(
-                          "mari-chat-option-switch h-5 w-9 shrink-0 rounded-full p-0.5 transition-colors",
-                          metadata.conversationCallsEnabled === true && "mari-chat-option-switch--active",
-                        )}
-                      >
-                        <div
-                          className={cn(
-                            "h-4 w-4 rounded-full bg-white shadow-sm transition-transform",
-                            metadata.conversationCallsEnabled === true && "translate-x-3.5",
-                          )}
-                        />
-                      </div>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        updateMeta.mutate({
-                          id: chat.id,
-                          conversationCallVoiceCues: metadata.conversationCallVoiceCues === false ? true : false,
-                        });
-                      }}
-                      className="flex w-full items-center justify-between gap-3 rounded-lg bg-[var(--background)]/35 px-2.5 py-2 text-left transition-colors hover:bg-[var(--secondary)]/50"
-                    >
-                      <div className="min-w-0 flex-1">
-                        <span className="block text-[0.6875rem] font-medium text-[var(--foreground)]">
-                          Generate voice cues in [tags]
-                        </span>
-                        <p className="mt-0.5 text-[0.59375rem] leading-snug text-[var(--muted-foreground)]">
-                          Ask call models for cues like [whispering], [laughing], and [sighs] for TTS/video timing.
-                        </p>
-                      </div>
-                      <div
-                        className={cn(
-                          "mari-chat-option-switch h-5 w-9 shrink-0 rounded-full p-0.5 transition-colors",
-                          metadata.conversationCallVoiceCues !== false && "mari-chat-option-switch--active",
-                        )}
-                      >
-                        <div
-                          className={cn(
-                            "h-4 w-4 rounded-full bg-white shadow-sm transition-transform",
-                            metadata.conversationCallVoiceCues !== false && "translate-x-3.5",
-                          )}
-                        />
-                      </div>
-                    </button>
-
-                    <button
-                      type="button"
-                      disabled={callSettingsDisabled}
-                      onClick={() => {
-                        patchConversationCallTtsConfig({
-                          callAudioEnabled: !callAudioEnabled,
-                          ...(!callAudioEnabled ? { callAudioInputMode: "local_whisper" } : {}),
-                        });
-                      }}
-                      className={cn(
-                        "flex w-full items-center justify-between gap-3 rounded-lg bg-[var(--background)]/35 px-2.5 py-2 text-left transition-colors hover:bg-[var(--secondary)]/50",
-                        callSettingsDisabled && "cursor-not-allowed opacity-60 hover:bg-[var(--background)]/35",
-                      )}
-                    >
-                      <div className="min-w-0 flex-1">
-                        <span className="block text-[0.6875rem] font-medium text-[var(--foreground)]">
-                          Call Audio Pipeline
-                        </span>
-                        <p className="mt-0.5 text-[0.59375rem] leading-snug text-[var(--muted-foreground)]">
-                          Request microphone access, listen while unmuted, and transcribe speech into the call.
-                        </p>
-                      </div>
-                      <div className="flex shrink-0 items-center gap-2">
-                        {updateTtsConfig.isPending && <Loader2 size="0.75rem" className="animate-spin" />}
-                        <div
-                          className={cn(
-                            "mari-chat-option-switch h-5 w-9 shrink-0 rounded-full p-0.5 transition-colors",
-                            callAudioEnabled && "mari-chat-option-switch--active",
-                          )}
-                        >
-                          <div
-                            className={cn(
-                              "h-4 w-4 rounded-full bg-white shadow-sm transition-transform",
-                              callAudioEnabled && "translate-x-3.5",
-                            )}
-                          />
-                        </div>
-                      </div>
-                    </button>
-                  </div>
-
-                  {callAudioEnabled ? (
-                    <div className="space-y-2 border-t border-[var(--border)]/60 pt-3">
-                      <label className="flex flex-col gap-1">
-                        <span className="text-[0.625rem] font-medium text-[var(--foreground)]">Audio input mode</span>
-                        <select
-                          value={callAudioInputMode}
-                          disabled={callSettingsDisabled}
-                          onChange={(event) =>
-                            patchConversationCallTtsConfig({
-                              callAudioInputMode: event.target.value as TTSConversationCallAudioInputMode,
-                            })
-                          }
-                          className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-2.5 py-2 text-xs text-[var(--foreground)] outline-none transition-colors focus:border-[var(--primary)]/50 disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                          <option value="local_whisper">Mic recording + Local Whisper</option>
-                          <option value="transcribe">Browser speech recognition</option>
-                          <option value="system">Manual system dictation</option>
-                          <option value="auto">Provider-native audio/video</option>
-                        </select>
-                        <span className="text-[0.55rem] leading-snug text-[var(--muted-foreground)]">
-                          Local Whisper records mic audio while you are unmuted, ignores silence, and transcribes speech
-                          locally. Browser speech uses Web Speech where supported and falls back to Local Whisper when
-                          it is not. Manual system dictation only focuses the call input so OS dictation can type there.
-                          Provider-native mode sends media to the selected conversation model.
-                        </span>
-                      </label>
-
-                      <div className="grid gap-1.5 sm:grid-cols-2 xl:grid-cols-4">
-                        <button
-                          type="button"
-                          disabled={callSettingsDisabled}
-                          onClick={() =>
-                            patchConversationCallTtsConfig({ callVideoInputEnabled: !callVideoInputEnabled })
-                          }
-                          className={cn(
-                            "mari-chat-option-field flex items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left transition-all",
-                            callVideoInputEnabled && "mari-chat-option-field--active",
-                            callSettingsDisabled && "cursor-not-allowed opacity-60",
-                          )}
-                        >
-                          <span className="text-[0.625rem] font-medium text-[var(--foreground)]">
-                            Camera and screen input
-                          </span>
-                          <div
-                            className={cn(
-                              "mari-chat-option-switch h-4 w-7 shrink-0 rounded-full p-0.5 transition-colors",
-                              callVideoInputEnabled && "mari-chat-option-switch--active",
-                            )}
-                          >
-                            <div
-                              className={cn(
-                                "h-3 w-3 rounded-full bg-white shadow-sm transition-transform",
-                                callVideoInputEnabled && "translate-x-3",
-                              )}
-                            />
-                          </div>
-                        </button>
-                        <button
-                          type="button"
-                          disabled={callSettingsDisabled}
-                          onClick={() =>
-                            patchConversationCallTtsConfig({
-                              callCharacterVideoEnabled: !callCharacterVideoEnabled,
-                              ...(!callCharacterVideoEnabled
-                                ? {}
-                                : {
-                                    callAutomaticVideoClipsEnabled: false,
-                                    callCustomVideoClipsEnabled: false,
-                                  }),
-                            })
-                          }
-                          className={cn(
-                            "mari-chat-option-field flex items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left transition-all",
-                            callCharacterVideoEnabled && "mari-chat-option-field--active",
-                            callSettingsDisabled && "cursor-not-allowed opacity-60",
-                          )}
-                        >
-                          <span className="text-[0.625rem] font-medium text-[var(--foreground)]">
-                            Character video presence
-                          </span>
-                          <div
-                            className={cn(
-                              "mari-chat-option-switch h-4 w-7 shrink-0 rounded-full p-0.5 transition-colors",
-                              callCharacterVideoEnabled && "mari-chat-option-switch--active",
-                            )}
-                          >
-                            <div
-                              className={cn(
-                                "h-3 w-3 rounded-full bg-white shadow-sm transition-transform",
-                                callCharacterVideoEnabled && "translate-x-3",
-                              )}
-                            />
-                          </div>
-                        </button>
-                        {callCharacterVideoEnabled ? (
-                          <button
-                            type="button"
-                            disabled={callSettingsDisabled}
-                            onClick={() =>
-                              patchConversationCallTtsConfig({
-                                callAutomaticVideoClipsEnabled: !callAutomaticVideoClipsEnabled,
-                              })
-                            }
-                            className={cn(
-                              "mari-chat-option-field flex items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left transition-all",
-                              callAutomaticVideoClipsEnabled && "mari-chat-option-field--active",
-                              callSettingsDisabled && "cursor-not-allowed opacity-60",
-                            )}
-                          >
-                            <span className="text-[0.625rem] font-medium text-[var(--foreground)]">
-                              Automatic video clips generation
-                            </span>
-                            <div
-                              className={cn(
-                                "mari-chat-option-switch h-4 w-7 shrink-0 rounded-full p-0.5 transition-colors",
-                                callAutomaticVideoClipsEnabled && "mari-chat-option-switch--active",
-                              )}
-                            >
-                              <div
-                                className={cn(
-                                  "h-3 w-3 rounded-full bg-white shadow-sm transition-transform",
-                                  callAutomaticVideoClipsEnabled && "translate-x-3",
-                                )}
-                              />
-                            </div>
-                          </button>
-                        ) : null}
-                        {callCharacterVideoEnabled ? (
-                          <button
-                            type="button"
-                            disabled={callSettingsDisabled}
-                            onClick={() =>
-                              patchConversationCallTtsConfig({
-                                callCustomVideoClipsEnabled: !callCustomVideoClipsEnabled,
-                              })
-                            }
-                            className={cn(
-                              "mari-chat-option-field flex items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left transition-all",
-                              callCustomVideoClipsEnabled && "mari-chat-option-field--active",
-                              callSettingsDisabled && "cursor-not-allowed opacity-60",
-                            )}
-                          >
-                            <span className="text-[0.625rem] font-medium text-[var(--foreground)]">Custom clips</span>
-                            <div
-                              className={cn(
-                                "mari-chat-option-switch h-4 w-7 shrink-0 rounded-full p-0.5 transition-colors",
-                                callCustomVideoClipsEnabled && "mari-chat-option-switch--active",
-                              )}
-                            >
-                              <div
-                                className={cn(
-                                  "h-3 w-3 rounded-full bg-white shadow-sm transition-transform",
-                                  callCustomVideoClipsEnabled && "translate-x-3",
-                                )}
-                              />
-                            </div>
-                          </button>
-                        ) : null}
-                      </div>
-                      {callCharacterVideoEnabled && (
-                        <p className="text-[0.55rem] leading-snug text-[var(--muted-foreground)]">
-                          Character video presence uses Clips from Characters Sprites. The Automatic video clips
-                          generation generates cached idle and talking clips from character avatars. Custom clips let
-                          characters sparsely create one-off requested clips.
-                        </p>
-                      )}
-                    </div>
-                  ) : (
-                    <p className="rounded-lg border border-dashed border-[var(--border)] px-2.5 py-2 text-[0.59375rem] leading-snug text-[var(--muted-foreground)]">
-                      Turn on the call audio pipeline here to use local mic transcription, browser speech recognition,
-                      manual system dictation, optional provider-native audio/video input, and call controls.
-                    </p>
-                  )}
-                </div>
+                {callsPackage ? (
+                  <CapabilityElement
+                    packageId={callsPackage.id}
+                    view="settings"
+                    capabilityProps={{
+                      chatId: chat.id,
+                      metadata,
+                      updateMetadata: (patch: Record<string, unknown>) => updateMeta.mutate({ id: chat.id, ...patch }),
+                    }}
+                    className="contents"
+                  />
+                ) : null}
 
                 <div
                   className={cn(
@@ -6386,14 +6095,12 @@ export function ChatSettingsDrawer({
             </Section>
           )}
 
-          {(chatMode === "roleplay" || chatMode === "game") && (
-            <SpatialContextSettingsSection
-              chatId={chat.id}
-              style={{ order: CHAT_SETTINGS_ORDER.spatialMap }}
-              onOpenEditor={() => {
-                onClose();
-                useUIStore.getState().openSpatialMapDetail(chat.id);
-              }}
+          {(chatMode === "roleplay" || chatMode === "game") && mapsPackage && (
+            <CapabilityElement
+              packageId={mapsPackage.id}
+              view="settings"
+              capabilityProps={{ chatId: chat.id, style: { order: CHAT_SETTINGS_ORDER.spatialMap } }}
+              className="contents"
             />
           )}
 
@@ -8940,10 +8647,14 @@ export function ChatSettingsDrawer({
               </div>
             </div>
 
-            {agentAddIsRuntimeDisabled ? (
+            {agentAddIsFeature ? (
               <div className="rounded-xl bg-[var(--secondary)]/70 px-3 py-2.5 text-[0.6875rem] leading-5 text-[var(--muted-foreground)] ring-1 ring-[var(--border)]">
-                This adds its instructions to the next Roleplay prompt. It does not make a separate model call or use an
-                agent connection.
+                This activates the downloaded feature for this chat. Its package owns the UI and runtime, so it does not
+                make a separate agent model call or use an agent connection.
+              </div>
+            ) : agentAddIsRuntimeDisabled ? (
+              <div className="rounded-xl bg-[var(--secondary)]/70 px-3 py-2.5 text-[0.6875rem] leading-5 text-[var(--muted-foreground)] ring-1 ring-[var(--border)]">
+                This adds its instructions to the next Roleplay prompt without making a separate model call.
               </div>
             ) : (
               <div className="space-y-1.5">

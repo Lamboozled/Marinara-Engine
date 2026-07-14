@@ -12,12 +12,17 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 
 ### Added
 
+- Added a responsive **Agents → Download Agents** catalog for installing, reading about, updating, and uninstalling official capability packages. Fresh installs now contain no optional agents, while existing installations migrate their agents and chat feature selections without losing settings, runtime data, or history.
+- Published all first-party agents in the new `Pasta-Devs/Marinara-Agents` repository as individually verified downloads, including the previously hidden About Me Keeper.
+- Moved Hierarchical Maps, Conversation audio/video calls, UNO, Chess, Poker, 8-Ball Pool, Tic-Tac-Toe, and Rock-Paper-Scissors into optional packages with package-owned server runtimes and responsive client surfaces. Maps can be enabled as an agent in Roleplay and during or after Game creation.
 - Added a default-on Noodle setting that can exclude Professor Mari from account discovery and future generated activity without deleting existing timeline history ([#3598](https://github.com/Pasta-Devs/Marinara-Engine/issues/3598)).
 
 - Added separate opt-in browser and Android generation-completion notifications for manually started Conversation, Roleplay, Visual Novel, and Game replies that finish while Marinara is unfocused, without changing autonomous-message background notification preferences (#3588).
 
 ### Changed
 
+- Reduced the base Engine by removing more than 25,000 lines of optional agent, map, call, and table-game implementation code. The base now exposes small validated capability registries and compatibility bridges while downloaded packages supply feature code on demand.
+- Updated Professor Mari, onboarding, and agent documentation to explain the downloadable-agent workflow, package restarts, offline behavior, and backward-compatible migration.
 - Began the v2.2.2 development cycle and synchronized version metadata across packages, the PWA manifest, Windows installer sources, Android APK metadata, and shared update checks.
 - Android `versionName` is `2.2.2` with `versionCode 34`.
 

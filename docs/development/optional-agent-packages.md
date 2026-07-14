@@ -1,6 +1,6 @@
 # Optional Agent and Capability Packages
 
-Status: accepted architecture for issue #3612.
+Status: implemented for the v2.2.2 development cycle in issue #3612.
 
 ## Objective
 
@@ -35,7 +35,7 @@ The base keeps the package manager, catalog client, generic agent pipeline contr
 
 ## Trust and installation
 
-The official catalog is a signed, versioned JSON document. Each release entry includes immutable artifact URLs, SHA-256 digests, byte sizes, engine compatibility, permissions, and whether its runtime can hot-load.
+The official catalog is a schema-validated, versioned JSON document fetched over HTTPS. Each release entry includes immutable artifact URLs, SHA-256 digests, byte sizes, engine compatibility, permissions, and whether its runtime requires a restart.
 
 The installer must:
 
@@ -68,17 +68,17 @@ On the first upgraded launch:
 - existing per-chat configuration, snapshots, game state, call history, and agent memory remain in place;
 - migration is idempotent and records its completion only after all legacy availability entries are durable.
 
-Legacy implementation bundles remain available for one compatibility release only as migration sources. Fresh installations must not expose or activate them.
+Legacy package artifacts remain available from the official catalog as migration sources. Fresh installations do not expose or activate them until the user installs them.
 
 ## Uninstallation
 
-Uninstall first disables the package and detaches its live runtime. Historical chats, messages, map snapshots, call summaries, and completed game records remain readable. Package-owned executable files, assets, caches, and mutable configuration are then removed atomically. Destructive removal of historical domain data is a separate, explicit user action.
+Uninstall removes the package from active chat selections, deletes its agent configuration and downloaded executable files, and detaches its runtime at restart when needed. Historical chats, messages, map snapshots, call summaries, and completed game records remain readable so removing a package cannot destroy user work. Destructive removal of historical domain data is a separate, explicit user action.
 
-Packages currently active in a chat or game show affected-chat counts and require confirmation. The host must leave a stable unavailable-package placeholder instead of corrupting the chat.
+Every uninstall requires confirmation. Affected chats fall back to their ordinary base surfaces without corrupting history.
 
 ## Catalog interface
 
-The Agents panel contains a `Download Agents` control matching Bot Browser's `Browse Online` affordance. It opens a full-screen responsive library with search, category and compatibility filters, install/update state, permissions, storage cost, documentation, and uninstall controls.
+The Agents panel contains a `Download Agents` control matching Bot Browser's `Browse Online` affordance. It opens a full-screen responsive library with search, package kinds, compatibility information, install/update state, permissions, storage cost, documentation, and uninstall controls.
 
 Desktop uses a browse list with an adjacent detail region. Mobile uses one pane with explicit back navigation and touch-sized actions. Empty, offline, incompatible, corrupt-download, interrupted-install, update, rollback, and restart-required states are first-class.
 

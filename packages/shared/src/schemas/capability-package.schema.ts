@@ -29,6 +29,31 @@ export const capabilityPackageManifestSchema = z.object({
       knowledge: z.string().optional(),
     })
     .strict(),
+  contributions: z
+    .object({
+      slots: z
+        .array(
+          z.enum([
+            "conversation-surface",
+            "conversation-toolbar",
+            "chat-settings",
+            "spatial-workspace",
+            "chat-runtime",
+            "game-world-map",
+          ]),
+        )
+        .optional(),
+      conversationGame: z
+        .object({
+          command: z.string().regex(/^\/[a-z0-9-]+$/),
+          aliases: z.array(z.string().min(1).max(40)).default([]),
+          playerLabel: z.string().min(1).max(80),
+        })
+        .strict()
+        .optional(),
+    })
+    .strict()
+    .optional(),
   files: z.array(z.object({
     path: z.string().min(1).max(240),
     sha256: z.string().regex(/^[a-f0-9]{64}$/),

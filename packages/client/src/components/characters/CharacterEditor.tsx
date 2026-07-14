@@ -46,6 +46,7 @@ import { ConvoProfileFields } from "./ConvoProfileFields";
 import { useUIStore } from "../../stores/ui.store";
 import { lorebookKeys, useLorebook } from "../../hooks/use-lorebooks";
 import { useConnections } from "../../hooks/use-connections";
+import { useInstalledCapabilityPackages } from "../../hooks/use-capability-packages";
 import { showConfirmDialog } from "../../lib/app-dialogs";
 import { SpriteGenerationModal } from "../ui/SpriteGenerationModal";
 import { AvatarGenerationModal } from "../ui/AvatarGenerationModal";
@@ -3119,6 +3120,10 @@ function SpritesTab({
 
   const { data: sprites, isLoading } = useCharacterSprites(characterId);
   const { data: spriteCapabilities } = useSpriteCapabilities();
+  const { data: installedCapabilities = [] } = useInstalledCapabilityPackages(true);
+  const conversationCallsInstalled = installedCapabilities.some(
+    (item) => item.status === "active" && item.manifest.kind.includes("conversation-calls"),
+  );
   const uploadSprite = useUploadSprite();
   const deleteSprite = useDeleteSprite();
   const exportSprites = useExportSprites();
@@ -3174,7 +3179,7 @@ function SpritesTab({
       {[
         { id: "expressions" as const, label: "Facial Expressions" },
         { id: "full-body" as const, label: "Full-body" },
-        { id: "clips" as const, label: "Clips" },
+        ...(conversationCallsInstalled ? [{ id: "clips" as const, label: "Clips" }] : []),
       ].map((tab) => (
         <button
           key={tab.id}

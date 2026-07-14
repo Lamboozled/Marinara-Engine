@@ -8,7 +8,6 @@ import { useConversationGamesStore } from "../stores/conversation-games.store";
 import { useGalleryStore } from "../stores/gallery.store";
 import { toast } from "sonner";
 import { startSceneWithPromptPreferences } from "./scene-generation";
-import { findConversationGame } from "./conversation-games";
 import {
   SUPPORTED_MACROS,
   buildGuidedGenerationInstructionMessage,
@@ -555,108 +554,21 @@ const COMMANDS: SlashCommand[] = [
     name: "games",
     aliases: ["game", "play"],
     description: "Choose a conversation game to start",
-    usage: "/games [game]",
+    usage: "/games",
     local: true,
     async execute(args, ctx) {
       if (ctx.mode === "roleplay") {
         return { handled: true, feedback: "Conversation games can only be played in conversation chats." };
       }
 
-      const requestedGame = findConversationGame(args);
-      if (requestedGame) {
-        requestedGame.openSetup(ctx.chatId);
-        return { handled: true };
-      }
       if (args.trim()) {
-        return { handled: true, feedback: `Game "${args.trim()}" is not available. Use /games to choose one.` };
+        return {
+          handled: true,
+          feedback: "Use an installed game's own slash command, or /games to choose one.",
+        };
       }
 
       useConversationGamesStore.getState().openPicker(ctx.chatId);
-      return { handled: true };
-    },
-  },
-  {
-    name: "uno",
-    description: "Start a game of UNO with the characters in this chat",
-    usage: "/uno",
-    local: true,
-    async execute(_args, ctx) {
-      if (ctx.mode === "roleplay") {
-        return { handled: true, feedback: "UNO can only be played in conversation chats." };
-      }
-      const game = findConversationGame("uno");
-      game?.openSetup(ctx.chatId);
-      return { handled: true };
-    },
-  },
-  {
-    name: "chess",
-    description: "Start a one-on-one chess game with a character in this chat",
-    usage: "/chess",
-    local: true,
-    async execute(_args, ctx) {
-      if (ctx.mode === "roleplay") {
-        return { handled: true, feedback: "Chess can only be played in conversation chats." };
-      }
-      const game = findConversationGame("chess");
-      game?.openSetup(ctx.chatId);
-      return { handled: true };
-    },
-  },
-  {
-    name: "poker",
-    description: "Start a game of Texas Hold'em poker with the characters in this chat",
-    usage: "/poker",
-    local: true,
-    async execute(_args, ctx) {
-      if (ctx.mode === "roleplay") {
-        return { handled: true, feedback: "Poker can only be played in conversation chats." };
-      }
-      const game = findConversationGame("poker");
-      game?.openSetup(ctx.chatId);
-      return { handled: true };
-    },
-  },
-  {
-    name: "8ball",
-    aliases: ["pool"],
-    description: "Start a game of 8-ball pool with a character in this chat",
-    usage: "/8ball",
-    local: true,
-    async execute(_args, ctx) {
-      if (ctx.mode === "roleplay") {
-        return { handled: true, feedback: "8-ball pool can only be played in conversation chats." };
-      }
-      const game = findConversationGame("8ball");
-      game?.openSetup(ctx.chatId);
-      return { handled: true };
-    },
-  },
-  {
-    name: "tictactoe",
-    aliases: ["ttt"],
-    description: "Start a game of tic-tac-toe with a character in this chat",
-    usage: "/tictactoe",
-    local: true,
-    async execute(_args, ctx) {
-      if (ctx.mode === "roleplay") {
-        return { handled: true, feedback: "Tic-tac-toe can only be played in conversation chats." };
-      }
-      findConversationGame("tictactoe")?.openSetup(ctx.chatId);
-      return { handled: true };
-    },
-  },
-  {
-    name: "rps",
-    aliases: ["rockpaperscissors"],
-    description: "Start a game of rock-paper-scissors with a character in this chat",
-    usage: "/rps",
-    local: true,
-    async execute(_args, ctx) {
-      if (ctx.mode === "roleplay") {
-        return { handled: true, feedback: "Rock-paper-scissors can only be played in conversation chats." };
-      }
-      findConversationGame("rps")?.openSetup(ctx.chatId);
       return { handled: true };
     },
   },

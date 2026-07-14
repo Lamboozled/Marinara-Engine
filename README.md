@@ -151,7 +151,7 @@ Character expression sprites with automatic emotion switching, custom scene back
 
 ### AI Agent System
 
-20+ built-in agents that run alongside your chat — world state tracking, quest management, combat, expression detection, background selection, Narrative Director, prose analysis, Music DJ for Spotify/YouTube, CYOA choices, and more. Add only the agents you want to each chat, or create/import custom agents.
+An optional one-click catalog of 20+ agents that run alongside your chat—world state tracking, quest management, combat, expression detection, background selection, Narrative Director, prose analysis, Music DJ, CYOA choices, and more. Fresh installs stay lightweight with no bundled agents. Open **Agents → Download Agents** to install only what you want, including maps, Conversation calls, and Conversation games; update or uninstall packages from the same responsive catalog. Existing installations retain their agents during upgrade. You can also create or import custom agents.
 
 ### Prompt Engineering
 

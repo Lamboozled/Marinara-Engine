@@ -44,6 +44,23 @@ export function useInstalledCapabilityPackages(enabled = true) {
   });
 }
 
+const loadedClientModules = new Map<string, string>();
+
+export function useCapabilityClientModules() {
+  const installed = useInstalledCapabilityPackages();
+  useEffect(() => {
+    for (const item of installed.data ?? []) {
+      if (item.status !== "active" || !item.manifest.entrypoints.client) continue;
+      if (loadedClientModules.get(item.id) === item.version) continue;
+      const source = `/api/capability-packages/${encodeURIComponent(item.id)}/client?v=${encodeURIComponent(item.version)}`;
+      void import(/* @vite-ignore */ source)
+        .then(() => loadedClientModules.set(item.id, item.version))
+        .catch((error) => console.error(`Could not load client capability ${item.id}`, error));
+    }
+  }, [installed.data]);
+  return installed;
+}
+
 function useInvalidateCapabilityState() {
   const queryClient = useQueryClient();
   return async () => {
@@ -66,7 +83,7 @@ export function useInstallCapabilityPackage() {
 export function useUninstallCapabilityPackage() {
   const invalidate = useInvalidateCapabilityState();
   return useMutation({
-    mutationFn: (id: string) => api.delete<void>(`/capability-packages/${id}`),
+    mutationFn: (id: string) => api.delete<{ restartRequired: boolean }>(`/capability-packages/${id}`),
     onSuccess: invalidate,
   });
 }

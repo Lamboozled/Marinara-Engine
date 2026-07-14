@@ -8422,7 +8422,7 @@ export async function generateRoutes(app: FastifyInstance) {
                 });
 
                 await handleTurnGameCommand({
-                  commandType: command.type,
+                  commandType: command.type === "capability" ? command.commandType : command.type,
                   characterId,
                   chatId: input.chatId,
                   chatMeta,

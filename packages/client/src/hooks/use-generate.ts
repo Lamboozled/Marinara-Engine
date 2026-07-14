@@ -17,7 +17,6 @@ import { requestChatScrollToBottom } from "../lib/chat-scroll-events";
 import { startSceneWithPromptPreferences } from "../lib/scene-generation";
 import { agentKeys } from "./use-agents";
 import { discardPendingGameStatePatch } from "./use-game-state-patcher";
-import { turnGameKeys } from "./turn-game-keys";
 import { spatialContextKeys } from "./use-spatial-context";
 import type { PendingAgentWriteApproval, PendingCardUpdate } from "../stores/agent.store";
 import type { DelayedCharacterInfo } from "../stores/chat.store";
@@ -483,12 +482,6 @@ import { useChatStore } from "../stores/chat.store";
 import { useAgentStore } from "../stores/agent.store";
 import { useGameModeStore } from "../stores/game-mode.store";
 import { useGameStateStore } from "../stores/game-state.store";
-import { useUnoGameStore } from "../stores/uno-game.store";
-import { useChessGameStore } from "../stores/chess-game.store";
-import { usePokerGameStore } from "../stores/poker-game.store";
-import { useEightBallGameStore } from "../stores/eightball-game.store";
-import { useTicTacToeGameStore } from "../stores/tic-tac-toe-game.store";
-import { useRockPaperScissorsGameStore } from "../stores/rock-paper-scissors-game.store";
 import { useTranslationStore } from "../stores/translation.store";
 import { useUIStore } from "../stores/ui.store";
 import {
@@ -502,10 +495,9 @@ import { characterKeys } from "./use-characters";
 import { connectionKeys } from "./use-connections";
 import { lorebookKeys } from "./use-lorebooks";
 import { presetKeys } from "./use-presets";
-import { conversationCallKeys } from "./use-conversation-calls";
 import { playConfiguredNotificationPing } from "../lib/notification-sound";
 import { showLocalMessageNotification, showNativeMessageNotification } from "../lib/local-notifications";
-import { playConversationCallRingingSoundOnce } from "../lib/conversation-call-sounds";
+import { dispatchCapabilityClientEvent } from "../lib/capability-client-events";
 import { messageHasPendingPostProcessing } from "../lib/chat-message-extra";
 import { stripGmTagsKeepReadables } from "../lib/game-tag-parser";
 import type { APIConnection, Chat, GameMap, Message } from "@marinara-engine/shared";
@@ -1924,37 +1916,14 @@ export function useGenerate() {
             }
 
             case "turn_game_state_patch": {
-              // The payload carries a gameType discriminator — route it to the matching
-              // board store only; a view from one game rendered by another board crashes.
               const turnGameType = (event.data as { gameType?: string } | null)?.gameType;
-              if (!isActiveChat()) {
-                // A background chat's board can't be painted, but a silently
-                // dropped patch leaves a stale snapshot that blocks re-hydration
-                // on switch-back (the state query is disabled while a snapshot
-                // exists). Drop the snapshot and mark the query stale so
-                // returning to the chat refetches the board.
-                if (turnGameType === "chess") useChessGameStore.getState().clearChess(params.chatId);
-                else if (turnGameType === "uno") useUnoGameStore.getState().clearUno(params.chatId);
-                else if (turnGameType === "poker") usePokerGameStore.getState().clearPoker(params.chatId);
-                else if (turnGameType === "eightball") useEightBallGameStore.getState().clearEightBall(params.chatId);
-                else if (turnGameType === "tic-tac-toe") useTicTacToeGameStore.getState().clearTicTacToe(params.chatId);
-                else if (turnGameType === "rock-paper-scissors")
-                  useRockPaperScissorsGameStore.getState().clearRockPaperScissors(params.chatId);
-                void qc.invalidateQueries({ queryKey: turnGameKeys.state(params.chatId) });
-                break;
-              }
-              if (turnGameType === "chess") {
-                useChessGameStore.getState().setChess(event.data as never, params.chatId);
-              } else if (turnGameType === "uno") {
-                useUnoGameStore.getState().setUno(event.data as never, params.chatId);
-              } else if (turnGameType === "poker") {
-                usePokerGameStore.getState().setPoker(event.data as never, params.chatId);
-              } else if (turnGameType === "eightball") {
-                useEightBallGameStore.getState().setEightBall(event.data as never, params.chatId);
-              } else if (turnGameType === "tic-tac-toe") {
-                useTicTacToeGameStore.getState().setTicTacToe(event.data as never, params.chatId);
-              } else if (turnGameType === "rock-paper-scissors") {
-                useRockPaperScissorsGameStore.getState().setRockPaperScissors(event.data as never, params.chatId);
+              if (turnGameType) {
+                dispatchCapabilityClientEvent({
+                  packageId: turnGameType,
+                  type: event.type,
+                  chatId: params.chatId,
+                  data: event.data,
+                });
               }
               break;
             }
@@ -2227,15 +2196,18 @@ export function useGenerate() {
                     ? session.metadata.reason
                     : null;
 
-              qc.invalidateQueries({ queryKey: conversationCallKeys.status(callChatId) });
+              dispatchCapabilityClientEvent({
+                packageId: "conversation-calls",
+                type: event.type,
+                chatId: callChatId,
+                data: event.data,
+              });
               if (callChatId === params.chatId) {
                 invalidateCurrentMessagesIfSafe();
               } else {
                 qc.invalidateQueries({ queryKey: chatKeys.messages(callChatId) });
               }
               qc.invalidateQueries({ queryKey: chatKeys.list() });
-
-              playConversationCallRingingSoundOnce(callId);
 
               if (callId && !isChatSurfaceVisible(callChatId)) {
                 const identity = resolveCachedCharacterIdentity(qc, characterId);
@@ -3217,37 +3189,9 @@ export function useGenerate() {
               break;
             }
             case "turn_game_state_patch": {
-              // The payload carries a gameType discriminator — route it to the matching
-              // board store only; a view from one game rendered by another board crashes.
               const turnGameType = (event.data as { gameType?: string } | null)?.gameType;
-              if (!isActiveChat()) {
-                // A background chat's board can't be painted, but a silently
-                // dropped patch leaves a stale snapshot that blocks re-hydration
-                // on switch-back (the state query is disabled while a snapshot
-                // exists). Drop the snapshot and mark the query stale so
-                // returning to the chat refetches the board.
-                if (turnGameType === "chess") useChessGameStore.getState().clearChess(chatId);
-                else if (turnGameType === "uno") useUnoGameStore.getState().clearUno(chatId);
-                else if (turnGameType === "poker") usePokerGameStore.getState().clearPoker(chatId);
-                else if (turnGameType === "eightball") useEightBallGameStore.getState().clearEightBall(chatId);
-                else if (turnGameType === "tic-tac-toe") useTicTacToeGameStore.getState().clearTicTacToe(chatId);
-                else if (turnGameType === "rock-paper-scissors")
-                  useRockPaperScissorsGameStore.getState().clearRockPaperScissors(chatId);
-                void qc.invalidateQueries({ queryKey: turnGameKeys.state(chatId) });
-                break;
-              }
-              if (turnGameType === "chess") {
-                useChessGameStore.getState().setChess(event.data as never, chatId);
-              } else if (turnGameType === "uno") {
-                useUnoGameStore.getState().setUno(event.data as never, chatId);
-              } else if (turnGameType === "poker") {
-                usePokerGameStore.getState().setPoker(event.data as never, chatId);
-              } else if (turnGameType === "eightball") {
-                useEightBallGameStore.getState().setEightBall(event.data as never, chatId);
-              } else if (turnGameType === "tic-tac-toe") {
-                useTicTacToeGameStore.getState().setTicTacToe(event.data as never, chatId);
-              } else if (turnGameType === "rock-paper-scissors") {
-                useRockPaperScissorsGameStore.getState().setRockPaperScissors(event.data as never, chatId);
+              if (turnGameType) {
+                dispatchCapabilityClientEvent({ packageId: turnGameType, type: event.type, chatId, data: event.data });
               }
               break;
             }

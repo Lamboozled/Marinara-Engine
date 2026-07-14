@@ -1,8 +1,6 @@
 import type { BuiltInAgentManifest } from "./agent-manifest.types.js";
-import { BUILT_IN_AGENT_MANIFESTS as GENERATED_AGENT_MANIFESTS } from "./agent-registry.generated.js";
-
-/** Compatibility source used only by the one-time upgrade migration. */
-export const BUNDLED_AGENT_MANIFESTS: readonly BuiltInAgentManifest[] = GENERATED_AGENT_MANIFESTS;
+/** The lightweight Engine ships no agent definitions; packages populate the active registry. */
+export const BUNDLED_AGENT_MANIFESTS: readonly BuiltInAgentManifest[] = [];
 
 /** Active runtime registry. Fresh installs populate it only from downloaded packages. */
 export const BUILT_IN_AGENT_MANIFESTS: BuiltInAgentManifest[] = [];

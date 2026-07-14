@@ -102,7 +102,7 @@ For the full feature, see [Lorebooks](lorebooks/overview.md).
 
 ## What is an agent?
 
-An **agent** is an AI helper that runs automatically during a chat to do a background job. Examples include tracking the current scene, watching writing quality, or writing a summary. Agents are set per chat, not per character, and you turn them on in **Chat Settings**. See [Agents](agents/agents-overview.md).
+An **agent** is an optional AI helper that runs during a chat to do a focused job. Examples include tracking the current scene, watching writing quality, adding maps or calls, or running a Conversation table game. Fresh installations have no optional agents. Open the **Agents** panel, click **Download Agents**, read an item's details, and install it. Then enable compatible agents per chat in **Chat Settings**. The catalog also handles updates and complete package removal. Restart Marinara when it asks you to. See [Agents](agents/agents-overview.md).
 
 ## How do I set up Noodle?
 

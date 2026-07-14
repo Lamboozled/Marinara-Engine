@@ -60,7 +60,8 @@ import { SlashCommandFeedback } from "./SlashCommandFeedback";
 import { QuickReplyMenu, type QuickReplyAction } from "./QuickReplyMenu";
 import { getChatInputShellClass } from "./chat-input-styles";
 import { MariSuggestionChips } from "./MariSuggestionChips";
-import { SpatialContextRuntimeBar } from "../../features/spatial-context/components/SpatialContextRuntimeBar";
+import { CapabilityElement } from "../capabilities/CapabilityElement";
+import type { PendingSpatialTransitionDraft } from "../../stores/chat.store";
 
 interface Attachment {
   type: string; // MIME type
@@ -311,6 +312,8 @@ export const ChatInput = memo(function ChatInput({
   );
   const narrativeDirectorActive =
     mode === "roleplay" && chatMetadata.enableAgents === true && activeAgentIds.includes("director");
+  const hierarchicalMapsActive =
+    mode === "roleplay" && chatMetadata.enableAgents === true && activeAgentIds.includes("hierarchical-maps");
   const combatActionActive =
     mode === "roleplay" && combatAgentEnabled === true && typeof onStartEncounter === "function";
   const showRoleplayAgentActions = narrativeDirectorActive || combatActionActive;
@@ -1636,7 +1639,25 @@ export const ChatInput = memo(function ChatInput({
       {/* Feedback toast */}
       {feedback && <SlashCommandFeedback feedback={feedback} onDismiss={() => setFeedback(null)} className="mb-2" />}
 
-      {mode === "roleplay" && <SpatialContextRuntimeBar chatId={activeChatId} disabled={isInputBusy} />}
+      {hierarchicalMapsActive && activeChatId ? (
+        <CapabilityElement
+          packageId="hierarchical-maps"
+          view="runtime"
+          capabilityProps={{
+            chatId: activeChatId,
+            disabled: isInputBusy,
+            onPendingTransitionChange: (pending: unknown) => {
+              if (pending && typeof pending === "object") {
+                useChatStore
+                  .getState()
+                  .setPendingSpatialTransition(activeChatId, pending as PendingSpatialTransitionDraft);
+              } else {
+                useChatStore.getState().clearPendingSpatialTransition(activeChatId);
+              }
+            },
+          }}
+        />
+      ) : null}
 
       {showRoleplayAgentActions && (
         <div className="flex flex-wrap justify-center gap-2 py-1">
