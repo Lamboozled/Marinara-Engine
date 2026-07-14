@@ -656,6 +656,16 @@ Gate: all prompt paths contain the same spatial block, no unrelated location tex
 
 Gate: creators can build and repair nested maps without drag, hover, or precision input.
 
+#### Package E.1: AI-assisted map drafting
+
+- Add an on-demand setup-time generator that uses bounded Game or Roleplay setup context, never implicit turn-time mutation.
+- Generate a simplified keyed map plan, then assign stable IDs, repair safe layout omissions, and validate the complete definition server-side.
+- Preview the generated hierarchy as a local draft before replacing editor state.
+- Require explicit Apply and Save actions; generation never enables Spatial Context or writes a definition by itself.
+- Keep ordinary conversation history out of the generation prompt and expose final prompts through debug logging.
+
+Gate: a nontechnical creator can describe a world, receive a valid nested map, inspect it, and decline or apply it without changing persisted state until Save.
+
 #### Package F: Roleplay and Game runtime UI
 
 - Add the shared runtime bar and per-chat pending-transition persistence.

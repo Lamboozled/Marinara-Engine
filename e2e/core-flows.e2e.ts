@@ -2297,7 +2297,7 @@ test("hierarchical map editor creates and saves an oriented location tree", asyn
     }
 
     await expect(page.getByRole("heading", { name: "Hierarchical map" })).toBeVisible();
-    await page.getByRole("button", { name: "Create starting location" }).click();
+    await page.getByRole("button", { name: "Build manually" }).click();
     const visibleInspector = page.locator('section[aria-label^="Details for"]:visible');
     await visibleInspector.getByLabel("Name", { exact: true }).fill("Atlas");
     const visibleHierarchy = page.locator('section[aria-label="Location hierarchy"]:visible');

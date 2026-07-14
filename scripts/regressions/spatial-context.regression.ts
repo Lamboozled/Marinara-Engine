@@ -14,6 +14,10 @@ import {
   validateSpatialTransition,
 } from "../../packages/shared/src/index.js";
 import {
+  buildSpatialMapDraftPrompt,
+  normalizeSpatialMapPlan,
+} from "../../packages/server/src/services/spatial-context/ai-draft.js";
+import {
   buildOwnerSpatialProjection,
   formatOwnerSpatialBreadcrumb,
   formatOwnerSpatialPrompt,
@@ -131,6 +135,124 @@ const validDefinition = definition(
 
 assert.deepEqual(validateSpatialContextDefinition(validDefinition), { valid: true, issues: [] });
 assert.equal(spatialContextDefinitionSchema.safeParse(validDefinition).success, true);
+
+const aiPrompt = buildSpatialMapDraftPrompt({
+  ownerMode: "game",
+  size: "small",
+  sourceContext: '{"setting":"foggy coast"}',
+  instructions: "Include a lighthouse and old sewers.",
+});
+assert.match(aiPrompt.messages[0]!.content, /never more than 12/);
+assert.match(aiPrompt.messages[1]!.content, /lighthouse and old sewers/);
+assert.equal(aiPrompt.maxTokens, 6_000);
+
+const aiDraft = normalizeSpatialMapPlan(
+  {
+    startingLocationKey: "harbor",
+    locations: [
+      {
+        key: "world",
+        parentKey: null,
+        name: "The Shrouded Coast",
+        kind: "region",
+        description: "A stormy coastline of isolated settlements.",
+        childPresentation: "map",
+      },
+      {
+        key: "harbor",
+        parentKey: "world",
+        name: "Gloam Harbor",
+        kind: "settlement",
+        description: "A crowded port beneath a permanent bank of fog.",
+        modelMemory: "The harbor master hides a smuggling ledger.",
+        links: [{ targetKey: "lighthouse", label: "Cliff road", bidirectional: true }],
+      },
+      {
+        key: "lighthouse",
+        parentKey: "world",
+        name: "Blackglass Lighthouse",
+        kind: "building",
+        description: "A black stone lighthouse above the cliffs.",
+        links: [{ targetKey: "missing", label: "Impossible road" }],
+      },
+      {
+        key: "tower",
+        parentKey: "world",
+        name: "Saltwatch Tower",
+        kind: "building",
+        description: "A watchtower overlooking the harbor.",
+      },
+      {
+        key: "tower-ground",
+        parentKey: "tower",
+        name: "Ground Floor",
+        kind: "floor",
+        description: "The tower entrance.",
+      },
+      {
+        key: "tower-top",
+        parentKey: "tower",
+        name: "Top Floor",
+        kind: "floor",
+        description: "The signal room.",
+      },
+      {
+        key: "cycle-a",
+        parentKey: "cycle-b",
+        name: "Cycle A",
+        description: "",
+      },
+      {
+        key: "cycle-b",
+        parentKey: "cycle-a",
+        name: "Cycle B",
+        description: "",
+      },
+    ],
+  },
+  { ownerMode: "game", revision: 7, enabled: false, size: "small" },
+);
+assert.equal(aiDraft.ownerMode, "game");
+assert.equal(aiDraft.revision, 7);
+assert.equal(aiDraft.enabled, false);
+assert.equal(spatialContextDefinitionSchema.safeParse(aiDraft).success, true);
+assert.equal(aiDraft.locations.find((entry) => entry.id === aiDraft.startingLocationId)?.name, "Gloam Harbor");
+assert.ok(aiDraft.locations.every((entry) => /^loc_[A-Za-z0-9_-]+$/u.test(entry.id)));
+const aiWorld = aiDraft.locations.find((entry) => entry.name === "The Shrouded Coast")!;
+const aiHarbor = aiDraft.locations.find((entry) => entry.name === "Gloam Harbor")!;
+const aiLighthouse = aiDraft.locations.find((entry) => entry.name === "Blackglass Lighthouse")!;
+const aiTower = aiDraft.locations.find((entry) => entry.name === "Saltwatch Tower")!;
+const aiFloors = aiDraft.locations.filter((entry) => entry.parentId === aiTower.id);
+assert.equal(aiWorld.childPresentation, "map");
+assert.ok(aiHarbor.placement);
+assert.ok(aiLighthouse.placement);
+assert.equal(aiHarbor.links[0]?.targetId, aiLighthouse.id);
+assert.equal(aiLighthouse.links.length, 0);
+assert.equal(aiTower.childPresentation, "layers");
+assert.deepEqual(
+  aiFloors.map((entry) => entry.layerOrder),
+  [0, 1],
+);
+assert.equal(aiDraft.locations.find((entry) => entry.name === "Cycle A")?.parentId, null);
+assert.equal(aiDraft.locations.find((entry) => entry.name === "Cycle B")?.parentId, null);
+
+const cappedAiDraft = normalizeSpatialMapPlan(
+  {
+    locations: Array.from({ length: 20 }, (_, index) => ({
+      key: `place-${index}`,
+      parentKey: null,
+      name: `Place ${index}`,
+      description: "",
+    })),
+  },
+  { ownerMode: "roleplay", revision: 0, enabled: false, size: "small" },
+);
+assert.equal(cappedAiDraft.locations.length, 12);
+assert.throws(
+  () =>
+    normalizeSpatialMapPlan({ locations: [] }, { ownerMode: "roleplay", revision: 0, enabled: false, size: "small" }),
+  /did not return any locations/,
+);
 
 assert.deepEqual(
   resolveSpatialBreadcrumb(validDefinition, "tower_library").map((entry) => entry.id),

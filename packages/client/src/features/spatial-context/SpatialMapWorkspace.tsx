@@ -11,6 +11,7 @@ import {
   Plus,
   RefreshCw,
   Save,
+  Sparkles,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -29,6 +30,7 @@ import { HierarchyNavigator } from "./components/HierarchyNavigator";
 import { LayerSelector } from "./components/LayerSelector";
 import { LocalMapCanvas } from "./components/LocalMapCanvas";
 import { LocationInspector } from "./components/LocationInspector";
+import { SpatialMapAiBuilder } from "./components/SpatialMapAiBuilder";
 import {
   addSpatialLocation,
   archiveSpatialLocation,
@@ -89,6 +91,7 @@ export function SpatialMapWorkspace({ chatId }: SpatialMapWorkspaceProps) {
   const [archiveRequestId, setArchiveRequestId] = useState<string | null>(null);
   const [archiveReplacementId, setArchiveReplacementId] = useState("");
   const [replacementCurrentLocationId, setReplacementCurrentLocationId] = useState<string | null>(null);
+  const [aiBuilderOpen, setAiBuilderOpen] = useState(false);
 
   const ownerMode: SpatialOwnerMode = chat?.mode === "game" ? "game" : "roleplay";
 
@@ -99,6 +102,7 @@ export function SpatialMapWorkspace({ chatId }: SpatialMapWorkspaceProps) {
     setSelectedId(null);
     setEnteredParentId(null);
     setConflict(false);
+    setAiBuilderOpen(false);
   }, [chatId]);
 
   useEffect(() => {
@@ -307,6 +311,34 @@ export function SpatialMapWorkspace({ chatId }: SpatialMapWorkspaceProps) {
     setServerIssues([]);
     setReplacementCurrentLocationId(null);
   }, [ownerMode, spatial]);
+
+  const applyGeneratedDraft = useCallback(
+    (generated: SpatialContextDefinition) => {
+      if (!draft) return;
+      const next = {
+        ...cloneSpatialDefinition(generated),
+        ownerMode,
+        enabled: draft.enabled,
+        revision: baseDefinition?.revision ?? generated.revision,
+      };
+      applyDraft(next);
+      setSelectedId(next.startingLocationId ?? next.locations[0]?.id ?? null);
+      setEnteredParentId(null);
+      setMobilePane("hierarchy");
+      setArchiveRequestId(null);
+      setArchiveReplacementId("");
+      setConflict(false);
+      setReviewConflict(false);
+      setReplacementCurrentLocationId(
+        currentLocationId && !next.locations.some((location) => location.id === currentLocationId)
+          ? next.startingLocationId
+          : null,
+      );
+      setAiBuilderOpen(false);
+      toast.success("AI map draft applied. Review it, then Save.");
+    },
+    [applyDraft, baseDefinition?.revision, currentLocationId, draft, ownerMode],
+  );
 
   if (!spatial.isError && (spatial.isLoading || !initialized || !draft)) {
     return (
@@ -519,6 +551,14 @@ export function SpatialMapWorkspace({ chatId }: SpatialMapWorkspaceProps) {
           <p className="truncate text-[0.625rem] text-[var(--marinara-editor-muted)]">{chat?.name ?? "Chat"}</p>
         </div>
         <div className="mari-editor-actions flex max-md:w-full max-md:justify-end max-md:border-t max-md:border-[var(--marinara-editor-divider)] max-md:pt-2">
+          <button
+            type="button"
+            onClick={() => setAiBuilderOpen(true)}
+            disabled={aiBuilderOpen || conflict || updateSpatial.isPending}
+            className="mari-editor-action inline-flex min-h-11 px-3 text-xs disabled:opacity-45"
+          >
+            <Sparkles size="0.8125rem" /> Build with AI
+          </button>
           <span className={cn("mari-editor-status mr-2", status.className)}>
             {status.icon}
             {status.label}
@@ -543,7 +583,17 @@ export function SpatialMapWorkspace({ chatId }: SpatialMapWorkspaceProps) {
         </div>
       </div>
 
-      {conflict && (
+      <SpatialMapAiBuilder
+        chatId={chatId}
+        ownerMode={ownerMode}
+        open={aiBuilderOpen}
+        hasLocations={draft.locations.length > 0}
+        dirty={dirty}
+        onClose={() => setAiBuilderOpen(false)}
+        onApply={applyGeneratedDraft}
+      />
+
+      {!aiBuilderOpen && conflict && (
         <div className="border-b border-red-500/25 bg-red-500/10 px-4 py-3 text-xs text-red-300" role="alert">
           <div className="flex flex-wrap items-center gap-2">
             <AlertCircle size="0.8125rem" />
@@ -576,7 +626,7 @@ export function SpatialMapWorkspace({ chatId }: SpatialMapWorkspaceProps) {
         </div>
       )}
 
-      {archiveRequest && (
+      {!aiBuilderOpen && archiveRequest && (
         <div className="border-b border-amber-500/25 bg-amber-500/10 px-4 py-3 text-xs text-amber-300">
           <div className="flex flex-wrap items-center gap-2">
             <AlertCircle size="0.8125rem" />
@@ -614,7 +664,7 @@ export function SpatialMapWorkspace({ chatId }: SpatialMapWorkspaceProps) {
         </div>
       )}
 
-      {issues.length > 0 && (
+      {!aiBuilderOpen && issues.length > 0 && (
         <div className="border-b border-red-500/25 bg-red-500/10 px-4 py-2 text-xs text-red-300" role="alert">
           <div className="flex items-start gap-2">
             <AlertCircle size="0.8125rem" className="mt-0.5 shrink-0" />
@@ -637,7 +687,7 @@ export function SpatialMapWorkspace({ chatId }: SpatialMapWorkspaceProps) {
         </div>
       )}
 
-      {draft.locations.length === 0 ? (
+      {!aiBuilderOpen && (draft.locations.length === 0 ? (
         <div className="flex min-h-0 flex-1 items-center justify-center p-6">
           <div className="max-w-md text-center">
             <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl border border-[var(--marinara-chat-chrome-panel-border)] bg-[var(--marinara-chat-chrome-panel-bg)] text-[var(--marinara-chat-chrome-accent)]">
@@ -647,20 +697,28 @@ export function SpatialMapWorkspace({ chatId }: SpatialMapWorkspaceProps) {
               Create a starting location
             </h2>
             <p className="mt-2 text-sm leading-relaxed text-[var(--marinara-chat-chrome-panel-muted)]">
-              Start with the broadest useful place. You can add regions, buildings, floors, rooms, and direct links
-              underneath it.
+              Let AI draft the full hierarchy from the game or chat setup, or start manually with one broad place.
             </p>
-            <button
-              type="button"
-              onClick={() => {
-                const result = addSpatialLocation(draft);
-                applyDraft(result.definition);
-                selectLocation(result.location.id);
-              }}
-              className="mari-chrome-control mari-chrome-control--primary mt-5 min-h-11 px-5 text-sm"
-            >
-              <Plus size="0.875rem" /> Create starting location
-            </button>
+            <div className="mt-5 flex flex-wrap justify-center gap-2">
+              <button
+                type="button"
+                onClick={() => setAiBuilderOpen(true)}
+                className="mari-chrome-control mari-chrome-control--primary min-h-11 px-5 text-sm"
+              >
+                <Sparkles size="0.875rem" /> Draft with AI
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const result = addSpatialLocation(draft);
+                  applyDraft(result.definition);
+                  selectLocation(result.location.id);
+                }}
+                className="mari-chrome-control min-h-11 px-5 text-sm"
+              >
+                <Plus size="0.875rem" /> Build manually
+              </button>
+            </div>
           </div>
         </div>
       ) : (
@@ -724,7 +782,7 @@ export function SpatialMapWorkspace({ chatId }: SpatialMapWorkspaceProps) {
             </div>
           </div>
         </>
-      )}
+      ))}
     </div>
   );
 }

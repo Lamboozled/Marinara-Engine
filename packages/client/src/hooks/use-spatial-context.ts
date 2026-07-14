@@ -1,5 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { SpatialContextDefinition, SpatialContextResponse, SpatialDefinitionIssue } from "@marinara-engine/shared";
+import type {
+  GenerateSpatialMapDraftRequest,
+  GenerateSpatialMapDraftResponse,
+  SpatialContextDefinition,
+  SpatialContextResponse,
+  SpatialDefinitionIssue,
+} from "@marinara-engine/shared";
 import { api, ApiError } from "../lib/api-client";
 
 export const spatialContextKeys = {
@@ -13,6 +19,10 @@ export interface UpdateSpatialContextInput {
   expectedCurrentLocationId: string | null;
   replacementCurrentLocationId?: string | null;
   definition: SpatialContextDefinition;
+}
+
+export interface GenerateSpatialMapDraftInput extends GenerateSpatialMapDraftRequest {
+  chatId: string;
 }
 
 export interface SpatialContextProblem {
@@ -105,5 +115,12 @@ export function useUpdateSpatialContext() {
         void queryClient.invalidateQueries({ queryKey: spatialContextKeys.detail(variables.chatId) });
       }
     },
+  });
+}
+
+export function useGenerateSpatialMapDraft() {
+  return useMutation({
+    mutationFn: ({ chatId, ...request }: GenerateSpatialMapDraftInput) =>
+      api.post<GenerateSpatialMapDraftResponse>(`/chats/${chatId}/spatial-context/generate`, request),
   });
 }

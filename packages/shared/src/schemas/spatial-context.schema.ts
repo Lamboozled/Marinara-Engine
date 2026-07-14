@@ -14,6 +14,7 @@ export const spatialLocationKindSchema = z.enum(["region", "settlement", "place"
 export const spatialChildPresentationSchema = z.enum(["map", "layers", "list"]);
 export const spatialLocationStatusSchema = z.enum(["active", "archived"]);
 export const spatialLinkStateSchema = z.enum(["available", "hidden", "blocked"]);
+export const spatialMapDraftSizeSchema = z.enum(["small", "medium", "large"]);
 
 export const spatialLocationPlacementSchema = z
   .object({
@@ -116,7 +117,17 @@ export const updateSpatialContextRequestSchema = z
   })
   .strict();
 
+export const generateSpatialMapDraftRequestSchema = z
+  .object({
+    size: spatialMapDraftSizeSchema.default("medium"),
+    instructions: z.string().trim().max(4_000).optional(),
+    connectionId: z.string().trim().min(1).optional(),
+    debugMode: z.boolean().optional().default(false),
+  })
+  .strict();
+
 export type SpatialContextDefinitionInput = z.input<typeof spatialContextDefinitionSchema>;
 export type SpatialContextDefinitionOutput = z.output<typeof spatialContextDefinitionSchema>;
 export type PendingSpatialTransitionInput = z.input<typeof pendingSpatialTransitionSchema>;
 export type UpdateSpatialContextRequestInput = z.input<typeof updateSpatialContextRequestSchema>;
+export type GenerateSpatialMapDraftRequestInput = z.input<typeof generateSpatialMapDraftRequestSchema>;

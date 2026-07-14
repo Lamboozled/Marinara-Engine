@@ -171,3 +171,19 @@ export interface SpatialContextResponse {
   destinations: SpatialDestination[];
   warnings: SpatialDefinitionIssue[];
 }
+
+export type SpatialMapDraftSize = "small" | "medium" | "large";
+
+export interface GenerateSpatialMapDraftRequest {
+  size: SpatialMapDraftSize;
+  instructions?: string;
+  connectionId?: string;
+  debugMode?: boolean;
+}
+
+export interface GenerateSpatialMapDraftResponse {
+  definition: SpatialContextDefinition;
+  size: SpatialMapDraftSize;
+  source: "game_setup" | "roleplay_setup";
+  generatedLocationCount: number;
+}
