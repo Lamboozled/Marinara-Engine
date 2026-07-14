@@ -261,6 +261,14 @@ function latestAssistantMessage(messages: Iterable<Message>): Message | null {
   return latest;
 }
 
+function resolveNotifiedCharacterId(
+  message: Message | null,
+  forCharacterId: string | undefined,
+  fallbackCharacterId: string | null,
+): string | null {
+  return message?.characterId ?? forCharacterId ?? fallbackCharacterId;
+}
+
 function getCachedMessages(qc: QueryClient, chatId: string): Message[] {
   return qc.getQueryData<InfiniteData<Message[]>>(chatKeys.messages(chatId))?.pages.flat() ?? [];
 }
@@ -2627,7 +2635,11 @@ export function useGenerate() {
                 ? rawIds
                 : [];
           const notifiedMessage = latestAssistantMessage(persistedMessages.values());
-          const notifiedCharacterId = notifiedMessage?.characterId ?? parsedIds[0] ?? null;
+          const notifiedCharacterId = resolveNotifiedCharacterId(
+            notifiedMessage,
+            params.forCharacterId,
+            parsedIds[0] ?? null,
+          );
           if (notifiedCharacterId) {
             const identity = resolveCachedCharacterIdentity(qc, notifiedCharacterId);
             useChatStore
@@ -2771,7 +2783,11 @@ export function useGenerate() {
           if (notifiedMessage) {
             const chat = getCachedChatForGeneration(qc, params.chatId);
             const fallbackCharacterId = parseChatCharacterIds(chat?.characterIds)[0] ?? null;
-            const notifiedCharacterId = notifiedMessage.characterId ?? params.forCharacterId ?? fallbackCharacterId;
+            const notifiedCharacterId = resolveNotifiedCharacterId(
+              notifiedMessage,
+              params.forCharacterId,
+              fallbackCharacterId,
+            );
             const characterName = notifiedCharacterId ? getCachedCharacterName(qc, notifiedCharacterId) : null;
             const uiState = useUIStore.getState();
             const notification = {
