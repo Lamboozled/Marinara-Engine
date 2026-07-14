@@ -2249,6 +2249,73 @@ test("mobile topbar remains reachable while sidebars switch", async ({ page }, t
   expect(errors).toEqual([]);
 });
 
+test("Roleplay displays a selected background when its file route is GET-only", async ({ page }) => {
+  const chatResponse = await page.request.post("/api/chats", {
+    data: { name: "Roleplay Background Smoke", mode: "roleplay", characterIds: [] },
+  });
+  expect(chatResponse.ok()).toBeTruthy();
+  const chat = (await chatResponse.json()) as { id: string };
+  const backgroundUrl = "/api/backgrounds/file/rp-background-smoke.png";
+  const requestedMethods: string[] = [];
+
+  try {
+    await page.route("**/api/backgrounds", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([
+          {
+            filename: "rp-background-smoke.png",
+            url: backgroundUrl,
+            originalName: "Roleplay background smoke",
+            tags: [],
+            source: "user",
+          },
+        ]),
+      });
+    });
+    await page.route(`**${backgroundUrl}`, async (route) => {
+      requestedMethods.push(route.request().method());
+      if (route.request().method() !== "GET") {
+        await route.fulfill({ status: 405, body: "" });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "image/svg+xml",
+        body: '<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"><path fill="#47234f" d="M0 0h2v2H0z"/></svg>',
+      });
+    });
+    await page.addInitScript((chatId) => {
+      localStorage.setItem("marinara-active-chat-id", chatId);
+    }, chat.id);
+    await page.goto("/");
+
+    await page.locator('[data-tour="panel-settings"]').click();
+    await page.getByPlaceholder("Search settings").fill("Backgrounds");
+    await page.getByRole("button", { name: /Backgrounds Section/ }).click();
+    await page.locator(`img[src="${backgroundUrl}"]`).locator("..").click();
+
+    await expect
+      .poll(async () =>
+        page.locator(".mari-background").evaluateAll(
+          (layers, expectedUrl) =>
+            layers.some(
+              (layer) =>
+                (layer as HTMLElement).style.backgroundImage.includes(expectedUrl) &&
+                (layer as HTMLElement).style.opacity === "1",
+            ),
+          backgroundUrl,
+        ),
+      )
+      .toBe(true);
+    expect(requestedMethods).toContain("GET");
+    expect(requestedMethods).not.toContain("HEAD");
+  } finally {
+    await page.request.delete(`/api/chats/${chat.id}`);
+  }
+});
+
 test("hierarchical map editor creates and saves an oriented location tree", async ({ page }, testInfo) => {
   test.setTimeout(90_000);
   const errors = collectUnexpectedErrors(page);

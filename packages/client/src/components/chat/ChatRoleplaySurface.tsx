@@ -240,23 +240,27 @@ function CrossfadeBackground({
     const currentUrl = activeSlot.current === "a" ? bgA : bgB;
     if (url === currentUrl) return;
 
-    if (url && (url.startsWith("/api/backgrounds/") || url.startsWith("/api/game-assets/"))) {
-      fetch(url, { method: "HEAD" })
-        .then((res) => {
-          if (res.ok) {
-            applyUrl(url);
-          } else {
-            console.warn(`[Background] "${url}" not found — clearing`);
-            useUIStore.getState().setChatBackground(null);
-          }
-        })
-        .catch(() => {
-          applyUrl(url);
-        });
+    if (!url) {
+      applyUrl(null);
       return;
     }
 
-    applyUrl(url);
+    let cancelled = false;
+    const image = document.createElement("img");
+    image.onload = () => {
+      if (!cancelled) applyUrl(url);
+    };
+    image.onerror = () => {
+      if (cancelled || useUIStore.getState().chatBackground !== url) return;
+      console.warn(`[Background] "${url}" could not be loaded — clearing`);
+      useUIStore.getState().setChatBackground(null);
+    };
+    image.src = url;
+    return () => {
+      cancelled = true;
+      image.onload = null;
+      image.onerror = null;
+    };
 
     function applyUrl(nextUrl: string | null) {
       if (activeSlot.current === "a") {
