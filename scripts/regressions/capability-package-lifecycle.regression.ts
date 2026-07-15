@@ -138,6 +138,14 @@ try {
   );
   assert.equal(JSON.stringify(diagnostics).includes("snapshot read failed"), false, "Health diagnostics must omit errors");
 
+  const { getFileTableConfig, isFileTable } = await import("../../packages/server/src/db/file-schema.js");
+  const packageTable = {};
+  Object.defineProperty(packageTable, Symbol.for("marinara:file-table"), {
+    value: { name: "package_fixture", columns: {}, uniqueConstraints: [] },
+  });
+  assert.equal(isFileTable(packageTable), true, "Package-bundled file tables must share the host table identity");
+  assert.equal(getFileTableConfig(packageTable as never).name, "package_fixture");
+
   await capabilityModuleRuntime.stop();
   assert.equal(getCapabilityService("readiness:success"), null, "Runtime stop must remove ready contributions");
 
