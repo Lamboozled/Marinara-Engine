@@ -839,11 +839,26 @@ test("home shell and primary topbar panels open without client errors", async ({
 
 test("Card Browser labels and the Persona full library stay available across viewports", async ({ page }) => {
   const errors = collectUnexpectedErrors(page);
+  await page.route("**/api/bot-browser/chub/search?*", async (route) => {
+    await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "offline" }) });
+  });
   await page.goto("/");
 
   await page.locator('[data-tour="panel-bot-browser"]').click();
   await expect(page.getByText("Card Browser", { exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Download Cards" })).toBeVisible();
+  const downloadCards = page.getByRole("button", { name: "Download Cards" });
+  await expect(downloadCards).toBeVisible();
+  await downloadCards.click();
+
+  const cardLibrary = page.locator('[data-component="BotBrowserView"]');
+  await expect(cardLibrary.getByText("Cards Library", { exact: true })).toBeVisible();
+  await expect(cardLibrary.getByRole("heading", { name: "Browse character cards online" })).toBeVisible();
+  const searchError = cardLibrary.getByText("Search failed", { exact: true });
+  await expect(searchError).toBeVisible();
+  await expect(searchError).toHaveClass(/marinara-chat-chrome-panel-title/);
+  const closeCardLibrary = cardLibrary.getByRole("button", { name: "Close library" });
+  await expect(closeCardLibrary).toBeVisible();
+  await closeCardLibrary.click();
 
   await page.locator('[data-tour="panel-personas"]').click();
   const openPersonaLibrary = page.getByRole("button", { name: "Open Full Library" });
