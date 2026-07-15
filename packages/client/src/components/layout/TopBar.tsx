@@ -105,6 +105,7 @@ export function TopBar() {
   const gameAssetsBrowserOpen = useUIStore((s) => s.gameAssetsBrowserOpen);
   const noodleOpen = useUIStore((s) => s.noodleOpen);
   const characterLibraryOpen = useUIStore((s) => s.characterLibraryOpen);
+  const cardLibraryKind = useUIStore((s) => s.cardLibraryKind);
   const headerRef = useRef<HTMLElement | null>(null);
   const leftControlsRef = useRef<HTMLDivElement | null>(null);
   const rightNavRef = useRef<HTMLElement | null>(null);
@@ -114,7 +115,9 @@ export function TopBar() {
 
   const isBotBrowserActive = (rightPanelOpen && rightPanel === "bot-browser") || botBrowserOpen;
   const isCharactersPanelActive =
-    (rightPanelOpen && rightPanel === "characters") || Boolean(characterDetailId) || characterLibraryOpen;
+    (rightPanelOpen && rightPanel === "characters") ||
+    Boolean(characterDetailId) ||
+    (characterLibraryOpen && cardLibraryKind === "characters");
   const panelContextActive: Record<RightPanelButtonPanel, boolean> = {
     lorebooks: (rightPanelOpen && rightPanel === "lorebooks") || Boolean(lorebookDetailId),
     presets:
@@ -124,7 +127,10 @@ export function TopBar() {
       Boolean(toolDetailId),
     connections: (rightPanelOpen && rightPanel === "connections") || Boolean(connectionDetailId),
     agents: (rightPanelOpen && rightPanel === "agents") || Boolean(agentDetailId),
-    personas: (rightPanelOpen && rightPanel === "personas") || Boolean(personaDetailId),
+    personas:
+      (rightPanelOpen && rightPanel === "personas") ||
+      Boolean(personaDetailId) ||
+      (characterLibraryOpen && cardLibraryKind === "personas"),
   };
   const isHomeActive =
     !activeChatId &&
@@ -247,7 +253,10 @@ export function TopBar() {
 
       {/* Left section: window controls + chat info */}
       <div className="mari-topbar-left flex min-w-0 flex-1 items-center gap-2">
-        <div ref={leftControlsRef} className="mari-topbar-left-controls mari-rgb-icon-scope flex shrink-0 items-center gap-2">
+        <div
+          ref={leftControlsRef}
+          className="mari-topbar-left-controls mari-rgb-icon-scope flex shrink-0 items-center gap-2"
+        >
           <button
             onClick={handleSidebarClick}
             data-tour="sidebar-toggle"
@@ -347,7 +356,7 @@ export function TopBar() {
         aria-label="Panel navigation"
         className="mari-topbar-panel-nav mari-rgb-icon-scope flex shrink-0 items-center justify-end gap-0.5 rounded-xl p-1 max-sm:gap-0 max-sm:p-0.5"
       >
-        {/* Bot Browser */}
+        {/* Card Browser */}
         <button
           onClick={() => handleRightPanelClick("bot-browser")}
           data-tour="panel-bot-browser"
@@ -361,7 +370,7 @@ export function TopBar() {
                   isTopbarHovered("browser") && cn(TOPBAR_FORCE_HOVER_CLASS, "text-lime-300"),
                 ),
           )}
-          title="Bot Browser"
+          title="Card Browser"
         >
           <Bot size={15} className={TOPBAR_ACCENT_ICON_CLASS} />
           {isBotBrowserActive && (

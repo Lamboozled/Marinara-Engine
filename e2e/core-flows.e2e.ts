@@ -1,5 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
+const TRANSPARENT_GIF_BASE64 = "R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
+
 function collectUnexpectedErrors(page: Page) {
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
@@ -725,6 +727,9 @@ test("home shell and primary topbar panels open without client errors", async ({
   await expect(page.locator('[data-component="TopBar"]')).toBeVisible();
   await expect(page.getByRole("heading", { name: "Marinara Engine" })).toBeVisible();
 
+  const charactersButton = page.locator('[data-tour="panel-characters"]');
+  await expect(charactersButton.locator("svg")).toHaveClass(/mari-topbar-accent-icon/);
+
   for (const selector of [
     '[data-tour="sidebar-toggle"]',
     '[data-tour="panel-bot-browser"]',
@@ -738,10 +743,37 @@ test("home shell and primary topbar panels open without client errors", async ({
   ]) {
     await page.locator(selector).click();
     await expect(page.locator('[data-component="TopBar"]')).toBeVisible();
+    if (selector === '[data-tour="panel-characters"]') {
+      await expect(page.locator('[data-component="RightPanelHeaderIcon"]')).toHaveClass(
+        /mari-panel-gradient--characters/,
+      );
+    }
   }
 
   const health = await page.request.get("/api/health");
   expect(health.ok()).toBeTruthy();
+  expect(errors).toEqual([]);
+});
+
+test("Card Browser labels and the Persona full library stay available across viewports", async ({ page }) => {
+  const errors = collectUnexpectedErrors(page);
+  await page.goto("/");
+
+  await page.locator('[data-tour="panel-bot-browser"]').click();
+  await expect(page.getByText("Card Browser", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Download Cards" })).toBeVisible();
+
+  await page.locator('[data-tour="panel-personas"]').click();
+  const openPersonaLibrary = page.getByRole("button", { name: "Open Full Library" });
+  await expect(openPersonaLibrary).toBeVisible();
+  await openPersonaLibrary.click();
+
+  await expect(page.getByText("Persona Library", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Browse your personas" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "New persona" })).toBeVisible();
+  await expect(page.locator('[data-component="CharacterLibraryView"]').getByPlaceholder("Search personas")).toBeVisible();
+  await expect(page.locator('[data-tour="panel-personas"]')).toHaveClass(/mari-topbar-panel-icon--active/);
+  await expect(page.locator('[data-tour="panel-characters"]')).not.toHaveClass(/bg-\[var\(--accent\)\]/);
   expect(errors).toEqual([]);
 });
 
@@ -820,6 +852,9 @@ test("downloadable agent catalog is usable on desktop and mobile", async ({ page
   await page.locator('[data-tour="panel-characters"]').click();
   await page.getByRole("button", { name: "Open Full Library" }).click();
   await expect(page.getByRole("heading", { name: "Browse your characters" })).toBeVisible();
+  await expect(
+    page.locator('[data-component="CharacterLibraryView"]').getByPlaceholder('Search characters or -tag:"tag name"'),
+  ).toBeVisible();
   if (testInfo.project.name.includes("mobile")) {
     await expect(page.locator('[data-component="RightPanelMobile"]')).toHaveCount(0);
   } else {
@@ -1099,7 +1134,7 @@ test("agent catalog can install and uninstall every package", async ({ page }, t
   expect(errors).toEqual([]);
 });
 
-test("uninstalling a package immediately removes its agent from the open desktop sidebar", async ({
+test("installed package artwork appears in the sidebar and clears immediately on uninstall", async ({
   page,
 }, testInfo) => {
   test.skip(!testInfo.project.name.includes("desktop"), "The persistent Agents sidebar is a desktop workflow.");
@@ -1140,6 +1175,7 @@ test("uninstalling a package immediately removes its agent from the open desktop
         packages: [
           {
             category: "writer",
+            iconUrl: "https://example.com/prose-guardian-artwork.gif",
             manifest: packageManifest,
             artifact: {
               url: "https://example.com/prose-guardian.zip",
@@ -1182,6 +1218,13 @@ test("uninstalling a package immediately removes its agent from the open desktop
   await page.route("**/api/agents", async (route) => {
     await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
   });
+  await page.route("https://example.com/prose-guardian-artwork.gif", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "image/gif",
+      body: Buffer.from(TRANSPARENT_GIF_BASE64, "base64"),
+    });
+  });
   await page.route("**/api/capability-packages/prose-guardian", async (route) => {
     if (route.request().method() !== "DELETE") {
       await route.fallback();
@@ -1198,7 +1241,12 @@ test("uninstalling a package immediately removes its agent from the open desktop
   await page.goto("/");
   await page.locator('[data-tour="panel-agents"]').click();
   const agentsSidebar = page.locator('[data-component="RightPanelDesktop"]');
-  await expect(agentsSidebar.getByText("Prose Guardian", { exact: true })).toBeVisible();
+  const proseGuardianCard = agentsSidebar.locator('[data-agent-name="Prose Guardian"]');
+  await expect(proseGuardianCard).toBeVisible();
+  await expect(proseGuardianCard.locator('[data-component="AgentArtwork"]')).toHaveAttribute(
+    "src",
+    "https://example.com/prose-guardian-artwork.gif",
+  );
 
   await agentsSidebar.getByRole("button", { name: "Download Agents" }).click();
   const catalogView = page.locator('[data-component="AgentCatalogView"]');
@@ -1390,7 +1438,8 @@ test("Conversation feature packages expose commands and settings without per-cha
     expect(
       await illustratorSettings.evaluate(
         (illustrator, calls) =>
-          calls instanceof Node && Boolean(illustrator.compareDocumentPosition(calls) & Node.DOCUMENT_POSITION_FOLLOWING),
+          calls instanceof Node &&
+          Boolean(illustrator.compareDocumentPosition(calls) & Node.DOCUMENT_POSITION_FOLLOWING),
         callsSettingsHandle,
       ),
     ).toBe(true);
@@ -1565,7 +1614,7 @@ test("Game setup only shows features owned by installed agents", async ({ page, 
     await route.fulfill({
       status: 200,
       contentType: "image/gif",
-      body: Buffer.from("R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==", "base64"),
+      body: Buffer.from(TRANSPARENT_GIF_BASE64, "base64"),
     });
   });
   await page.addInitScript((chatId) => {
@@ -1694,7 +1743,7 @@ test("Roleplay and Game chat settings link empty agent libraries to Download Age
     await route.fulfill({
       status: 200,
       contentType: "image/gif",
-      body: Buffer.from("R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==", "base64"),
+      body: Buffer.from(TRANSPARENT_GIF_BASE64, "base64"),
     });
   });
 
@@ -1747,7 +1796,7 @@ test("Roleplay setup points empty agent libraries to the Agents tab", async ({ p
     await route.fulfill({
       status: 200,
       contentType: "image/gif",
-      body: Buffer.from("R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==", "base64"),
+      body: Buffer.from(TRANSPARENT_GIF_BASE64, "base64"),
     });
   });
 

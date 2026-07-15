@@ -27,6 +27,7 @@ import { getPrivilegedActionErrorMessage } from "../../lib/api-client";
 import { showConfirmDialog } from "../../lib/app-dialogs";
 import { cn } from "../../lib/utils";
 import { useUIStore } from "../../stores/ui.store";
+import { AgentArtwork } from "./AgentArtwork";
 
 const CATEGORY_SECTIONS = [
   { id: "writer", label: "Writer Agents" },
@@ -50,25 +51,6 @@ function kindLabel(kind: CapabilityCatalogPackage["manifest"]["kind"][number]) {
   if (kind === "turn-game") return "Conversation Game";
   if (kind === "maps") return "Maps";
   return "Agent";
-}
-
-function AgentArtwork({ entry, iconSize }: { entry: CapabilityCatalogPackage; iconSize: string }) {
-  const [imageFailed, setImageFailed] = useState(false);
-
-  useEffect(() => setImageFailed(false), [entry.iconUrl]);
-
-  if (entry.iconUrl && !imageFailed) {
-    return (
-      <img
-        src={entry.iconUrl}
-        alt={`${entry.manifest.name} artwork`}
-        className="h-full w-full object-cover"
-        onError={() => setImageFailed(true)}
-      />
-    );
-  }
-
-  return <Sparkles size={iconSize} aria-hidden="true" />;
 }
 
 export function AgentCatalogView() {
@@ -425,7 +407,11 @@ export function AgentCatalogView() {
                                       )}
                                     >
                                       <span className="mari-panel-gradient-surface mari-panel-gradient--agents flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-xl">
-                                        <AgentArtwork entry={entry} iconSize="1.15rem" />
+                                        <AgentArtwork
+                                          imageUrl={entry.iconUrl}
+                                          alt={`${entry.manifest.name} artwork`}
+                                          iconSize="1.15rem"
+                                        />
                                       </span>
                                       <span className="min-w-0 flex-1">
                                         <span className="flex items-center gap-2">
@@ -469,7 +455,7 @@ export function AgentCatalogView() {
 
               <div className="flex items-start gap-4 md:gap-5">
                 <div className="mari-panel-gradient-surface mari-panel-gradient--agents flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-2xl md:h-24 md:w-24">
-                  <AgentArtwork entry={selected} iconSize="2rem" />
+                  <AgentArtwork imageUrl={selected.iconUrl} alt={`${selected.manifest.name} artwork`} iconSize="2rem" />
                 </div>
                 <div className="min-w-0 pt-1">
                   <p className="text-xs font-semibold text-[var(--muted-foreground)]">
