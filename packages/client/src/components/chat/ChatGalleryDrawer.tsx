@@ -17,6 +17,7 @@ import type { Chat } from "@marinara-engine/shared";
 import type { ChatImage } from "../../hooks/use-gallery";
 import { useInstalledCapabilityPackages } from "../../hooks/use-capability-packages";
 import { isDesktopShellNavigationTarget } from "../../lib/chat-floating-ui-events";
+import { parseChatMetadata } from "../../lib/chat-display";
 
 interface ChatGalleryDrawerProps {
   chat: Chat;
@@ -55,24 +56,25 @@ export function ChatGalleryDrawer({
   onAnimateImage,
 }: ChatGalleryDrawerProps) {
   const panelRef = useRef<HTMLDivElement | null>(null);
+  const chatMetadata = parseChatMetadata(chat.metadata);
   const { data: installedCapabilities = [] } = useInstalledCapabilityPackages(open);
   const illustratorInstalled = installedCapabilities.some(
     (item) => item.id === "illustrator" && item.status === "active",
   );
-  const conversationSelfieToggle = chat.metadata.conversationCommandToggles?.selfie;
+  const conversationSelfieToggle = chatMetadata.conversationCommandToggles?.selfie;
   const conversationSelfiesEnabled =
-    chat.metadata.characterCommands !== false &&
+    chatMetadata.characterCommands !== false &&
     conversationSelfieToggle !== false &&
     (conversationSelfieToggle === true ||
-      (typeof chat.metadata.imageGenConnectionId === "string" && chat.metadata.imageGenConnectionId.length > 0));
+      (typeof chatMetadata.imageGenConnectionId === "string" && chatMetadata.imageGenConnectionId.length > 0));
   const illustratorEnabledForChat =
     chat.mode === "conversation"
       ? conversationSelfiesEnabled
       : chat.mode === "game"
-        ? chat.metadata.enableSpriteGeneration === true
-        : chat.metadata.enableAgents === true &&
-          Array.isArray(chat.metadata.activeAgentIds) &&
-          chat.metadata.activeAgentIds.includes("illustrator");
+        ? chatMetadata.enableSpriteGeneration === true
+        : chatMetadata.enableAgents === true &&
+          Array.isArray(chatMetadata.activeAgentIds) &&
+          chatMetadata.activeAgentIds.includes("illustrator");
   const illustratorAvailable = illustratorInstalled && illustratorEnabledForChat;
 
   useEffect(() => {
