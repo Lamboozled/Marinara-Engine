@@ -33,6 +33,7 @@ This file is the release-notes source of truth for Marinara Engine. Reuse these 
 
 ### Fixed
 
+- Applied downloaded package artwork to matching installed agents in the Agents sidebar, while preserving user-uploaded pictures and the star fallback for missing or failed images.
 - Restored the Characters sidebar header icon to the same pink-to-rose gradient used by the New Character action while keeping its topbar icon on the selected chroma accent.
 - Calibrated Lorebook semantic similarity against an unrelated-text baseline so embedding models whose raw cosine scores cluster around 0.97 no longer inject unrelated entries at every usable threshold or suppress relevant entries near 1.0 (#3627).
 - Replaced the nested presence animation used by expandable right-sidebar folders with an accessible grid transition, preventing Connections and Lorebooks folders from crashing the app shell with React hook-order errors (#3630).

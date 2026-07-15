@@ -1126,7 +1126,7 @@ test("agent catalog can install and uninstall every package", async ({ page }, t
   expect(errors).toEqual([]);
 });
 
-test("uninstalling a package immediately removes its agent from the open desktop sidebar", async ({
+test("installed package artwork appears in the sidebar and clears immediately on uninstall", async ({
   page,
 }, testInfo) => {
   test.skip(!testInfo.project.name.includes("desktop"), "The persistent Agents sidebar is a desktop workflow.");
@@ -1167,6 +1167,7 @@ test("uninstalling a package immediately removes its agent from the open desktop
         packages: [
           {
             category: "writer",
+            iconUrl: "https://example.com/prose-guardian-artwork.gif",
             manifest: packageManifest,
             artifact: {
               url: "https://example.com/prose-guardian.zip",
@@ -1209,6 +1210,13 @@ test("uninstalling a package immediately removes its agent from the open desktop
   await page.route("**/api/agents", async (route) => {
     await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
   });
+  await page.route("https://example.com/prose-guardian-artwork.gif", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "image/gif",
+      body: Buffer.from("R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==", "base64"),
+    });
+  });
   await page.route("**/api/capability-packages/prose-guardian", async (route) => {
     if (route.request().method() !== "DELETE") {
       await route.fallback();
@@ -1225,7 +1233,12 @@ test("uninstalling a package immediately removes its agent from the open desktop
   await page.goto("/");
   await page.locator('[data-tour="panel-agents"]').click();
   const agentsSidebar = page.locator('[data-component="RightPanelDesktop"]');
-  await expect(agentsSidebar.getByText("Prose Guardian", { exact: true })).toBeVisible();
+  const proseGuardianCard = agentsSidebar.locator('[data-agent-name="Prose Guardian"]');
+  await expect(proseGuardianCard).toBeVisible();
+  await expect(proseGuardianCard.locator('[data-component="AgentArtwork"]')).toHaveAttribute(
+    "src",
+    "https://example.com/prose-guardian-artwork.gif",
+  );
 
   await agentsSidebar.getByRole("button", { name: "Download Agents" }).click();
   const catalogView = page.locator('[data-component="AgentCatalogView"]');
