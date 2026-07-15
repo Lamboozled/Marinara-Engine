@@ -8321,8 +8321,6 @@ export async function generateRoutes(app: FastifyInstance) {
                     : null,
                   promptConnection: conn,
                   promptConnectionId: conn.id,
-                  baseUrl,
-                  suppressModelParameters,
                   serviceTier,
                   db: app.db,
                   chars,
